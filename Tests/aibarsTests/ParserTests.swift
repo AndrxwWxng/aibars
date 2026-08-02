@@ -1,5 +1,6 @@
 import XCTest
-@testable import aibars
+import aibarsCore
+@testable import aibarsCore
 
 final class UsageMetricTests: XCTestCase {
     func testPercentClampedTo100() {

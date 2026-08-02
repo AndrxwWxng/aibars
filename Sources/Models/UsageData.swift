@@ -36,7 +36,7 @@ public struct UsageMetric: Codable, Hashable {
     private static func format(_ value: Double) -> String {
         if value >= 1_000_000 {
             return String(format: "%.1fM", value / 1_000_000)
-        } else if value >= 10_000 {
+        } else if value >= 1_000 {
             return String(format: "%.1fk", value / 1_000)
         } else if value.truncatingRemainder(dividingBy: 1) == 0 {
             return String(format: "%.0f", value)

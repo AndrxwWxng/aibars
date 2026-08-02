@@ -1,11 +1,16 @@
 import SwiftUI
 
-struct public MenuBarContentView: View {
-    @ObservedObject var state: AppState
-    @Binding var showSettings: Bool
+public struct MenuBarContentView: View {
+    @ObservedObject public var state: AppState
+    @Binding public var showSettings: Bool
     @State private var hoveredProvider: String?
 
-    var body: some View {
+    public init(state: AppState, showSettings: Binding<Bool>) {
+        self._state = ObservedObject(wrappedValue: state)
+        self._showSettings = showSettings
+    }
+
+    public var body: some View {
         VStack(spacing: 0) {
             header
 

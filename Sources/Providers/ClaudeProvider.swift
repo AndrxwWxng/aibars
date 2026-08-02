@@ -84,16 +84,15 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
     }
 }
 
-enum public ClaudeUsageParser {
-    static func parse(_ raw: [String: Any], planName: String?, orgName: String) throws -> UsageData {
+public enum ClaudeUsageParser {
+    public static func parse(_ raw: [String: Any], planName: String?, orgName: String) throws -> UsageData {
         // Claude's /usage endpoint shape varies. We accept a few common keys.
         let fiveHour = (raw["five_hour"] as? [String: Any]) ?? [:]
         let sevenDay = (raw["seven_day"] as? [String: Any]) ?? [:]
 
         func metric(_ bucket: [String: Any], fallback: String) -> UsageMetric? {
-            let utilization = (bucket["utilization"] as? Double) ?? (bucket["utilization"] as? Int).map(Double.init) ?? 0
+            let utilization = ProviderNumber.coerce(bucket["utilization"]) ?? 0
             let resetsAt = (bucket["resets_at"] as? String).flatMap { ProviderDate.parse($0) }
-            // Limit is implicit (100%), label comes from the bucket key
             return UsageMetric(
                 label: bucket["label"] as? String ?? fallback,
                 used: utilization,

@@ -4,6 +4,20 @@ options:
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
+  schemePathPrefix: ""
+
+schemes:
+  aibars:
+    build:
+      targets:
+        aibars: all
+        aibarsCore: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - aibarsTests
 
 settings:
   base:
@@ -17,53 +31,51 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_KEY_NSHumanReadableCopyright: "MIT License"
     INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
-    INFOPLIST_KEY_LSUIElement: YES
-    INFOPLIST_KEY_NSMainStoryboardFile: ""
-    INFOPLIST_KEY_NSPrincipalClass: "NSApplication"
     PRODUCT_NAME: aibars
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     OTHER_LDFLAGS: "-framework AppKit -framework SwiftUI"
 
 targets:
+  aibarsCore:
+    type: framework
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+        excludes:
+          - "**/*.entitlements"
+    settings:
+      base:
+        PRODUCT_NAME: aibarsCore
+        PRODUCT_BUNDLE_IDENTIFIER: dev.aibars.core
+        DEFINES_MODULE: YES
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        SKIP_INSTALL: YES
+        BUILD_LIBRARY_FOR_DISTRIBUTION: NO
+
   aibars:
     type: application
     platform: macOS
     deploymentTarget: "13.0"
     sources:
-      - path: Sources
-    info:
-      path: Sources/Info.plist
-      properties:
-        CFBundleName: aibars
-        CFBundleDisplayName: AI Bars
-        CFBundleIdentifier: dev.aibars.app
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
-        LSUIElement: true
-        LSMinimumSystemVersion: "13.0"
-        NSHumanReadableCopyright: "MIT License"
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: false
-          NSExceptionDomains:
-            claude.ai:
-              NSIncludesSubdomains: true
-              NSExceptionAllowsInsecureHTTPLoads: false
-            chatgpt.com:
-              NSIncludesSubdomains: true
-            cursor.com:
-              NSIncludesSubdomains: true
-            api.github.com:
-              NSIncludesSubdomains: true
-            api.minimaxi.com:
-              NSIncludesSubdomains: true
-        NSDesktopFolderUsageDescription: "aibars needs to read your browser cookies to authenticate with AI services you use."
-        NSDocumentsFolderUsageDescription: "aibars needs to read your browser cookies to authenticate with AI services you use."
+      - path: SourcesApp
+        excludes:
+          - "**/*.entitlements"
+          - "**/Info.plist"
+    dependencies:
+      - target: aibarsCore
     settings:
       base:
+        PRODUCT_NAME: aibars
         PRODUCT_BUNDLE_IDENTIFIER: dev.aibars.app
-        CODE_SIGN_ENTITLEMENTS: Sources/aibars.entitlements
+        CODE_SIGN_ENTITLEMENTS: SourcesApp/aibars.entitlements
         COMBINE_HIDPI_IMAGES: YES
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
+        INFOPLIST_KEY_NSHumanReadableCopyright: "MIT License"
+        INFOPLIST_KEY_CFBundleDisplayName: "AI Bars"
+        INFOPLIST_KEY_NSAppTransportSecurity_AllowsArbitraryLoads: NO
 
   aibarsTests:
     type: bundle.unit-test
@@ -72,12 +84,10 @@ targets:
     sources:
       - path: Tests
     dependencies:
-      - target: aibars
+      - target: aibarsCore
     settings:
       base:
         PRODUCT_NAME: aibarsTests
         PRODUCT_BUNDLE_IDENTIFIER: dev.aibars.tests
         PRODUCT_MODULE_NAME: aibarsTests
         GENERATE_INFOPLIST_FILE: YES
-        BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/aibars.app/Contents/MacOS/aibars"
