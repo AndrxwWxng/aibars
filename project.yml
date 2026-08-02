@@ -1,0 +1,83 @@
+name: aibars
+options:
+  bundleIdPrefix: dev.aibars
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: NO
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_NSHumanReadableCopyright: "MIT License"
+    INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
+    INFOPLIST_KEY_LSUIElement: YES
+    INFOPLIST_KEY_NSMainStoryboardFile: ""
+    INFOPLIST_KEY_NSPrincipalClass: "NSApplication"
+    PRODUCT_NAME: aibars
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    OTHER_LDFLAGS: "-framework AppKit -framework SwiftUI"
+
+targets:
+  aibars:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleName: aibars
+        CFBundleDisplayName: AI Bars
+        CFBundleIdentifier: dev.aibars.app
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSUIElement: true
+        LSMinimumSystemVersion: "13.0"
+        NSHumanReadableCopyright: "MIT License"
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSExceptionDomains:
+            claude.ai:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: false
+            chatgpt.com:
+              NSIncludesSubdomains: true
+            cursor.com:
+              NSIncludesSubdomains: true
+            api.github.com:
+              NSIncludesSubdomains: true
+            api.minimaxi.com:
+              NSIncludesSubdomains: true
+        NSDesktopFolderUsageDescription: "aibars needs to read your browser cookies to authenticate with AI services you use."
+        NSDocumentsFolderUsageDescription: "aibars needs to read your browser cookies to authenticate with AI services you use."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.aibars.app
+        CODE_SIGN_ENTITLEMENTS: Sources/aibars.entitlements
+        COMBINE_HIDPI_IMAGES: YES
+
+  aibarsTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Tests
+    dependencies:
+      - target: aibars
+    settings:
+      base:
+        PRODUCT_NAME: aibarsTests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.aibars.tests
+        PRODUCT_MODULE_NAME: aibarsTests
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/aibars.app/Contents/MacOS/aibars"
