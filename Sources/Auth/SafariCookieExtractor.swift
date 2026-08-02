@@ -32,8 +32,8 @@ public final class SafariCookieExtractor: CookieExtractor {
 /// Parses Safari's Cookies.binarycookies format.
 ///
 /// Reference: https://github.com/nickchenct123/Safari-Cookie-Extractor
-enum public SafariBinaryCookies {
-    static func parse(_ data: Data, matching domain: String, source: BrowserCookie.Browser) -> [BrowserCookie] {
+public enum SafariBinaryCookies {
+    public static func parse(_ data: Data, matching domain: String, source: BrowserCookie.Browser) -> [BrowserCookie] {
         guard data.count > 8 else { return [] }
         let magic = data.subdata(in: 0..<4)
         guard String(data: magic, encoding: .ascii) == "cook" else { return [] }

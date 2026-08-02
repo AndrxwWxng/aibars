@@ -1,6 +1,7 @@
 import SwiftUI
-import AppKit
+import aibarsCore
 
+@main
 struct aibarsApp: App {
     @StateObject private var state = AppState()
     @State private var showSettings = false
@@ -52,22 +53,5 @@ struct MenuBarLabel: View {
             .sorted { $0.1 > $1.1 }
         guard let (id, _) = sorted.first else { return nil }
         return state.provider(for: id)?.displayName
-    }
-}
-
-enum SettingsWindowController {
-    @MainActor static func show(state: AppState) {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "aibars Settings"
-        window.contentView = NSHostingView(rootView: SettingsView().environmentObject(state))
-        window.center()
-        window.isReleasedWhenClosed = false
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 }

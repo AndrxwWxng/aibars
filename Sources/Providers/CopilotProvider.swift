@@ -74,8 +74,8 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
     }
 }
 
-enum public CopilotUsageParser {
-    static func parse(user: [String: Any], usage: [String: Any]) -> UsageData {
+public enum CopilotUsageParser {
+    public static func parse(user: [String: Any], usage: [String: Any]) -> UsageData {
         let plan = (user["copilot_plan"] as? String)
             ?? (user["plan"] as? String)
             ?? "Individual"

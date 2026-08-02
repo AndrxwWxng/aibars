@@ -88,3 +88,18 @@ public enum ProviderDate {
         return nil
     }
 }
+
+/// Coerce a JSON value (Int, Double, NSNumber, or numeric String) to Double.
+public enum ProviderNumber {
+    public static func coerce(_ value: Any?) -> Double? {
+        switch value {
+        case let n as Double: return n
+        case let n as Int: return Double(n)
+        case let n as Int64: return Double(n)
+        case let n as UInt64: return Double(n)
+        case let n as NSNumber: return n.doubleValue
+        case let s as String: return Double(s)
+        default: return nil
+        }
+    }
+}

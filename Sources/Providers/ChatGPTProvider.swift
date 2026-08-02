@@ -61,15 +61,15 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     }
 }
 
-enum public ChatGPTUsageParser {
-    static func parse(_ raw: [String: Any]) -> UsageData {
+public enum ChatGPTUsageParser {
+    public static func parse(_ raw: [String: Any]) -> UsageData {
         // Known shape: { "total_usage": { "messages": ... }, "plan": ..., "rate_limits": { ... } }
         let totalUsage = raw["total_usage"] as? [String: Any] ?? [:]
         let planName = (raw["account_plan"] as? String) ?? (raw["plan"] as? String) ?? "Plus"
         let rateLimits = raw["rate_limits"] as? [String: Any] ?? [:]
 
-        let messageCount = (totalUsage["num_messages"] as? Double)
-            ?? (totalUsage["messages"] as? Double)
+        let messageCount = ProviderNumber.coerce(totalUsage["num_messages"])
+            ?? ProviderNumber.coerce(totalUsage["messages"])
             ?? 0
 
         var primary = UsageMetric(
@@ -87,8 +87,8 @@ enum public ChatGPTUsageParser {
         for (key, value) in rateLimits {
             guard let dict = value as? [String: Any],
                   let primaryBucket = dict["primary"] as? [String: Any] else { continue }
-            let used = (primaryBucket["used"] as? Double) ?? 0
-            let limit = (primaryBucket["limit"] as? Double) ?? 0
+            let used = ProviderNumber.coerce(primaryBucket["used"]) ?? 0
+            let limit = ProviderNumber.coerce(primaryBucket["limit"]) ?? 0
             let reset = (primaryBucket["reset_at"] as? String).flatMap { ProviderDate.parse($0) }
             if limit > 0 {
                 let label: String

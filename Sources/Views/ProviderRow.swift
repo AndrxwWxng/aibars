@@ -1,12 +1,12 @@
 import SwiftUI
 
-struct public ProviderRow: View {
+public struct ProviderRow: View {
     @ObservedObject var provider: AnyUsageProvider
-    let result: Result<UsageData, ProviderError>?
-    let isHovered: Bool
-    let onTap: () -> Void
+    public let result: Result<UsageData, ProviderError>?
+    public let isHovered: Bool
+    public let onTap: () -> Void
 
-    var body: some View {
+    public var body: some View {
         Button(action: onTap) {
             HStack(alignment: .center, spacing: 10) {
                 ZStack {
@@ -96,10 +96,10 @@ struct public ProviderRow: View {
     }
 }
 
-struct public UsageBar: View {
-    let metric: UsageMetric
+public struct UsageBar: View {
+    public let metric: UsageMetric
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -146,9 +146,9 @@ struct public UsageBar: View {
     }
 }
 
-struct public SecondaryChip: View {
-    let metric: UsageMetric
-    var body: some View {
+public struct SecondaryChip: View {
+    public let metric: UsageMetric
+    public var body: some View {
         Text("\(metric.label) \(Int(metric.percent * 100))%")
             .font(.caption2)
             .padding(.horizontal, 5)

@@ -60,17 +60,17 @@ public final class CursorProvider: ObservableObject, UsageProvider {
     }
 }
 
-enum public CursorUsageParser {
-    static func parse(_ raw: [String: Any]) -> UsageData {
+public enum CursorUsageParser {
+    public static func parse(_ raw: [String: Any]) -> UsageData {
         // Cursor's usage endpoint returns either individual buckets or
         // a `gpt-4`/`gpt-3.5-turbo` style breakdown. Be defensive.
         let plan = (raw["plan"] as? String) ?? (raw["membershipType"] as? String) ?? "Pro"
         let usage = (raw["usage"] as? [String: Any]) ?? raw
-        let limit = (raw["limit"] as? Double) ?? (usage["limit"] as? Double) ?? 500
+        let limit = ProviderNumber.coerce(raw["limit"]) ?? ProviderNumber.coerce(usage["limit"]) ?? 500
 
-        let used = (usage["numRequests"] as? Double)
-            ?? (usage["totalRequests"] as? Double)
-            ?? (usage["used"] as? Double)
+        let used = ProviderNumber.coerce(usage["numRequests"])
+            ?? ProviderNumber.coerce(usage["totalRequests"])
+            ?? ProviderNumber.coerce(usage["used"])
             ?? 0
 
         let cycleEnd = (raw["cycleEnd"] as? Double)
@@ -89,8 +89,8 @@ enum public CursorUsageParser {
         var secondary: [UsageMetric] = []
         for key in ["gpt-4", "gpt-3.5-turbo", "gpt-4-turbo", "claude-3-5-sonnet"] {
             if let bucket = usage[key] as? [String: Any],
-               let bucketUsed = (bucket["numRequests"] as? Double) ?? (bucket["used"] as? Double),
-               let bucketLimit = (bucket["limit"] as? Double) {
+               let bucketUsed = ProviderNumber.coerce(bucket["numRequests"]) ?? ProviderNumber.coerce(bucket["used"]),
+               let bucketLimit = ProviderNumber.coerce(bucket["limit"]) {
                 secondary.append(UsageMetric(
                     label: key,
                     used: bucketUsed,

@@ -70,12 +70,12 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
     public var configuredEndpoint: String? { userDefaults.string(forKey: endpointKey) }
 }
 
-enum public MiniMaxUsageParser {
+public enum MiniMaxUsageParser {
     /// Tries a small set of well-known shapes:
     ///   { "used": n, "limit": m, "reset_at": "..." }
     ///   { "usage": { "primary": { "used": n, "limit": m } } }
     ///   { "data": { "messages": { "used": n, "limit": m } } }
-    static func parse(_ raw: [String: Any], planName: String?) -> UsageData {
+    public static func parse(_ raw: [String: Any], planName: String?) -> UsageData {
         let (used, limit, reset, label) = firstMetric(in: raw)
         let primary = UsageMetric(
             label: label,
@@ -94,21 +94,21 @@ enum public MiniMaxUsageParser {
     }
 
     private static func firstMetric(in raw: [String: Any]) -> (Double, Double, Date?, String) {
-        if let u = raw["used"] as? Double, let l = raw["limit"] as? Double {
+        if let u = ProviderNumber.coerce(raw["used"]), let l = ProviderNumber.coerce(raw["limit"]) {
             let r = (raw["reset_at"] as? String).flatMap { ProviderDate.parse($0) }
             return (u, l, r, "Used")
         }
         if let usage = raw["usage"] as? [String: Any], let primary = usage["primary"] as? [String: Any] {
-            let used = (primary["used"] as? Double) ?? 0
-            let limit = (primary["limit"] as? Double) ?? 0
+            let used = ProviderNumber.coerce(primary["used"]) ?? 0
+            let limit = ProviderNumber.coerce(primary["limit"]) ?? 0
             let reset = (primary["reset_at"] as? String).flatMap { ProviderDate.parse($0) }
             return (used, limit, reset, "Primary")
         }
         if let data = raw["data"] as? [String: Any] {
             for (label, value) in data {
                 guard let dict = value as? [String: Any] else { continue }
-                let used = (dict["used"] as? Double) ?? (dict["used"] as? Int).map(Double.init) ?? 0
-                let limit = (dict["limit"] as? Double) ?? (dict["limit"] as? Int).map(Double.init) ?? 0
+                let used = ProviderNumber.coerce(dict["used"]) ?? 0
+                let limit = ProviderNumber.coerce(dict["limit"]) ?? 0
                 if limit > 0 {
                     let reset = (dict["reset_at"] as? String).flatMap { ProviderDate.parse($0) }
                     return (used, limit, reset, label)

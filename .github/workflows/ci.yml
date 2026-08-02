@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build
+        run: xcodebuild -project aibars.xcodeproj -scheme aibars -destination 'platform=macOS' build | xcpretty || true
+
+      - name: Test
+        run: xcodebuild -project aibars.xcodeproj -scheme aibars -destination 'platform=macOS' test

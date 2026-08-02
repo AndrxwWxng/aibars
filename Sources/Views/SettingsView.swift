@@ -1,10 +1,10 @@
 import SwiftUI
 
-struct public SettingsView: View {
+public struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var showAuthSheet: AnyUsageProvider?
 
-    var body: some View {
+    public var body: some View {
         TabView {
             generalTab.tabItem { Label("General", systemImage: "gearshape") }
             providersTab.tabItem { Label("Services", systemImage: "list.bullet.rectangle") }
@@ -92,14 +92,14 @@ struct public SettingsView: View {
     }
 }
 
-struct public AuthSheet: View {
+public struct AuthSheet: View {
     @ObservedObject var provider: AnyUsageProvider
     @Environment(\.dismiss) var dismiss
     @State private var pastedToken: String = ""
     @State private var status: String?
     @State private var isWorking = false
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Image(systemName: provider.iconName)
