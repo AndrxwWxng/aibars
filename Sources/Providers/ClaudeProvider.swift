@@ -26,6 +26,17 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
         self.isAuthenticated = SessionStore.shared.token(for: "claude") != nil
     }
 
+    public var dashboardURL: URL? { URL(string: "https://claude.ai/settings/usage") }
+
+    public var webLogin: WebLoginConfig? {
+        WebLoginConfig(
+            startURL: URL(string: "https://claude.ai/login")!,
+            capture: .cookie(name: cookieName, domainSuffix: "claude.ai"),
+            hint: "Log in as usual — aibars picks up the session automatically.",
+            dataDomains: ["claude.ai", "anthropic.com"]
+        )
+    }
+
     public func fetchUsage() async throws -> UsageData {
         guard let token = session.token(for: "claude") else {
             throw ProviderError.notAuthenticated

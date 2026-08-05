@@ -22,6 +22,17 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
         self.isAuthenticated = SessionStore.shared.token(for: "chatgpt") != nil
     }
 
+    public var dashboardURL: URL? { URL(string: "https://chatgpt.com/#settings") }
+
+    public var webLogin: WebLoginConfig? {
+        WebLoginConfig(
+            startURL: URL(string: "https://chatgpt.com/auth/login")!,
+            capture: .cookie(name: cookieName, domainSuffix: "chatgpt.com"),
+            hint: "Log in as usual — aibars picks up the session automatically.",
+            dataDomains: ["chatgpt.com", "openai.com", "auth.openai.com"]
+        )
+    }
+
     public func fetchUsage() async throws -> UsageData {
         guard let token = session.token(for: "chatgpt") else {
             throw ProviderError.notAuthenticated

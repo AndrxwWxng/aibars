@@ -21,6 +21,19 @@ public final class CursorProvider: ObservableObject, UsageProvider {
         self.isAuthenticated = SessionStore.shared.token(for: "cursor") != nil
     }
 
+    public var dashboardURL: URL? { URL(string: "https://www.cursor.com/dashboard") }
+
+    public var webLogin: WebLoginConfig? {
+        WebLoginConfig(
+            // The dashboard bounces to the login page when signed out and
+            // back here once done, which is when the cookie lands.
+            startURL: URL(string: "https://www.cursor.com/dashboard")!,
+            capture: .cookie(name: cookieName, domainSuffix: "cursor.com"),
+            hint: "Log in as usual — aibars picks up the session automatically.",
+            dataDomains: ["cursor.com", "cursor.sh", "workos.com"]
+        )
+    }
+
     public func fetchUsage() async throws -> UsageData {
         guard let token = session.token(for: "cursor") else {
             throw ProviderError.notAuthenticated
