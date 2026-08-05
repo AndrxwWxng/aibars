@@ -100,9 +100,13 @@ public struct ProviderLogo: View {
             SVGShape(pathData: mark.pathData, viewBox: mark.viewBox)
                 .fill(mark.foreground(dark: isDark))
         } else {
+            // The lettermark draws in the foreground colour rather than the
+            // provider's accent: an accent dark enough to look right on a light
+            // tile disappears on a dark one, and there's no vector here whose
+            // luminance we could reason about.
             Text(String(fallbackName.prefix(1)).uppercased())
-                .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
-                .foregroundStyle(fallbackColor)
+                .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary.opacity(0.8))
         }
     }
 }
