@@ -30,15 +30,22 @@ public final class BrowserLoginCoordinator: ObservableObject {
         self.browser = DefaultBrowser.current()
     }
 
-    /// Opens the login page and, when the session can be read automatically,
-    /// starts watching for it.
+    /// Checks for a session that already exists before sending the user
+    /// anywhere. Opening a login page for a service they're already logged into
+    /// is the most annoying thing this window could do.
     public func begin() {
-        WebLoginEnvironment.openLoginPage(for: config)
         guard config.expectedCookieName != nil, browser.supportsAutomaticCapture else {
+            WebLoginEnvironment.openLoginPage(for: config)
             phase = .idle
             return
         }
-        startPolling()
+        phase = .waiting
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.checkOnce() { return }
+            WebLoginEnvironment.openLoginPage(for: config)
+            self.startPolling()
+        }
     }
 
     public func openLoginPageAgain() {
