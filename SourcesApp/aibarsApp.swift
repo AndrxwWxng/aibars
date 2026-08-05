@@ -24,34 +24,33 @@ struct aibarsApp: App {
     }
 }
 
+/// What sits in the menu bar itself: a four-bar meter, one bar per service,
+/// tallest usage first. It stays monochrome until something crosses the
+/// warning threshold, at which point it picks up the usage tint.
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "chart.bar.xaxis")
-                .symbolRenderingMode(.hierarchical)
+        HStack(spacing: 5) {
+            UsageMeterGlyph(
+                levels: state.usageLevels,
+                alertColor: UsageTint.menuBarTint(for: state.topUsagePercent),
+                height: 13
+            )
+
             switch state.showInMenuBar {
             case .iconOnly:
                 EmptyView()
             case .iconAndPercent:
-                Text("\(Int(state.topUsagePercent * 100))%")
+                Text("\(Int((state.topUsagePercent * 100).rounded()))%")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .monospacedDigit()
             case .iconAndName:
-                if let top = topProviderName() {
+                if let top = state.topProviderName {
                     Text(top).font(.system(size: 11, weight: .medium))
                 }
             }
         }
-    }
-
-    private func topProviderName() -> String? {
-        let sorted = state.snapshots
-            .compactMapValues { try? $0.get() }
-            .map { ($0.key, $0.value.primary.percent) }
-            .sorted { $0.1 > $1.1 }
-        guard let (id, _) = sorted.first else { return nil }
-        return state.provider(for: id)?.displayName
+        .padding(.horizontal, 1)
     }
 }
