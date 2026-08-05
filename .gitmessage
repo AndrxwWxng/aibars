@@ -1,0 +1,18 @@
+
+# <type>(<scope>): <imperative summary, lower case, no full stop, <= 72 chars>
+#
+# Why this change was needed. What a reviewer cannot infer from the diff:
+# the undocumented endpoint, the guessed response shape, the reason the
+# obvious approach didn't work.
+#
+# Fixes #
+#
+# ---------------------------------------------------------------------------
+# type:   feat fix perf refactor docs test build ci chore
+# scope:  a provider id (claude, chatgpt, cursor, copilot, gemini, …)
+#         or one of: auth brand menu settings models http project
+#
+# One concern per commit. Every commit should build (`make build`, `make test`).
+# Imperative mood: "add", never "added" or "adds".
+# Breaking changes get a `BREAKING CHANGE:` footer with the migration.
+# See CONTRIBUTING.md for examples.
