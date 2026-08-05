@@ -4,6 +4,8 @@ public struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var showAuthSheet: AnyUsageProvider?
     @State private var pane: Pane = .services
+    @State private var isAdopting = false
+    @State private var adoptionStatus: String?
 
     public init() {}
 
@@ -29,23 +31,48 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        NavigationSplitView {
-            List(Pane.allCases, selection: Binding(
-                get: { pane },
-                set: { pane = $0 ?? pane }
-            )) { item in
-                Label(item.title, systemImage: item.symbol)
-                    .tag(item)
+        // A plain split rather than NavigationSplitView: that one insists on a
+        // collapse toggle in the toolbar, and every control shifts sideways when
+        // the sidebar folds. The sidebar here is a fixed part of the window.
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
+            VStack(alignment: .leading, spacing: 0) {
+                Text(pane.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+                    .padding(.bottom, 4)
+                detail
             }
-            .navigationSplitViewColumnWidth(min: 150, ideal: 168, max: 200)
-        } detail: {
-            detail
-                .navigationTitle(pane.title)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(width: 660, height: 520)
+        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $showAuthSheet) { provider in
             AuthSheet(provider: provider)
         }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Pane.allCases) { item in
+                SidebarRow(
+                    title: item.title,
+                    symbol: item.symbol,
+                    isSelected: pane == item
+                ) {
+                    pane = item
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 14)
+        .frame(width: 176)
+        // A relative tint rather than a named control colour: it stays a subtle
+        // step away from the window background in both appearances.
+        .background(Color.primary.opacity(0.045))
     }
 
     @ViewBuilder
@@ -100,6 +127,27 @@ public struct SettingsView: View {
 
     private var providersTab: some View {
         Form {
+            Section {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.badge.key")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Use sessions from \(DefaultBrowser.current().name)")
+                            .font(.system(size: 12, weight: .medium))
+                        Text(adoptionStatus ?? "Connects anything you're already logged into.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isAdopting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("Check now") { Task { await adopt() } }
+                    }
+                }
+            }
+
             ForEach(state.providers) { provider in
                 Section {
                     HStack(spacing: 10) {
@@ -126,6 +174,23 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func adopt() async {
+        isAdopting = true
+        defer { isAdopting = false }
+        // A browser installed, or a keychain prompt approved, since the last
+        // sweep should count.
+        CookieExtractors.invalidate()
+        // The user clicked the button, so a keychain prompt is expected here.
+        let adopted = await state.adoptBrowserSessions(allowingKeychainPrompt: true)
+        if adopted.isEmpty {
+            adoptionStatus = "No new sessions found in your browsers."
+        } else {
+            let names = adopted.compactMap { state.provider(for: $0)?.displayName }
+            adoptionStatus = "Connected \(names.joined(separator: ", "))."
+            await state.refreshAll()
+        }
     }
 
     @ViewBuilder
@@ -167,6 +232,44 @@ public struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+}
+
+/// One row of the settings sidebar. Styled to read as a native source-list
+/// item without the collapse behaviour that comes with NavigationSplitView.
+struct SidebarRow: View {
+    let title: String
+    let symbol: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12))
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 13))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(background)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+
+    private var background: Color {
+        if isSelected { return .accentColor }
+        return Color.primary.opacity(isHovered ? 0.07 : 0)
     }
 }
 
