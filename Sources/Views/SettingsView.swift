@@ -3,16 +3,57 @@ import SwiftUI
 public struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var showAuthSheet: AnyUsageProvider?
+    @State private var pane: Pane = .services
+
+    public init() {}
+
+    enum Pane: String, CaseIterable, Identifiable {
+        case services, general, about
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .services: return "Services"
+            case .general:  return "General"
+            case .about:    return "About"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .services: return "square.grid.2x2"
+            case .general:  return "gearshape"
+            case .about:    return "info.circle"
+            }
+        }
+    }
 
     public var body: some View {
-        TabView {
-            generalTab.tabItem { Label("General", systemImage: "gearshape") }
-            providersTab.tabItem { Label("Services", systemImage: "list.bullet.rectangle") }
-            aboutTab.tabItem { Label("About", systemImage: "info.circle") }
+        NavigationSplitView {
+            List(Pane.allCases, selection: Binding(
+                get: { pane },
+                set: { pane = $0 ?? pane }
+            )) { item in
+                Label(item.title, systemImage: item.symbol)
+                    .tag(item)
+            }
+            .navigationSplitViewColumnWidth(min: 150, ideal: 168, max: 200)
+        } detail: {
+            detail
+                .navigationTitle(pane.title)
         }
-        .frame(width: 520, height: 480)
+        .frame(width: 660, height: 520)
         .sheet(item: $showAuthSheet) { provider in
             AuthSheet(provider: provider)
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch pane {
+        case .services: providersTab
+        case .general:  generalTab
+        case .about:    aboutTab
         }
     }
 
@@ -36,6 +77,22 @@ public struct SettingsView: View {
                         Text(display.label).tag(display)
                     }
                 }
+                LabeledContent("Preview") {
+                    HStack(spacing: 5) {
+                        UsageMeterGlyph(
+                            levels: state.usageLevels,
+                            alertColor: UsageTint.menuBarTint(for: state.topUsagePercent),
+                            height: 13
+                        )
+                        if state.showInMenuBar == .iconAndPercent {
+                            Text("\(Int((state.topUsagePercent * 100).rounded()))%")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .monospacedDigit()
+                        } else if state.showInMenuBar == .iconAndName, let name = state.topProviderName {
+                            Text(name).font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
@@ -45,24 +102,23 @@ public struct SettingsView: View {
         Form {
             ForEach(state.providers) { provider in
                 Section {
-                    HStack {
-                        Image(systemName: provider.iconName)
-                            .foregroundStyle(provider.accentColor)
-                            .frame(width: 20)
-                        Text(provider.displayName).font(.headline)
-                        Spacer()
-                        if provider.isAuthenticated {
-                            Button("Sign out") {
-                                Task { try? await provider.signOut() }
-                            }
-                        } else {
-                            Button("Sign in…") {
-                                showAuthSheet = provider
-                            }
-                            .buttonStyle(.borderedProminent)
+                    HStack(spacing: 10) {
+                        ProviderLogo(
+                            providerID: provider.id,
+                            fallbackName: provider.displayName,
+                            fallbackColor: provider.accentColor,
+                            size: 28
+                        )
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(provider.displayName).font(.system(size: 13, weight: .semibold))
+                            Text(provider.isAuthenticated ? "Connected" : "Not connected")
+                                .font(.caption)
+                                .foregroundStyle(provider.isAuthenticated ? .green : .secondary)
                         }
+                        Spacer()
+                        signInControl(for: provider)
                     }
-                    Toggle("Enabled", isOn: Binding(
+                    Toggle("Show in menu bar", isOn: Binding(
                         get: { provider.isEnabled },
                         set: { provider.setEnabled($0) }
                     ))
@@ -72,11 +128,28 @@ public struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    @ViewBuilder
+    private func signInControl(for provider: AnyUsageProvider) -> some View {
+        if provider.isAuthenticated {
+            Button("Sign out") {
+                Task { try? await provider.signOut() }
+            }
+        } else if provider.webLogin != nil {
+            Button("Sign in…") {
+                LoginWindowController.show(provider: provider) { success in
+                    if success { Task { await state.refreshAll() } }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        } else {
+            Button("Configure…") { showAuthSheet = provider }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
     private var aboutTab: some View {
         VStack(spacing: 12) {
-            Image(systemName: "chart.bar.xaxis")
-                .font(.system(size: 48))
-                .foregroundStyle(.tint)
+            UsageMeterGlyph(levels: [0.9, 0.65, 0.4, 0.2], alertColor: .accentColor, alertThreshold: 0, height: 44)
             Text("aibars").font(.title2).bold()
             Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")")
                 .foregroundStyle(.secondary)
@@ -86,25 +159,40 @@ public struct SettingsView: View {
                 .padding(.horizontal)
             Link("View on GitHub", destination: URL(string: "https://github.com/aibars/aibars")!)
                 .padding(.top, 8)
+            Text("Product names and logos are trademarks of their respective owners.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
     }
 }
 
+/// Manual credential entry, for providers with no hosted login page to host.
 public struct AuthSheet: View {
     @ObservedObject var provider: AnyUsageProvider
     @Environment(\.dismiss) var dismiss
     @State private var pastedToken: String = ""
+    @State private var endpoint: String = ""
     @State private var status: String?
     @State private var isWorking = false
 
+    public init(provider: AnyUsageProvider) {
+        self.provider = provider
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Image(systemName: provider.iconName)
-                    .foregroundStyle(provider.accentColor)
-                Text("Sign in to \(provider.displayName)")
+            HStack(spacing: 9) {
+                ProviderLogo(
+                    providerID: provider.id,
+                    fallbackName: provider.displayName,
+                    fallbackColor: provider.accentColor,
+                    size: 26
+                )
+                Text("Connect \(provider.displayName)")
                     .font(.headline)
                 Spacer()
             }
@@ -114,10 +202,17 @@ public struct AuthSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if provider.needsEndpointConfiguration {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Usage endpoint").font(.subheadline)
+                    TextField("https://api.example.com/usage", text: $endpoint)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
             VStack(alignment: .leading, spacing: 6) {
-                Text("Session token")
-                    .font(.subheadline)
-                SecureField("Paste your session token…", text: $pastedToken)
+                Text("Token").font(.subheadline)
+                SecureField("Paste your token…", text: $pastedToken)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { Task { await save() } }
             }
@@ -126,6 +221,7 @@ public struct AuthSheet: View {
                 Text(status)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack {
@@ -140,33 +236,34 @@ public struct AuthSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+        .onAppear { endpoint = provider.configuredEndpoint ?? "" }
     }
 
     private var instructions: String {
         switch provider.id {
-        case "claude":
-            return "In Claude.ai, open DevTools → Application → Cookies → claude.ai. Copy the value of `sessionKey`."
-        case "chatgpt":
-            return "In chatgpt.com, open DevTools → Application → Cookies → chatgpt.com. Copy `__Secure-next-auth.session-token`."
-        case "cursor":
-            return "In cursor.com, open DevTools → Application → Cookies → cursor.com. Copy `WorkosCursorSessionToken`."
-        case "copilot":
-            return "Create a GitHub personal access token (Settings → Developer settings → PAT, classic) with `read:user` and `copilot` scopes. Paste it below."
         case "minimax":
-            return "Paste an API token with read access to your usage endpoint."
+            return "Point aibars at any endpoint that returns JSON usage data, and give it a token with read access."
         default:
-            return "Open the service in your browser, copy the relevant session cookie, and paste it below."
+            return "Paste a token with read access to this service's usage endpoint."
         }
     }
 
     private func save() async {
         isWorking = true
         defer { isWorking = false }
+        if provider.needsEndpointConfiguration {
+            let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, URL(string: trimmed) != nil else {
+                status = "Enter a valid usage endpoint URL."
+                return
+            }
+            provider.configure(endpoint: trimmed, planName: "API")
+        }
         do {
             try provider.saveTokenManually(pastedToken)
             status = "Saved. Verifying…"
             _ = try await provider.fetchUsage()
-            status = "Authenticated."
+            status = "Connected."
             try? await Task.sleep(nanoseconds: 500_000_000)
             dismiss()
         } catch {
@@ -180,15 +277,15 @@ public struct AuthSheet: View {
         do {
             try await provider.authenticate()
             if provider.isAuthenticated {
-                status = "Found session in browser."
+                status = "Found a session in your browser."
                 _ = try await provider.fetchUsage()
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 dismiss()
             } else {
-                status = "No matching cookie found in installed browsers. Paste your token below."
+                status = "No matching cookie in your installed browsers. Paste a token instead."
             }
         } catch {
-            status = "Browser extract failed: \(error.localizedDescription). Paste your token below."
+            status = "Browser lookup failed: \(error.localizedDescription). Paste a token instead."
         }
     }
 }
