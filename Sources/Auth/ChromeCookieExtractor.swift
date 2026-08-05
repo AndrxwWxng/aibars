@@ -42,59 +42,35 @@ public final class ChromeCookieExtractor: CookieExtractor {
     }
 
     public func cookies(for domain: String) throws -> [BrowserCookie] {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("aibars-\(UUID().uuidString).sqlite")
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try FileManager.default.copyItem(at: dbURL, to: tmp)
-
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(tmp.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
-            throw ProviderError.configuration("Could not open \(variant.rawValue) cookies database.")
-        }
-        defer { sqlite3_close(db) }
-
-        let sql = "SELECT name, host_key, path, expires_utc, value, encrypted_value FROM cookies WHERE host_key LIKE ?;"
-        var statement: OpaquePointer?
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw ProviderError.configuration("Could not query cookies.")
-        }
-        let like = "%" + domain + "%"
-        sqlite3_bind_text(statement, 1, like, -1, SQLITE_TRANSIENT)
+        let snapshot = try SQLiteSnapshot(of: dbURL)
+        defer { snapshot.close() }
 
         var cookies: [BrowserCookie] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let name = columnText(statement, 0) ?? ""
-            let host = columnText(statement, 1) ?? ""
-            let path = columnText(statement, 2) ?? "/"
-            let expiresUS = sqlite3_column_int64(statement, 3)
+        try snapshot.query(
+            "SELECT name, host_key, path, expires_utc, value, encrypted_value FROM cookies WHERE host_key LIKE ?;",
+            bind: ["%\(domain)%"]
+        ) { row in
             // Chromium leaves `value` empty and puts the real thing in
             // `encrypted_value` for everything it has migrated.
-            var value = columnText(statement, 4) ?? ""
-            if value.isEmpty, let blob = columnBlob(statement, 5), let key = decryptionKey() {
+            var value = SQLiteSnapshot.text(row, 4) ?? ""
+            if value.isEmpty, let blob = SQLiteSnapshot.blob(row, 5), let key = decryptionKey() {
                 value = (try? ChromeCookieCrypto.decrypt(blob, key: key)) ?? ""
             }
-            let expiresAt: Date? = expiresUS > 0
-                ? Date(timeIntervalSince1970: TimeInterval(expiresUS) / 1_000_000 - 11_644_473_600)
+            // Chromium timestamps are microseconds since 1601.
+            let expiresMicroseconds = sqlite3_column_int64(row, 3)
+            let expiresAt: Date? = expiresMicroseconds > 0
+                ? Date(timeIntervalSince1970: TimeInterval(expiresMicroseconds) / 1_000_000 - 11_644_473_600)
                 : nil
             cookies.append(BrowserCookie(
-                name: name, value: value, domain: host, path: path,
-                expiresAt: expiresAt, source: browser
+                name: SQLiteSnapshot.text(row, 0) ?? "",
+                value: value,
+                domain: SQLiteSnapshot.text(row, 1) ?? "",
+                path: SQLiteSnapshot.text(row, 2) ?? "/",
+                expiresAt: expiresAt,
+                source: browser
             ))
         }
         return cookies
-    }
-
-    private func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
-        guard let cString = sqlite3_column_text(stmt, index) else { return nil }
-        return String(cString: cString)
-    }
-
-    private func columnBlob(_ stmt: OpaquePointer?, _ index: Int32) -> Data? {
-        guard let bytes = sqlite3_column_blob(stmt, index) else { return nil }
-        let count = Int(sqlite3_column_bytes(stmt, index))
-        guard count > 0 else { return nil }
-        return Data(bytes: bytes, count: count)
     }
 }
 
@@ -163,6 +139,3 @@ public enum ChromeBasedBrowser: String, CaseIterable {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }
-
-// SQLite3 needs SQLITE_TRANSIENT for binding text.
-let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
