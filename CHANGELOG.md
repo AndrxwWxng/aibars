@@ -5,6 +5,10 @@ All notable changes to aibars are documented here. Format follows [Keep a Change
 ## [Unreleased]
 
 ### Added
+- Four more providers: Google Gemini, Grok, Perplexity and DeepSeek. Gemini, Grok and Perplexity read a session cookie; DeepSeek uses an API key from its platform console. Every endpoint here is undocumented except DeepSeek's, so each provider notes in-file how much of its response shape is confirmed.
+- Chromium cookie decryption, which is what makes signing in through Chrome, Edge, Brave, Arc or Opera possible at all. The Safe Storage key comes from the login keychain, so the first read prompts for access.
+- Per-row refresh and a link out to each service's own usage page, revealed on hover.
+- Commit conventions in `CONTRIBUTING.md` plus a `.gitmessage` template.
 - One-click sign-in: aibars hosts each provider's own login page in a window and captures the session cookie as soon as it appears, replacing the DevTools copy-paste flow. Every login window keeps a "paste a token instead" fallback.
 - Real provider logos, drawn from single-path SVG data by a new SVG path parser (`Sources/Brand/`). Near-black marks flip to light on dark backgrounds. A bundled `logo-<providerID>` image overrides the built-in mark.
 - Menu bar meter: one bar per service, tallest first, tinted only on the bars that are actually near their cap.
