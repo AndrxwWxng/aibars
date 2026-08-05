@@ -41,10 +41,10 @@ final class SVGPathTests: XCTestCase {
 }
 
 final class BrandMarkTests: XCTestCase {
-    /// Services with no published single-path logo. These fall back to a
+    /// Services with no published logo we can render. These fall back to a
     /// lettermark, which is deliberate — better an honest initial than a
     /// hand-drawn approximation of someone's trademark.
-    private static let withoutMarks: Set<String> = ["grok"]
+    private static let withoutMarks: Set<String> = []
 
     @MainActor
     func testEveryRegisteredProviderHasAMarkOrIsExempt() {
