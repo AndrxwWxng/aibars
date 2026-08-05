@@ -54,12 +54,23 @@ public enum CookieExtractors {
         return result
     }
 
-    /// Try each available extractor in order, return the first non-empty
-    /// match for the given domain.
-    public static func firstAvailableCookie(named name: String, for domain: String) -> BrowserCookie? {
-        for extractor in available() {
-            if let cookies = try? extractor.cookies(for: domain),
-               let match = cookies.first(where: { $0.name == name }) {
+    /// Try each available extractor, returning the first cookie that actually
+    /// has a value. `preferred` is checked first — during a login flow that's
+    /// the browser the user just logged in with, so it avoids prompting for
+    /// another browser's keychain key unnecessarily.
+    public static func firstAvailableCookie(
+        named name: String,
+        for domain: String,
+        preferring preferred: BrowserCookie.Browser? = nil
+    ) -> BrowserCookie? {
+        let extractors = available().sorted { lhs, rhs in
+            (lhs.browser == preferred ? 0 : 1) < (rhs.browser == preferred ? 0 : 1)
+        }
+        for extractor in extractors {
+            guard let cookies = try? extractor.cookies(for: domain) else { continue }
+            // An empty value means the row was found but not decryptable, which
+            // is not a usable session — keep looking.
+            if let match = cookies.first(where: { $0.name == name && !$0.value.isEmpty }) {
                 return match
             }
         }

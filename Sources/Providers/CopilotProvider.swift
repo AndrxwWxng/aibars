@@ -23,6 +23,20 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
         self.isAuthenticated = SessionStore.shared.token(for: "copilot") != nil
     }
 
+    public var dashboardURL: URL? { URL(string: "https://github.com/settings/copilot") }
+
+    public var webLogin: WebLoginConfig? {
+        // Copilot's API wants a personal access token, not a session cookie,
+        // so the best we can do is land the user on a pre-filled token form
+        // and take the result without them leaving the app.
+        WebLoginConfig(
+            startURL: URL(string: "https://github.com/settings/tokens/new?scopes=read:user,copilot&description=aibars")!,
+            capture: .tokenShownOnPage,
+            hint: "Scroll down, click “Generate token”, then paste it below.",
+            dataDomains: ["github.com"]
+        )
+    }
+
     public func fetchUsage() async throws -> UsageData {
         guard let token = session.token(for: "copilot") else {
             throw ProviderError.notAuthenticated
@@ -82,12 +96,14 @@ public enum CopilotUsageParser {
         let chat = (user["chat_enabled"] as? Bool) ?? true
         let quotaReset = (usage["quota_reset_date"] as? String).flatMap { ProviderDate.parse($0) }
 
-        // Most public-facing Copilot endpoints don't expose numeric usage.
-        // We surface plan + a synthetic "active" indicator.
+        // Most public-facing Copilot endpoints don't expose numeric usage, so
+        // this is a status rather than a quota. A zero limit marks it as such:
+        // it keeps a seat that is merely *active* from reading as 100% used
+        // and dragging the menu bar meter into the red.
         let primary = UsageMetric(
             label: chat ? "Active" : "Paused",
             used: chat ? 1 : 0,
-            limit: 1,
+            limit: 0,
             unit: nil,
             resetDate: quotaReset,
             windowLabel: nil
