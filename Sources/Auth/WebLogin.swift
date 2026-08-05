@@ -24,17 +24,34 @@ public struct WebLoginConfig {
     /// Domains this provider's session lives on. First entry is the one the
     /// cookie search targets.
     public let dataDomains: [String]
+    /// Other names the session cookie may go by. Services that have migrated
+    /// their auth library write a different name depending on when the account
+    /// last signed in, and the old ones stay valid.
+    public let alternateCookieNames: [String]
 
-    public init(startURL: URL, capture: Capture, hint: String, dataDomains: [String] = []) {
+    public init(
+        startURL: URL,
+        capture: Capture,
+        hint: String,
+        dataDomains: [String] = [],
+        alternateCookieNames: [String] = []
+    ) {
         self.startURL = startURL
         self.capture = capture
         self.hint = hint
         self.dataDomains = dataDomains
+        self.alternateCookieNames = alternateCookieNames
     }
 
     public var expectedCookieName: String? {
         if case .cookie(let name, _) = capture { return name }
         return nil
+    }
+
+    /// Every name worth looking for, preferred first.
+    public var candidateCookieNames: [String] {
+        guard let primary = expectedCookieName else { return [] }
+        return [primary] + alternateCookieNames.filter { $0 != primary }
     }
 
     public var cookieDomain: String? {
@@ -121,9 +138,10 @@ public enum WebLoginEnvironment {
         for config: WebLoginConfig,
         preferring browser: BrowserCookie.Browser? = nil
     ) async -> BrowserCookie? {
-        guard case .cookie(let name, let domain) = config.capture else { return nil }
+        guard case .cookie(_, let domain) = config.capture else { return nil }
+        let names = config.candidateCookieNames
         return await Task.detached(priority: .utility) {
-            CookieExtractors.firstAvailableCookie(named: name, for: domain, preferring: browser)
+            CookieExtractors.firstAvailableCookie(named: names, for: domain, preferring: browser)
         }.value
     }
 

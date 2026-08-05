@@ -63,15 +63,29 @@ public enum CookieExtractors {
         for domain: String,
         preferring preferred: BrowserCookie.Browser? = nil
     ) -> BrowserCookie? {
+        firstAvailableCookie(named: [name], for: domain, preferring: preferred)
+    }
+
+    /// As above, for services that write one of several cookie names depending
+    /// on when the account last signed in. Each browser is read once and all
+    /// candidates checked against that snapshot — reading per name would risk
+    /// a keychain prompt per name.
+    public static func firstAvailableCookie(
+        named names: [String],
+        for domain: String,
+        preferring preferred: BrowserCookie.Browser? = nil
+    ) -> BrowserCookie? {
         let extractors = available().sorted { lhs, rhs in
             (lhs.browser == preferred ? 0 : 1) < (rhs.browser == preferred ? 0 : 1)
         }
         for extractor in extractors {
             guard let cookies = try? extractor.cookies(for: domain) else { continue }
-            // An empty value means the row was found but not decryptable, which
-            // is not a usable session — keep looking.
-            if let match = cookies.first(where: { $0.name == name && !$0.value.isEmpty }) {
-                return match
+            for name in names {
+                // An empty value means the row was found but not decryptable,
+                // which is not a usable session — keep looking.
+                if let match = cookies.first(where: { $0.name == name && !$0.value.isEmpty }) {
+                    return match
+                }
             }
         }
         return nil
