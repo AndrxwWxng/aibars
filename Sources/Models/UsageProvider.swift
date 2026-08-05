@@ -22,9 +22,18 @@ public protocol UsageProvider: AnyObject, Identifiable {
     func fetchUsage() async throws -> UsageData
     func authenticate() async throws
     func signOut() async throws
+    /// Enable or disable the provider. Part of the protocol so the type-erased
+    /// wrapper reaches the implementation that persists the choice, rather than
+    /// assigning `isEnabled` and silently skipping the UserDefaults write.
+    func setEnabled(_ enabled: Bool)
 }
 
 public extension UsageProvider {
     var webLogin: WebLoginConfig? { nil }
     var dashboardURL: URL? { nil }
+
+    /// Providers that don't persist the flag get the in-memory behaviour.
+    func setEnabled(_ enabled: Bool) {
+        isEnabled = enabled
+    }
 }

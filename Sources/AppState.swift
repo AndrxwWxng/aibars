@@ -45,6 +45,10 @@ public final class AppState: ObservableObject {
         self.providers = [
             AnyUsageProvider(ClaudeProvider()),
             AnyUsageProvider(ChatGPTProvider()),
+            AnyUsageProvider(GoogleGeminiProvider()),
+            AnyUsageProvider(GrokProvider()),
+            AnyUsageProvider(PerplexityProvider()),
+            AnyUsageProvider(DeepSeekProvider()),
             AnyUsageProvider(CursorProvider()),
             AnyUsageProvider(CopilotProvider()),
             AnyUsageProvider(MiniMaxProvider())
@@ -229,7 +233,7 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
         self._fetch = { try await provider.fetchUsage() }
         self._authenticate = { try await provider.authenticate() }
         self._signOut = { try await provider.signOut() }
-        self._setEnabled = { [weak provider] in provider?.isEnabled = $0 }
+        self._setEnabled = { [weak provider] in provider?.setEnabled($0) }
         self._readAuthState = { [weak provider] in provider?.isAuthenticated ?? false }
         if let generic = provider as? MiniMaxProvider {
             self._configure = { [weak generic] endpoint, plan in
@@ -244,6 +248,10 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
             switch provider.id {
             case "claude": try (provider as? ClaudeProvider)?.saveTokenManually(token)
             case "chatgpt": try (provider as? ChatGPTProvider)?.saveTokenManually(token)
+            case "gemini": try (provider as? GoogleGeminiProvider)?.saveTokenManually(token)
+            case "grok": try (provider as? GrokProvider)?.saveTokenManually(token)
+            case "perplexity": try (provider as? PerplexityProvider)?.saveTokenManually(token)
+            case "deepseek": try (provider as? DeepSeekProvider)?.saveTokenManually(token)
             case "cursor": try (provider as? CursorProvider)?.saveTokenManually(token)
             case "copilot": try (provider as? CopilotProvider)?.saveTokenManually(token)
             case "minimax": try (provider as? MiniMaxProvider)?.saveTokenManually(token)

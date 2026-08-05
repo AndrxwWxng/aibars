@@ -41,9 +41,22 @@ final class SVGPathTests: XCTestCase {
 }
 
 final class BrandMarkTests: XCTestCase {
-    func testEveryProviderHasAMark() {
-        for id in ["claude", "chatgpt", "cursor", "copilot", "minimax"] {
-            XCTAssertNotNil(BrandMark.mark(for: id), "missing brand mark for \(id)")
+    /// Services with no published single-path logo. These fall back to a
+    /// lettermark, which is deliberate — better an honest initial than a
+    /// hand-drawn approximation of someone's trademark.
+    private static let withoutMarks: Set<String> = ["grok"]
+
+    @MainActor
+    func testEveryRegisteredProviderHasAMarkOrIsExempt() {
+        for provider in AppState().providers {
+            if Self.withoutMarks.contains(provider.id) {
+                XCTAssertNil(
+                    BrandMark.mark(for: provider.id),
+                    "\(provider.id) now has a mark — drop it from the exempt list"
+                )
+            } else {
+                XCTAssertNotNil(BrandMark.mark(for: provider.id), "missing brand mark for \(provider.id)")
+            }
         }
     }
 
