@@ -3,8 +3,9 @@ import SQLite3
 
 /// Reads cookies from Firefox profiles.
 ///
-/// Firefox cookies are not encrypted by default, so this can return
-/// usable values without keychain access.
+/// Firefox cookies are not encrypted, so this returns usable values without
+/// keychain access. It does keep them in a WAL database, which is why the read
+/// goes through `SQLiteSnapshot`.
 public final class FirefoxCookieExtractor: CookieExtractor {
     public let browser: BrowserCookie.Browser = .firefox
 
@@ -16,7 +17,20 @@ public final class FirefoxCookieExtractor: CookieExtractor {
         guard let contents = try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else {
             return nil
         }
-        self.profileDirs = contents.filter { $0.hasDirectoryPath }
+        // Largest database first: a machine accumulates abandoned profiles, and
+        // the one the user actually browses in is the one with cookies in it.
+        self.profileDirs = contents
+            .filter { $0.hasDirectoryPath }
+            .map { (url: $0, size: Self.cookieDatabaseSize(in: $0)) }
+            .filter { $0.size > 0 }
+            .sorted { $0.size > $1.size }
+            .map(\.url)
+    }
+
+    private static func cookieDatabaseSize(in profile: URL) -> Int {
+        let file = profile.appendingPathComponent("cookies.sqlite")
+        let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
+        return (attributes?[.size] as? Int) ?? 0
     }
 
     public var isAvailable: Bool {
@@ -28,34 +42,23 @@ public final class FirefoxCookieExtractor: CookieExtractor {
         for profile in profileDirs {
             let cookiesFile = profile.appendingPathComponent("cookies.sqlite")
             guard FileManager.default.fileExists(atPath: cookiesFile.path) else { continue }
+            guard let snapshot = try? SQLiteSnapshot(of: cookiesFile) else { continue }
+            defer { snapshot.close() }
 
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("aibars-ff-\(UUID().uuidString).sqlite")
-            try? FileManager.default.copyItem(at: cookiesFile, to: tmp)
-            defer { try? FileManager.default.removeItem(at: tmp) }
-
-            var db: OpaquePointer?
-            guard sqlite3_open_v2(tmp.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { continue }
-            defer { sqlite3_close(db) }
-
-            let sql = "SELECT name, value, host, path, expiry FROM moz_cookies WHERE host LIKE ?;"
-            var statement: OpaquePointer?
-            defer { sqlite3_finalize(statement) }
-            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { continue }
-            sqlite3_bind_text(statement, 1, "%\(domain)%", -1, SQLITE_TRANSIENT)
-
-            while sqlite3_step(statement) == SQLITE_ROW {
-                let name = String(cString: sqlite3_column_text(statement, 0))
-                let value = String(cString: sqlite3_column_text(statement, 1))
-                let host = String(cString: sqlite3_column_text(statement, 2))
-                let path = String(cString: sqlite3_column_text(statement, 3))
-                let expirySec = sqlite3_column_int64(statement, 4)
-                let expiresAt: Date? = expirySec > 0
-                    ? Date(timeIntervalSince1970: TimeInterval(expirySec))
-                    : nil
+            try? snapshot.query(
+                "SELECT name, value, host, path, expiry FROM moz_cookies WHERE host LIKE ?;",
+                bind: ["%\(domain)%"]
+            ) { row in
+                guard let name = SQLiteSnapshot.text(row, 0),
+                      let value = SQLiteSnapshot.text(row, 1) else { return }
+                let expirySeconds = sqlite3_column_int64(row, 4)
                 all.append(BrowserCookie(
-                    name: name, value: value, domain: host, path: path,
-                    expiresAt: expiresAt, source: .firefox
+                    name: name,
+                    value: value,
+                    domain: SQLiteSnapshot.text(row, 2) ?? "",
+                    path: SQLiteSnapshot.text(row, 3) ?? "/",
+                    expiresAt: expirySeconds > 0 ? Date(timeIntervalSince1970: TimeInterval(expirySeconds)) : nil,
+                    source: .firefox
                 ))
             }
         }
