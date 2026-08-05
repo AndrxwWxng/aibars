@@ -106,7 +106,7 @@ public struct DefaultBrowser {
         for variant in ChromeBasedBrowser.allCases where variant.bundleIdentifiers.contains(identifier) {
             return DefaultBrowser(bundleIdentifier: identifier, name: name, kind: variant.browserEnum, limitation: nil)
         }
-        return DefaultBrowser(bundleIdentifier: identifier, name: name, limitationOnly: .unsupported)
+        return DefaultBrowser(bundleIdentifier: identifier, name: name, kind: nil, limitation: .unsupported)
     }
 
     private init(bundleIdentifier: String, name: String, kind: BrowserCookie.Browser?, limitation: Limitation?) {
@@ -114,10 +114,6 @@ public struct DefaultBrowser {
         self.name = name
         self.kind = kind
         self.limitation = limitation
-    }
-
-    private init(bundleIdentifier: String, name: String, limitationOnly: Limitation) {
-        self.init(bundleIdentifier: bundleIdentifier, name: name, kind: nil, limitation: limitationOnly)
     }
 
     /// Whether a session could plausibly be picked up without the user pasting.

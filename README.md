@@ -39,7 +39,7 @@ You probably pay for three or four AI tools and have no idea whether you're abou
 ## Features
 
 - **Menu bar meter** — one bar per service, tallest usage first, tinted red only when something is actually near its cap. Click for the dropdown.
-- **Five providers out of the box**: Claude, ChatGPT, Cursor, GitHub Copilot, MiniMax — each with its own logo.
+- **Nine providers out of the box**: Claude, ChatGPT, Gemini, Grok, Perplexity, DeepSeek, Cursor, GitHub Copilot, and a generic JSON provider — each with its own logo.
 - **One-click sign-in** — aibars hosts the provider's real login page and picks up the session itself. No DevTools, no copy-paste.
 - **Generic provider** — point at any JSON endpoint and aibars will display whatever it returns.
 - **Refresh interval, display mode, enable/disable per provider** — all configurable in Settings.
@@ -90,19 +90,33 @@ The split exists so the app can ship with `@main` while unit tests run against t
 
 Click **Sign in** on any row — in the dropdown or in Settings → Services. aibars opens that provider's own login page in a window, you log in the way you normally would, and the session is picked up and stored in the Keychain the moment it appears. The window closes itself.
 
-| Provider    | What happens                                                                 |
-|-------------|------------------------------------------------------------------------------|
-| Claude      | claude.ai login → `sessionKey` captured automatically                        |
-| ChatGPT     | chatgpt.com login → `__Secure-next-auth.session-token` captured automatically |
-| Cursor      | cursor.com → WorkOS login → `WorkosCursorSessionToken` captured automatically |
-| Copilot     | GitHub login → pre-filled token form; paste the token it shows you            |
-| MiniMax     | Settings → **Configure…**: a usage endpoint URL and a bearer token            |
+| Provider    | What happens                                                                     |
+|-------------|----------------------------------------------------------------------------------|
+| Claude      | claude.ai login → `sessionKey` captured automatically                            |
+| ChatGPT     | chatgpt.com login → `__Secure-next-auth.session-token` captured automatically     |
+| Gemini      | Google login → session cookies captured automatically                            |
+| Grok        | grok.com → xAI login → `sso` captured automatically                              |
+| Perplexity  | perplexity.ai login → Auth.js session cookie captured automatically              |
+| DeepSeek    | platform.deepseek.com → API key; paste it once                                    |
+| Cursor      | cursor.com → WorkOS login → `WorkosCursorSessionToken` captured automatically     |
+| Copilot     | GitHub login → pre-filled token form; paste the token it shows you                |
+| MiniMax     | Settings → **Configure…**: a usage endpoint URL and a bearer token                |
 
-Copilot is the one exception to hands-off capture: its API wants a personal access token rather than a session cookie, so aibars drops you on GitHub's token page with the scopes pre-filled and takes the result in the same window.
+Copilot and DeepSeek are the exceptions to hands-off capture: their APIs want a personal access token or API key rather than a session cookie, so aibars drops you on the right page and takes the result.
 
-Every login window also has a **Paste a token instead** link, and Settings still offers **Try browser cookies** for the manual providers — that reads an existing session out of Safari or Firefox. (Chrome cookies are encrypted with a Keychain key; the extractor returns metadata but not the value.)
+### Which browsers this works with
 
-Signing out clears the Keychain entry *and* the cookies aibars stored for that provider's domains, so the next sign-in starts clean.
+aibars reads the session out of the browser you logged in with, so that browser has to be one it can read:
+
+| Browser                       | Works | Notes                                                          |
+|-------------------------------|-------|----------------------------------------------------------------|
+| Chrome, Edge, Brave, Arc, Opera | Yes   | macOS asks once for Keychain access to the browser's Safe Storage key. Decline and you can still paste a token. |
+| Firefox                       | Yes   | Cookies are stored in plaintext; nothing to unlock.            |
+| Safari                        | Needs Full Disk Access | Safari's cookies live in a TCC-protected container. The login window offers a shortcut to the setting. |
+
+Every login window also has a **Paste a token instead** link, so no browser is a hard requirement.
+
+Signing out clears aibars' copy of the credential only. Your browser session is left alone — clearing it would log you out of the website itself.
 
 ## Settings
 
@@ -150,13 +164,18 @@ public final class MyProvider: ObservableObject, UsageProvider {
         )
     }
 
+    /// Where clicking through a connected row goes. Optional.
+    public var dashboardURL: URL? { URL(string: "https://example.com/account/usage") }
+
     /// Opt into one-click sign-in. Omit for manual token entry.
     public var webLogin: WebLoginConfig? {
         WebLoginConfig(
             startURL: URL(string: "https://example.com/login")!,
             capture: .cookie(name: "session", domainSuffix: "example.com"),
             hint: "Log in as usual — aibars picks up the session automatically.",
-            dataDomains: ["example.com"]
+            dataDomains: ["example.com"],
+            // Only if the service writes more than one name — see Perplexity.
+            alternateCookieNames: ["legacy-session"]
         )
     }
 

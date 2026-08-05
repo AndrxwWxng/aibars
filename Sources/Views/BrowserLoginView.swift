@@ -18,7 +18,6 @@ public final class BrowserLoginCoordinator: ObservableObject {
     }
 
     @Published public private(set) var phase: Phase = .idle
-    @Published public private(set) var attempts = 0
 
     public let browser: DefaultBrowser
     private let provider: AnyUsageProvider
@@ -66,7 +65,6 @@ public final class BrowserLoginCoordinator: ObservableObject {
     /// A single look at the cookie stores. Also the "Check now" button.
     @discardableResult
     public func checkOnce() async -> Bool {
-        attempts += 1
         guard let cookie = await WebLoginEnvironment.capturedCookie(for: config, preferring: browser.kind) else {
             return false
         }
@@ -323,7 +321,7 @@ public enum LoginWindowController {
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 340),
-            styleMask: [.titled, .closable],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -336,8 +334,9 @@ public enum LoginWindowController {
         }
         let hosting = NSHostingView(rootView: view)
         window.contentView = hosting
-        // Let the window size itself to the content: the banner and the manual
-        // entry field both change its height.
+        // The banner and the manual entry field both change the content's
+        // height, so let it size itself — and stay resizable, since a clipped
+        // sign-in window would be unrecoverable.
         window.setContentSize(hosting.fittingSize)
         window.center()
         windows[provider.id] = window
