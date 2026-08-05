@@ -58,6 +58,10 @@ public final class AppState: ObservableObject {
     public func start() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
+            // Adopt sessions the user already has before the first fetch, so a
+            // browser they're logged into shows usage without them being asked
+            // to "sign in" to something they're signed into.
+            await self?.adoptBrowserSessions()
             while !Task.isCancelled {
                 await self?.refreshAll()
                 let interval = await self?.refreshIntervalSeconds ?? 60
@@ -92,6 +96,57 @@ public final class AppState: ObservableObject {
                 snapshots[id] = result
             }
         }
+    }
+
+    /// Connects any provider whose session is already sitting in one of the
+    /// user's browsers.
+    ///
+    /// Being logged into claude.ai in your browser and being asked by aibars to
+    /// "sign in" is the same thing twice. One sweep resolves every disconnected
+    /// provider at once — per-provider lookups would copy each browser's cookie
+    /// database once per provider.
+    ///
+    /// `allowingKeychainPrompt` should only be true when the user asked for
+    /// this. The launch sweep runs silently: a keychain dialog appearing on its
+    /// own, before the user has touched anything, is alarming — and it blocks
+    /// the sweep until they answer.
+    ///
+    /// Returns the providers it connected.
+    @discardableResult
+    public func adoptBrowserSessions(allowingKeychainPrompt: Bool = false) async -> [String] {
+        let pending = providers.filter { provider in
+            provider.isEnabled && !provider.isAuthenticated && provider.webLogin?.cookieDomain != nil
+        }
+        guard !pending.isEmpty else { return [] }
+
+        let queries = pending.compactMap { provider -> CookieExtractors.Query? in
+            guard let config = provider.webLogin, let domain = config.cookieDomain else { return nil }
+            return CookieExtractors.Query(
+                key: provider.id,
+                names: config.candidateCookieNames,
+                domain: domain
+            )
+        }
+        let preferred = DefaultBrowser.current().kind
+        let found = await Task.detached(priority: .utility) {
+            CookieExtractors.search(
+                queries,
+                preferring: preferred,
+                allowingKeychainPrompt: allowingKeychainPrompt
+            )
+        }.value
+
+        var adopted: [String] = []
+        for provider in pending {
+            guard let cookie = found[provider.id] else { continue }
+            do {
+                try provider.saveTokenManually(cookie.value)
+                adopted.append(provider.id)
+            } catch {
+                continue
+            }
+        }
+        return adopted
     }
 
     /// Refreshes a single provider, for the per-row refresh button and for the
