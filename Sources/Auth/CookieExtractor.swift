@@ -34,30 +34,107 @@ public protocol CookieExtractor {
     var browser: BrowserCookie.Browser { get }
     var isAvailable: Bool { get }
     func cookies(for domain: String) throws -> [BrowserCookie]
+    /// Several domains in a single read. Worth overriding wherever a read is
+    /// expensive — for the SQLite-backed browsers that's one database copy
+    /// instead of one per domain.
+    ///
+    /// `allowingKeychainPrompt` is false for work the user didn't ask for.
+    /// Chromium's cookie key lives in the login keychain, and asking for it puts
+    /// a system dialog on screen; an app that does that during launch reads as
+    /// something trying to steal your passwords. Extractors that need no
+    /// keychain access ignore the flag.
+    func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool) throws -> [BrowserCookie]
+}
+
+public extension CookieExtractor {
+    func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool = true) throws -> [BrowserCookie] {
+        try domains.flatMap { try cookies(for: $0) }
+    }
 }
 
 public enum CookieExtractors {
-    /// Returns all available extractors on the current system.
+    /// One query: the names a provider's session may go by, and the domain it
+    /// lives on.
+    public struct Query {
+        public let key: String
+        public let names: [String]
+        public let domain: String
+
+        public init(key: String, names: [String], domain: String) {
+            self.key = key
+            self.names = names
+            self.domain = domain
+        }
+    }
+
+    /// Extractors are cached for the life of the process. Rebuilding them per
+    /// lookup would throw away each Chromium extractor's derived key, which
+    /// means a fresh keychain prompt for every provider on every pass.
+    private static let cached = Lock<[CookieExtractor]?>(nil)
+
     public static func available() -> [CookieExtractor] {
-        var result: [CookieExtractor] = []
-        if let safari = SafariCookieExtractor(), safari.isAvailable {
-            result.append(safari)
+        cached.withLock { store in
+            if let store { return store }
+            var result: [CookieExtractor] = []
+            if let safari = SafariCookieExtractor(), safari.isAvailable {
+                result.append(safari)
+            }
+            if let firefox = FirefoxCookieExtractor(), firefox.isAvailable {
+                result.append(firefox)
+            }
+            for variant in ChromeBasedBrowser.allCases {
+                if let chrome = ChromeCookieExtractor(variant: variant), chrome.isAvailable {
+                    result.append(chrome)
+                }
+            }
+            store = result
+            return result
         }
-        if let firefox = FirefoxCookieExtractor(), firefox.isAvailable {
-            result.append(firefox)
+    }
+
+    /// Forgets the cached extractors, so a browser installed or a keychain
+    /// prompt approved mid-session is picked up on the next pass.
+    public static func invalidate() {
+        cached.withLock { $0 = nil }
+    }
+
+    /// Resolves several providers' sessions in one sweep.
+    ///
+    /// Each browser is read once for every domain at once. A read copies the
+    /// whole cookie database, so doing this per provider turned a nine-provider
+    /// discovery pass into nine copies of Chrome's database.
+    public static func search(
+        _ queries: [Query],
+        preferring preferred: BrowserCookie.Browser? = nil,
+        allowingKeychainPrompt: Bool = true
+    ) -> [String: BrowserCookie] {
+        guard !queries.isEmpty else { return [:] }
+        let extractors = available().sorted { lhs, rhs in
+            (lhs.browser == preferred ? 0 : 1) < (rhs.browser == preferred ? 0 : 1)
         }
-        for variant in ChromeBasedBrowser.allCases {
-            if let chrome = ChromeCookieExtractor(variant: variant), chrome.isAvailable {
-                result.append(chrome)
+        let domains = Array(Set(queries.map(\.domain)))
+
+        var found: [String: BrowserCookie] = [:]
+        for extractor in extractors {
+            let outstanding = queries.filter { found[$0.key] == nil }
+            guard !outstanding.isEmpty else { break }
+            guard let jar = try? extractor.cookies(
+                forAnyOf: domains,
+                allowingKeychainPrompt: allowingKeychainPrompt
+            ) else { continue }
+
+            for query in outstanding {
+                let scoped = jar.filter { matches(domain: $0.domain, query.domain) }
+                guard let cookie = resolve(names: query.names, in: scoped) else { continue }
+                found[query.key] = cookie
             }
         }
-        return result
+        return found
     }
 
     /// Try each available extractor, returning the first cookie that actually
     /// has a value. `preferred` is checked first — during a login flow that's
-    /// the browser the user just logged in with, so it avoids prompting for
-    /// another browser's keychain key unnecessarily.
+    /// the browser the user just logged in with.
     public static func firstAvailableCookie(
         named name: String,
         for domain: String,
@@ -66,28 +143,87 @@ public enum CookieExtractors {
         firstAvailableCookie(named: [name], for: domain, preferring: preferred)
     }
 
+    /// True when a browser's cookies can be read without putting a keychain
+    /// dialog on screen — either it needs no key, or the key is already derived.
+    public static func canReadSilently(_ browser: BrowserCookie.Browser) -> Bool {
+        available().contains { extractor in
+            guard extractor.browser == browser else { return false }
+            guard let chromium = extractor as? ChromeCookieExtractor else { return true }
+            return chromium.hasCachedKey
+        }
+    }
+
     /// As above, for services that write one of several cookie names depending
-    /// on when the account last signed in. Each browser is read once and all
-    /// candidates checked against that snapshot — reading per name would risk
-    /// a keychain prompt per name.
+    /// on when the account last signed in.
     public static func firstAvailableCookie(
         named names: [String],
         for domain: String,
         preferring preferred: BrowserCookie.Browser? = nil
     ) -> BrowserCookie? {
-        let extractors = available().sorted { lhs, rhs in
-            (lhs.browser == preferred ? 0 : 1) < (rhs.browser == preferred ? 0 : 1)
-        }
-        for extractor in extractors {
-            guard let cookies = try? extractor.cookies(for: domain) else { continue }
-            for name in names {
-                // An empty value means the row was found but not decryptable,
-                // which is not a usable session — keep looking.
-                if let match = cookies.first(where: { $0.name == name && !$0.value.isEmpty }) {
-                    return match
-                }
+        search([Query(key: "single", names: names, domain: domain)], preferring: preferred)["single"]
+    }
+
+    // MARK: - Matching
+
+    private static func matches(domain cookieDomain: String, _ wanted: String) -> Bool {
+        let host = cookieDomain.hasPrefix(".") ? String(cookieDomain.dropFirst()) : cookieDomain
+        return host == wanted || host.hasSuffix("." + wanted) || host.contains(wanted)
+    }
+
+    /// Prefers a whole cookie, then falls back to reassembling a chunked one.
+    private static func resolve(names: [String], in jar: [BrowserCookie]) -> BrowserCookie? {
+        for name in names {
+            // An empty value means the row was found but not decryptable, which
+            // is not a usable session.
+            if let whole = jar.first(where: { $0.name == name && !$0.value.isEmpty }) {
+                return whole
+            }
+            if let joined = reassembleChunks(named: name, in: jar) {
+                return joined
             }
         }
         return nil
+    }
+
+    /// NextAuth and Auth.js split a session token that exceeds the 4KB
+    /// per-cookie limit into `<name>.0`, `<name>.1`, … Nothing matching the
+    /// bare name is in the jar at all, which is why ChatGPT looked like a
+    /// signed-out account while the session was sitting right there.
+    private static func reassembleChunks(named name: String, in jar: [BrowserCookie]) -> BrowserCookie? {
+        let chunks = jar
+            .compactMap { cookie -> (index: Int, cookie: BrowserCookie)? in
+                guard cookie.name.hasPrefix(name + "."),
+                      let index = Int(cookie.name.dropFirst(name.count + 1)),
+                      !cookie.value.isEmpty
+                else { return nil }
+                return (index, cookie)
+            }
+            .sorted { $0.index < $1.index }
+        guard !chunks.isEmpty, let first = chunks.first?.cookie else { return nil }
+        return BrowserCookie(
+            name: name,
+            value: chunks.map(\.cookie.value).joined(),
+            domain: first.domain,
+            path: first.path,
+            expiresAt: first.expiresAt,
+            source: first.source
+        )
+    }
+}
+
+/// Minimal mutex. The extractor cache is touched from whichever thread a
+/// discovery pass happens to run on.
+final class Lock<Value>: @unchecked Sendable {
+    private var value: Value
+    private let mutex = NSLock()
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func withLock<Result>(_ body: (inout Value) -> Result) -> Result {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return body(&value)
     }
 }

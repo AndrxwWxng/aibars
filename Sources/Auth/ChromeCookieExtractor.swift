@@ -23,8 +23,17 @@ public final class ChromeCookieExtractor: CookieExtractor {
         self.dbURL = url
     }
 
-    private func decryptionKey() -> Data? {
+    /// Whether a key is already in hand, so a read can proceed without putting
+    /// a keychain dialog on screen.
+    var hasCachedKey: Bool {
+        (try? cachedKey?.get()) != nil
+    }
+
+    private func decryptionKey(allowingPrompt: Bool) -> Data? {
         if let cachedKey { return try? cachedKey.get() }
+        // Deriving the key is what triggers the dialog, so a background sweep
+        // stops here rather than interrupting the user.
+        guard allowingPrompt else { return nil }
         let result = Result {
             try ChromeCookieCrypto.deriveKey(
                 from: try ChromeCookieCrypto.storageKey(
@@ -42,18 +51,24 @@ public final class ChromeCookieExtractor: CookieExtractor {
     }
 
     public func cookies(for domain: String) throws -> [BrowserCookie] {
+        try cookies(forAnyOf: [domain], allowingKeychainPrompt: true)
+    }
+
+    public func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool) throws -> [BrowserCookie] {
+        guard !domains.isEmpty else { return [] }
         let snapshot = try SQLiteSnapshot(of: dbURL)
         defer { snapshot.close() }
 
+        let clause = domains.map { _ in "host_key LIKE ?" }.joined(separator: " OR ")
         var cookies: [BrowserCookie] = []
         try snapshot.query(
-            "SELECT name, host_key, path, expires_utc, value, encrypted_value FROM cookies WHERE host_key LIKE ?;",
-            bind: ["%\(domain)%"]
+            "SELECT name, host_key, path, expires_utc, value, encrypted_value FROM cookies WHERE \(clause);",
+            bind: domains.map { "%\($0)%" }
         ) { row in
             // Chromium leaves `value` empty and puts the real thing in
             // `encrypted_value` for everything it has migrated.
             var value = SQLiteSnapshot.text(row, 4) ?? ""
-            if value.isEmpty, let blob = SQLiteSnapshot.blob(row, 5), let key = decryptionKey() {
+            if value.isEmpty, let blob = SQLiteSnapshot.blob(row, 5), let key = decryptionKey(allowingPrompt: allowingKeychainPrompt) {
                 value = (try? ChromeCookieCrypto.decrypt(blob, key: key)) ?? ""
             }
             // Chromium timestamps are microseconds since 1601.

@@ -38,6 +38,12 @@ public final class FirefoxCookieExtractor: CookieExtractor {
     }
 
     public func cookies(for domain: String) throws -> [BrowserCookie] {
+        try cookies(forAnyOf: [domain], allowingKeychainPrompt: true)
+    }
+
+    /// Firefox needs no key, so the prompt policy is irrelevant here.
+    public func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool) throws -> [BrowserCookie] {
+        guard !domains.isEmpty else { return [] }
         var all: [BrowserCookie] = []
         for profile in profileDirs {
             let cookiesFile = profile.appendingPathComponent("cookies.sqlite")
@@ -45,9 +51,10 @@ public final class FirefoxCookieExtractor: CookieExtractor {
             guard let snapshot = try? SQLiteSnapshot(of: cookiesFile) else { continue }
             defer { snapshot.close() }
 
+            let clause = domains.map { _ in "host LIKE ?" }.joined(separator: " OR ")
             try? snapshot.query(
-                "SELECT name, value, host, path, expiry FROM moz_cookies WHERE host LIKE ?;",
-                bind: ["%\(domain)%"]
+                "SELECT name, value, host, path, expiry FROM moz_cookies WHERE \(clause);",
+                bind: domains.map { "%\($0)%" }
             ) { row in
                 guard let name = SQLiteSnapshot.text(row, 0),
                       let value = SQLiteSnapshot.text(row, 1) else { return }
