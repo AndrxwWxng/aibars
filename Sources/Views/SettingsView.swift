@@ -98,6 +98,13 @@ public struct SettingsView: View {
                     state.stop(); state.start()
                 }
             }
+            Section("Dropdown") {
+                Toggle("Show every usage window", isOn: $state.showsAllWindows)
+                Text("Weekly caps and per-model allowances get their own bar instead of a chip. Off shows only the window closest to its cap.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Show plan names", isOn: $state.showsPlanNames)
+            }
             Section("Menu bar") {
                 Picker("Show", selection: $state.showInMenuBar) {
                     ForEach(AppState.MenuBarDisplay.allCases) { display in

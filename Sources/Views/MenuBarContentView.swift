@@ -45,8 +45,6 @@ public struct MenuBarContentView: View {
                 .scrollBounceBehaviorIfAvailable()
             }
 
-            Divider().opacity(0.5)
-            footer
         }
         .frame(width: 356)
     }
@@ -57,7 +55,9 @@ public struct MenuBarContentView: View {
             result: state.snapshots[provider.id],
             onSignIn: { signIn(provider) },
             onOpenDashboard: { open(provider.dashboardURL) },
-            onRefresh: { Task { await state.refresh(provider.id) } }
+            onRefresh: { Task { await state.refresh(provider.id) } },
+            showsAllWindows: state.showsAllWindows,
+            showsPlanName: state.showsPlanNames
         )
     }
 
@@ -89,41 +89,25 @@ public struct MenuBarContentView: View {
                     .scaleEffect(0.8)
                     .frame(width: 24, height: 24)
             } else {
-                HoverIconButton(systemName: "arrow.clockwise", help: "Refresh all (⌘R)") {
+                HoverIconButton(systemName: "arrow.clockwise", help: "Refresh all · \(updatedText) (⌘R)") {
                     Task { await state.refreshAll(userInitiated: true) }
                 }
                 .keyboardShortcut("r")
             }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 11)
-        .padding(.bottom, 9)
-    }
 
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack(spacing: 2) {
-            FooterButton(title: "Settings", systemName: "gearshape") {
+            HoverIconButton(systemName: "gearshape", help: "Settings (⌘,)") {
                 showSettings = true
             }
             .keyboardShortcut(",")
 
-            Spacer()
-
-            Text(updatedText)
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-
-            Spacer()
-
-            FooterButton(title: "Quit", systemName: "power") {
+            HoverIconButton(systemName: "power", help: "Quit aibars (⌘Q)") {
                 NSApp.terminate(nil)
             }
             .keyboardShortcut("q")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .padding(.top, 11)
+        .padding(.bottom, 9)
     }
 
     private var updatedText: String {
@@ -219,34 +203,6 @@ struct HoverIconButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help(help)
-    }
-}
-
-struct FooterButton: View {
-    let title: String
-    let systemName: String
-    let action: () -> Void
-
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: systemName)
-                    .font(.system(size: 11, weight: .medium))
-                Text(title)
-                    .font(.system(size: 12))
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
     }
 }
 

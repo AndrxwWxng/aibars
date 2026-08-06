@@ -6,6 +6,9 @@ public struct ProviderRow: View {
     public let onSignIn: () -> Void
     public let onOpenDashboard: () -> Void
     public let onRefresh: () -> Void
+    /// Show every window the provider reports, each with its own bar.
+    public let showsAllWindows: Bool
+    public let showsPlanName: Bool
 
     @State private var isHovered = false
 
@@ -14,13 +17,17 @@ public struct ProviderRow: View {
         result: Result<UsageData, ProviderError>?,
         onSignIn: @escaping () -> Void,
         onOpenDashboard: @escaping () -> Void = {},
-        onRefresh: @escaping () -> Void = {}
+        onRefresh: @escaping () -> Void = {},
+        showsAllWindows: Bool = true,
+        showsPlanName: Bool = true
     ) {
         self.provider = provider
         self.result = result
         self.onSignIn = onSignIn
         self.onOpenDashboard = onOpenDashboard
         self.onRefresh = onRefresh
+        self.showsAllWindows = showsAllWindows
+        self.showsPlanName = showsPlanName
     }
 
     public var body: some View {
@@ -64,7 +71,7 @@ public struct ProviderRow: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
 
-            if let plan = planName {
+            if showsPlanName, let plan = planName {
                 Text(plan)
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 5)
@@ -124,12 +131,30 @@ public struct ProviderRow: View {
                     StatusLine(metric: data.primary)
                 }
                 if !data.secondary.isEmpty {
-                    HStack(spacing: 5) {
-                        ForEach(data.secondary.prefix(3), id: \.label) { metric in
-                            SecondaryChip(metric: metric)
+                    if showsAllWindows {
+                        // Each further window gets its own bar. A weekly cap you
+                        // are 80% through matters as much as the 5-hour one, and
+                        // a chip reading "7d 80%" buries that.
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(data.secondary.prefix(4), id: \.label) { metric in
+                                if metric.limit > 0 {
+                                    UsageBar(metric: metric, isSecondary: true)
+                                } else {
+                                    // No ceiling: a bar would always read empty
+                                    // and "600 / 0" is worse than the bare value.
+                                    SecondaryValue(metric: metric)
+                                }
+                            }
                         }
+                        .padding(.top, 3)
+                    } else {
+                        HStack(spacing: 5) {
+                            ForEach(data.secondary.prefix(3), id: \.label) { metric in
+                                SecondaryChip(metric: metric)
+                            }
+                        }
+                        .padding(.top, 1)
                     }
-                    .padding(.top, 1)
                 }
             case .failure(let error):
                 HStack(alignment: .top, spacing: 5) {
@@ -163,10 +188,9 @@ public struct ProviderRow: View {
     }
 
     private var planName: String? {
-        if case .success(let data) = result, provider.isAuthenticated, let plan = data.planName {
-            return plan
-        }
-        return nil
+        guard case .success(let data) = result, provider.isAuthenticated,
+              let plan = data.planName else { return nil }
+        return PlanName.pretty(plan, service: provider.displayName)
     }
 }
 
@@ -174,13 +198,17 @@ public struct ProviderRow: View {
 /// context underneath.
 public struct UsageBar: View {
     public let metric: UsageMetric
+    /// A further window rather than the headline one: thinner bar, smaller type,
+    /// and the window's own name in front so "7d" and "GPT-4o" are told apart.
+    public let isSecondary: Bool
 
-    public init(metric: UsageMetric) {
+    public init(metric: UsageMetric, isSecondary: Bool = false) {
         self.metric = metric
+        self.isSecondary = isSecondary
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: isSecondary ? 3 : 4) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
@@ -196,22 +224,47 @@ public struct UsageBar: View {
                         .frame(width: max(3, geo.size.width * metric.percent))
                 }
             }
-            .frame(height: 5)
+            .frame(height: isSecondary ? 3 : 5)
 
             HStack(spacing: 4) {
-                Text(amountText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                if let reset = resetText {
+                if isSecondary {
+                    Text(metric.label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(secondaryAmount)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                } else {
+                    Text(amountText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                if let reset = resetText, !isSecondary {
                     Text("·").font(.system(size: 11)).foregroundStyle(.tertiary)
                     Text(reset)
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
                 Spacer(minLength: 0)
+                if isSecondary {
+                    Text("\(Int((metric.percent * 100).rounded()))%")
+                        .font(.system(size: 10, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(UsageTint.color(for: metric.percent))
+                }
             }
         }
+    }
+
+    /// The secondary line already carries its own label and percentage, so this
+    /// is only the raw counts — and nothing at all for a percentage metric,
+    /// where "47 / 100" would just repeat the badge.
+    private var secondaryAmount: String {
+        if metric.unit == "%" || metric.limit == 100 { return "" }
+        let unit = metric.unit.map { " \($0)" } ?? ""
+        return "\(metric.displayUsed) / \(metric.displayLimit)\(unit)"
     }
 
     private var tint: Color { UsageTint.color(for: metric.percent) }
@@ -262,6 +315,33 @@ public struct StatusLine: View {
             Spacer(minLength: 0)
         }
         .frame(height: 14)
+    }
+}
+
+/// A further window that reports a figure but no ceiling.
+public struct SecondaryValue: View {
+    public let metric: UsageMetric
+
+    public init(metric: UsageMetric) {
+        self.metric = metric
+    }
+
+    public var body: some View {
+        HStack(spacing: 4) {
+            Text(metric.label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 10))
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var value: String {
+        let unit = metric.unit.map { " \($0)" } ?? ""
+        return "\(metric.displayUsed)\(unit)"
     }
 }
 

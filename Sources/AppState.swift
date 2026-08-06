@@ -21,10 +21,21 @@ public final class AppState: ObservableObject {
     @Published public var showInMenuBar: MenuBarDisplay {
         didSet { userDefaults.set(showInMenuBar.rawValue, forKey: displayKey) }
     }
+    /// Show every window a provider reports — weekly and per-model allowances —
+    /// as its own bar, rather than only the one closest to its cap.
+    @Published public var showsAllWindows: Bool {
+        didSet { userDefaults.set(showsAllWindows, forKey: allWindowsKey) }
+    }
+    /// Show the plan name next to each service.
+    @Published public var showsPlanNames: Bool {
+        didSet { userDefaults.set(showsPlanNames, forKey: planNamesKey) }
+    }
 
     private let userDefaults = UserDefaults.standard
     private let intervalKey = "aibars.refreshInterval"
     private let displayKey = "aibars.menuBarDisplay"
+    private let allWindowsKey = "aibars.showsAllWindows"
+    private let planNamesKey = "aibars.showsPlanNames"
     private var refreshTask: Task<Void, Never>?
 
     public enum MenuBarDisplay: String, CaseIterable, Identifiable {
@@ -46,6 +57,10 @@ public final class AppState: ObservableObject {
         self.refreshIntervalSeconds = stored == 0 ? 60 : stored
         let storedDisplay = userDefaults.string(forKey: displayKey).flatMap(MenuBarDisplay.init(rawValue:)) ?? .iconAndPercent
         self.showInMenuBar = storedDisplay
+        // Both default on: the extra windows are the reason to open the panel,
+        // and hiding them by default would mean nobody finds them.
+        self.showsAllWindows = userDefaults.object(forKey: allWindowsKey) as? Bool ?? true
+        self.showsPlanNames = userDefaults.object(forKey: planNamesKey) as? Bool ?? true
 
         self.providers = [
             AnyUsageProvider(ClaudeProvider()),
