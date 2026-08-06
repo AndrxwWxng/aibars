@@ -19,6 +19,35 @@ final class KeychainAccessTests: XCTestCase {
         super.tearDown()
     }
 
+    /// The test runner is a different binary from the app, so the ACL on the
+    /// app's Keychain item doesn't cover it and every read used to put an
+    /// "xctest wants to access key dev.aibars.app" dialog on the user's screen.
+    /// Storage under XCTest must stay in memory: no dialogs, and no chance of a
+    /// test overwriting the credentials a real install depends on.
+    func testTestRunsNeverTouchTheRealKeychain() throws {
+        try SessionStore.shared.setToken("must-not-persist", for: probeID)
+
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "dev.aibars.app",
+            kSecAttrAccount as String: "aibars.tokens",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let data = item as? Data,
+           let contents = String(data: data, encoding: .utf8) {
+            XCTAssertFalse(
+                contents.contains("must-not-persist"),
+                "a test wrote into the real login keychain"
+            )
+        }
+        query[kSecReturnData as String] = nil
+        // Whatever the outcome, this test must not have created the item.
+        XCTAssertNotEqual(status, errSecAuthFailed, "a test triggered a keychain dialog")
+    }
+
     func testTokenReadsComeFromMemoryAfterTheFirst() throws {
         let store = SessionStore.shared
         try store.setToken("probe-value", for: probeID)

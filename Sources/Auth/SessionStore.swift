@@ -40,49 +40,64 @@ public final class SessionStore {
     /// created, so macOS asks the user to approve the read. Doing that once per
     /// token per launch is tolerable; doing it every minute is not.
     ///
-    /// `nil` cached against a key means "already looked, nothing there", so a
-    /// disconnected provider doesn't re-ask either.
-    private let cache = Lock<[String: String?]>([:])
+    /// All tokens live in a single Keychain item, loaded once.
+    ///
+    /// Nine items meant nine access-control checks, and therefore up to nine
+    /// dialogs, every time the app's code signature changed. One item is one
+    /// dialog — and once "Always Allow" is granted for it, none.
+    ///
+    /// `nil` means "not loaded yet"; an empty dictionary means "loaded, nothing
+    /// stored", so a disconnected provider doesn't send us back to the Keychain.
+    private let tokens = Lock<[String: String]?>(nil)
+
+    /// Set when the Keychain refused to hand the item over — almost always the
+    /// user dismissing the access dialog. Worth telling them apart from "you
+    /// never signed in", because the fix is completely different.
+    private let accessDenied = Lock<Bool>(false)
+
+    private static let combinedKey = "aibars.tokens"
 
     private init() {}
 
     // MARK: - Token CRUD
 
     public func setToken(_ token: String, for providerID: String, source: SessionSource = .manualPaste, accountHint: String? = nil) throws {
-        // Writing is an access-control check of its own. Re-storing a value we
-        // already hold — which is what adopting an unchanged browser session
-        // does on every launch — is worth skipping. The metadata is still
-        // refreshed below: it's what `hasCredential` answers from, so skipping
-        // it would leave a provider looking disconnected forever.
-        if token != self.token(for: providerID) {
-            try KeychainStore.set(token, for: tokenKey(providerID))
-            cache.withLock { $0[tokenKey(providerID)] = token }
+        var current = loadTokens()
+        if current[providerID] != token {
+            current[providerID] = token
+            try persist(current)
         }
+        // The metadata is refreshed either way: it's what `hasCredential`
+        // answers from, so skipping it would leave a provider looking
+        // disconnected forever.
         var meta = loadMeta()
         meta[providerID] = SessionCredential(providerID: providerID, source: source, accountHint: accountHint)
         saveMeta(meta)
     }
 
     public func token(for providerID: String) -> String? {
-        let key = tokenKey(providerID)
-        if let cached = cache.withLock({ $0[key] }) { return cached }
-        let value = KeychainStore.get(key)
-        cache.withLock { $0[key] = value }
-        return value
+        loadTokens()[providerID]
+    }
+
+    /// True when the Keychain item exists but couldn't be read.
+    public var isAccessDenied: Bool {
+        accessDenied.withLock { $0 }
     }
 
     public func clear(_ providerID: String) {
-        KeychainStore.delete(tokenKey(providerID))
-        cache.withLock { $0[tokenKey(providerID)] = .some(nil) }
+        var current = loadTokens()
+        current.removeValue(forKey: providerID)
+        try? persist(current)
         var meta = loadMeta()
         meta.removeValue(forKey: providerID)
         saveMeta(meta)
     }
 
-    /// Drops the in-memory copies, so the next read goes back to the Keychain.
-    /// Only needed if something outside this process could have changed them.
+    /// Drops the in-memory copy, so the next read goes back to the Keychain.
+    /// Only needed if something outside this process could have changed it.
     public func invalidateCache() {
-        cache.withLock { $0 = [:] }
+        tokens.withLock { $0 = nil }
+        accessDenied.withLock { $0 = false }
     }
 
     public func credential(for providerID: String) -> SessionCredential? {
@@ -110,6 +125,63 @@ public final class SessionStore {
 
     private func tokenKey(_ providerID: String) -> String {
         "aibars.\(providerID).token"
+    }
+
+    /// Reads the combined item once, migrating anything left in the old
+    /// per-provider items on the way.
+    private func loadTokens() -> [String: String] {
+        if let loaded = tokens.withLock({ $0 }) { return loaded }
+
+        var result: [String: String] = [:]
+        switch KeychainStore.read(Self.combinedKey) {
+        case .success(let data):
+            if let data, let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+                result = decoded
+            }
+            accessDenied.withLock { $0 = false }
+        case .denied:
+            // Leave the cache unset so a later attempt — after the user allows
+            // access — can still succeed.
+            accessDenied.withLock { $0 = true }
+            return [:]
+        }
+
+        let migrated = migrateLegacyItems(into: &result)
+        tokens.withLock { $0 = result }
+        if migrated {
+            try? persist(result)
+        }
+        return result
+    }
+
+    /// Earlier builds stored one item per provider. Fold any that are still
+    /// readable into the combined item and delete them, so the nine dialogs
+    /// happen at most once more.
+    private func migrateLegacyItems(into result: inout [String: String]) -> Bool {
+        let known = Set(loadMeta().keys)
+        guard !known.isEmpty else { return false }
+        var moved = false
+        for providerID in known where result[providerID] == nil {
+            guard case .success(let data) = KeychainStore.read(tokenKey(providerID)),
+                  let data,
+                  let value = String(data: data, encoding: .utf8),
+                  !value.isEmpty
+            else { continue }
+            result[providerID] = value
+            KeychainStore.delete(tokenKey(providerID))
+            moved = true
+        }
+        return moved
+    }
+
+    private func persist(_ values: [String: String]) throws {
+        tokens.withLock { $0 = values }
+        guard !values.isEmpty else {
+            KeychainStore.delete(Self.combinedKey)
+            return
+        }
+        let data = try JSONEncoder().encode(values)
+        try KeychainStore.set(data, for: Self.combinedKey)
     }
 
     private func loadMeta() -> [String: SessionCredential] {
