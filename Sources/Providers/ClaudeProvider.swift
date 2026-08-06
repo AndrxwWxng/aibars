@@ -23,7 +23,7 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "claude") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "claude")
     }
 
     public var dashboardURL: URL? { URL(string: "https://claude.ai/settings/usage") }

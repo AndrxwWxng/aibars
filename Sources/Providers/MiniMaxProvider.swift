@@ -22,7 +22,7 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "minimax") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "minimax")
     }
 
     public func fetchUsage() async throws -> UsageData {
@@ -42,7 +42,7 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws {
-        if SessionStore.shared.token(for: "minimax") != nil {
+        if SessionStore.shared.hasCredential(for: "minimax") {
             await MainActor.run { self.isAuthenticated = true }
         }
     }

@@ -19,7 +19,7 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "chatgpt") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "chatgpt")
     }
 
     public var dashboardURL: URL? { URL(string: "https://chatgpt.com/#settings") }

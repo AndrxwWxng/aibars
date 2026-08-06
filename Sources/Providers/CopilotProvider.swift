@@ -20,7 +20,7 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "copilot") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "copilot")
     }
 
     public var dashboardURL: URL? { URL(string: "https://github.com/settings/copilot") }

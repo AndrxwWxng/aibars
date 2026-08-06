@@ -47,7 +47,7 @@ public protocol CookieExtractor {
 }
 
 public extension CookieExtractor {
-    func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool = true) throws -> [BrowserCookie] {
+    func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool = false) throws -> [BrowserCookie] {
         try domains.flatMap { try cookies(for: $0) }
     }
 }
@@ -103,10 +103,14 @@ public enum CookieExtractors {
     /// Each browser is read once for every domain at once. A read copies the
     /// whole cookie database, so doing this per provider turned a nine-provider
     /// discovery pass into nine copies of Chrome's database.
+    /// `allowingKeychainPrompt` defaults to false. Chromium's cookie key lives
+    /// in the login keychain and asking for it puts a system dialog on screen,
+    /// so a caller has to opt into that deliberately — a provider that reads
+    /// cookies on its refresh cycle would otherwise prompt every single minute.
     public static func search(
         _ queries: [Query],
         preferring preferred: BrowserCookie.Browser? = nil,
-        allowingKeychainPrompt: Bool = true
+        allowingKeychainPrompt: Bool = false
     ) -> [String: BrowserCookie] {
         guard !queries.isEmpty else { return [:] }
         let extractors = available().sorted { lhs, rhs in
@@ -138,9 +142,15 @@ public enum CookieExtractors {
     public static func firstAvailableCookie(
         named name: String,
         for domain: String,
-        preferring preferred: BrowserCookie.Browser? = nil
+        preferring preferred: BrowserCookie.Browser? = nil,
+        allowingKeychainPrompt: Bool = false
     ) -> BrowserCookie? {
-        firstAvailableCookie(named: [name], for: domain, preferring: preferred)
+        firstAvailableCookie(
+            named: [name],
+            for: domain,
+            preferring: preferred,
+            allowingKeychainPrompt: allowingKeychainPrompt
+        )
     }
 
     /// True when a browser's cookies can be read without putting a keychain
@@ -158,9 +168,14 @@ public enum CookieExtractors {
     public static func firstAvailableCookie(
         named names: [String],
         for domain: String,
-        preferring preferred: BrowserCookie.Browser? = nil
+        preferring preferred: BrowserCookie.Browser? = nil,
+        allowingKeychainPrompt: Bool = false
     ) -> BrowserCookie? {
-        search([Query(key: "single", names: names, domain: domain)], preferring: preferred)["single"]
+        search(
+            [Query(key: "single", names: names, domain: domain)],
+            preferring: preferred,
+            allowingKeychainPrompt: allowingKeychainPrompt
+        )["single"]
     }
 
     // MARK: - Matching

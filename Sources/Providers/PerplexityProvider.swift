@@ -52,7 +52,7 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "perplexity") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "perplexity")
     }
 
     /// The internal /account/usage route the credits endpoint belongs to is not

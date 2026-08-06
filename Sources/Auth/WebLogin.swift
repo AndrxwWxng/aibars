@@ -130,14 +130,24 @@ public enum WebLoginEnvironment {
     /// One attempt at finding the provider's session in the installed
     /// browsers, preferring the default one. Runs the SQLite and keychain work
     /// off the main thread.
+    /// `allowingKeychainPrompt` is true when this runs from the login window:
+    /// the user just asked to sign in, so a one-off prompt for the browser's
+    /// cookie key is expected rather than mysterious. The Chromium extractor
+    /// caches the outcome, so a refusal is not re-asked.
     public static func capturedCookie(
         for config: WebLoginConfig,
-        preferring browser: BrowserCookie.Browser? = nil
+        preferring browser: BrowserCookie.Browser? = nil,
+        allowingKeychainPrompt: Bool = false
     ) async -> BrowserCookie? {
         guard case .cookie(_, let domain) = config.capture else { return nil }
         let names = config.candidateCookieNames
         return await Task.detached(priority: .utility) {
-            CookieExtractors.firstAvailableCookie(named: names, for: domain, preferring: browser)
+            CookieExtractors.firstAvailableCookie(
+                named: names,
+                for: domain,
+                preferring: browser,
+                allowingKeychainPrompt: allowingKeychainPrompt
+            )
         }.value
     }
 

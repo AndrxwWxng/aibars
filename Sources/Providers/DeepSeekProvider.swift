@@ -35,7 +35,7 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "deepseek") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "deepseek")
     }
 
     public var dashboardURL: URL? { URL(string: "https://platform.deepseek.com/usage") }

@@ -18,7 +18,7 @@ public final class CursorProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "cursor") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "cursor")
     }
 
     public var dashboardURL: URL? { URL(string: "https://www.cursor.com/dashboard") }

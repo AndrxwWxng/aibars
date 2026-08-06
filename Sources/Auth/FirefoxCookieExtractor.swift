@@ -38,7 +38,7 @@ public final class FirefoxCookieExtractor: CookieExtractor {
     }
 
     public func cookies(for domain: String) throws -> [BrowserCookie] {
-        try cookies(forAnyOf: [domain], allowingKeychainPrompt: true)
+        try cookies(forAnyOf: [domain], allowingKeychainPrompt: false)
     }
 
     /// Firefox needs no key, so the prompt policy is irrelevant here.
