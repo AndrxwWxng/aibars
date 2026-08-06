@@ -61,8 +61,8 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
         await MainActor.run { self.isAuthenticated = false }
     }
 
-    public func saveTokenManually(_ token: String) throws {
-        try session.setToken(token, for: "chatgpt", source: .manualPaste)
+    public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
+        try session.setToken(token, for: "chatgpt", source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

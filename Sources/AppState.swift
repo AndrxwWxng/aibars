@@ -135,8 +135,15 @@ public final class AppState: ObservableObject {
     /// Returns the providers it connected.
     @discardableResult
     public func adoptBrowserSessions(allowingKeychainPrompt: Bool = false) async -> [String] {
+        // Keyed on "has no token right now" rather than "looks disconnected".
+        // Browser-derived sessions are held in memory only, so after a restart a
+        // provider can be marked connected and still have nothing to send —
+        // filtering on `isAuthenticated` would skip exactly the rows that need
+        // re-deriving and leave them failing forever.
         let pending = providers.filter { provider in
-            provider.isEnabled && !provider.isAuthenticated && provider.webLogin?.cookieDomain != nil
+            provider.isEnabled
+                && provider.webLogin?.cookieDomain != nil
+                && SessionStore.shared.token(for: provider.id) == nil
         }
         guard !pending.isEmpty else { return [] }
 
@@ -161,7 +168,7 @@ public final class AppState: ObservableObject {
         for provider in pending {
             guard let cookie = found[provider.id] else { continue }
             do {
-                try provider.saveTokenManually(cookie.value)
+                try provider.adoptBrowserSession(cookie.value)
                 adopted.append(provider.id)
             } catch {
                 continue
@@ -320,7 +327,7 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
     private let _authenticate: () async throws -> Void
     private let _signOut: () async throws -> Void
     private let _setEnabled: (Bool) -> Void
-    private let _saveToken: (String) throws -> Void
+    private let _saveToken: (String, SessionSource) throws -> Void
     private let _readAuthState: () -> Bool
     /// Only set for providers that need a user-supplied endpoint as well as a
     /// token (the generic JSON provider).
@@ -350,17 +357,17 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
             self._configure = nil
             self._readEndpoint = nil
         }
-        self._saveToken = { token in
+        self._saveToken = { token, source in
             switch provider.id {
-            case "claude": try (provider as? ClaudeProvider)?.saveTokenManually(token)
-            case "chatgpt": try (provider as? ChatGPTProvider)?.saveTokenManually(token)
-            case "gemini": try (provider as? GoogleGeminiProvider)?.saveTokenManually(token)
-            case "grok": try (provider as? GrokProvider)?.saveTokenManually(token)
-            case "perplexity": try (provider as? PerplexityProvider)?.saveTokenManually(token)
-            case "deepseek": try (provider as? DeepSeekProvider)?.saveTokenManually(token)
-            case "cursor": try (provider as? CursorProvider)?.saveTokenManually(token)
-            case "copilot": try (provider as? CopilotProvider)?.saveTokenManually(token)
-            case "minimax": try (provider as? MiniMaxProvider)?.saveTokenManually(token)
+            case "claude": try (provider as? ClaudeProvider)?.saveTokenManually(token, source: source)
+            case "chatgpt": try (provider as? ChatGPTProvider)?.saveTokenManually(token, source: source)
+            case "gemini": try (provider as? GoogleGeminiProvider)?.saveTokenManually(token, source: source)
+            case "grok": try (provider as? GrokProvider)?.saveTokenManually(token, source: source)
+            case "perplexity": try (provider as? PerplexityProvider)?.saveTokenManually(token, source: source)
+            case "deepseek": try (provider as? DeepSeekProvider)?.saveTokenManually(token, source: source)
+            case "cursor": try (provider as? CursorProvider)?.saveTokenManually(token, source: source)
+            case "copilot": try (provider as? CopilotProvider)?.saveTokenManually(token, source: source)
+            case "minimax": try (provider as? MiniMaxProvider)?.saveTokenManually(token, source: source)
             default: throw ProviderError.unsupported
             }
         }
@@ -389,7 +396,18 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
     }
 
     public func saveTokenManually(_ token: String) throws {
-        try _saveToken(token)
+        try saveToken(token, source: .manualPaste)
+    }
+
+    /// A session lifted out of the user's browser. Recorded as such so the store
+    /// keeps it in memory instead of the Keychain — it is re-derived at every
+    /// launch, so persisting it only buys an access-control dialog.
+    public func adoptBrowserSession(_ token: String) throws {
+        try saveToken(token, source: .browserCookie)
+    }
+
+    public func saveToken(_ token: String, source: SessionSource) throws {
+        try _saveToken(token, source)
         // The save succeeded, so the credential exists regardless of when the
         // underlying provider gets around to flipping its own flag.
         Task { @MainActor in self.isAuthenticated = true }

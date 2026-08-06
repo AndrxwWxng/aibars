@@ -151,8 +151,8 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
         }
     }
 
-    public func saveTokenManually(_ token: String) throws {
-        try session.setToken(token, for: id, source: .manualPaste)
+    public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
+        try session.setToken(token, for: id, source: source)
         cachedTokens = nil
         Task { @MainActor in self.isAuthenticated = true }
     }

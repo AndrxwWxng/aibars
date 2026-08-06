@@ -48,6 +48,48 @@ final class KeychainAccessTests: XCTestCase {
         XCTAssertNotEqual(status, errSecAuthFailed, "a test triggered a keychain dialog")
     }
 
+    /// A browser-derived session must never be written anywhere that needs
+    /// authorisation to read back. Storing it bought nothing — it is re-derived
+    /// at launch in half a second — and cost a dialog on every rebuild.
+    func testBrowserSessionsAreNeverPersisted() throws {
+        let store = SessionStore.shared
+        try store.setToken("from-a-cookie", for: probeID, source: .browserCookie)
+
+        XCTAssertEqual(store.token(for: probeID), "from-a-cookie", "not usable this launch")
+        XCTAssertTrue(store.hasCredential(for: probeID))
+
+        // Nothing was written, so a reload finds nothing.
+        store.invalidateCache()
+        XCTAssertNil(
+            KeychainStore.get("aibars.tokens").flatMap { $0.contains("from-a-cookie") ? $0 : nil },
+            "a cookie-derived session reached the store that prompts"
+        )
+    }
+
+    /// A pasted key can't be re-derived from anything, so it does get stored.
+    func testPastedKeysArePersisted() throws {
+        let store = SessionStore.shared
+        try store.setToken("pasted-key", for: probeID, source: .apiKey)
+        store.invalidateCache()
+        XCTAssertEqual(store.token(for: probeID), "pasted-key", "lost across a reload")
+    }
+
+    /// With nothing pasted, there is no reason to open the Keychain at all —
+    /// and not opening it is the only guarantee of no dialog.
+    func testNoKeychainReadWhenOnlyBrowserSessionsExist() throws {
+        let store = SessionStore.shared
+        // Any pasted credential left by another test would legitimately cause a
+        // read, so start from a state where none exist.
+        for credential in store.allCredentials() { store.clear(credential.providerID) }
+        try store.setToken("from-a-cookie", for: probeID, source: .browserCookie)
+        store.invalidateCache()
+
+        // Seed the item directly, then assert the load path never looks at it.
+        try KeychainStore.set(Data(#"{"decoy":"value"}"#.utf8), for: "aibars.tokens")
+        XCTAssertNil(store.token(for: "decoy"), "the load path read the Keychain unnecessarily")
+        KeychainStore.delete("aibars.tokens")
+    }
+
     func testTokenReadsComeFromMemoryAfterTheFirst() throws {
         let store = SessionStore.shared
         try store.setToken("probe-value", for: probeID)

@@ -52,8 +52,8 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
         await MainActor.run { self.isAuthenticated = false }
     }
 
-    public func saveTokenManually(_ token: String) throws {
-        try SessionStore.shared.setToken(token, for: "minimax", source: .manualPaste)
+    public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
+        try SessionStore.shared.setToken(token, for: "minimax", source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 
