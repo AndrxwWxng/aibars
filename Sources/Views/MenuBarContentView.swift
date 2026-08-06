@@ -10,6 +10,8 @@ public struct MenuBarContentView: View {
         self._showSettings = showSettings
     }
 
+    @State private var showsDisconnected = false
+
     private var ranked: [AnyUsageProvider] { state.rankedProviders }
     private var connected: [AnyUsageProvider] { ranked.filter(\.isAuthenticated) }
     private var disconnected: [AnyUsageProvider] { ranked.filter { !$0.isAuthenticated } }
@@ -29,19 +31,26 @@ public struct MenuBarContentView: View {
                         }
 
                         if !disconnected.isEmpty {
-                            SectionLabel(
+                            // Collapsed by default. Five "Sign in" rows are not
+                            // why anyone opens this, and they were pushing the
+                            // services that do have usage out of view.
+                            DisclosureHeader(
                                 title: connected.isEmpty ? "Available" : "Not connected",
-                                count: disconnected.count
+                                count: disconnected.count,
+                                isExpanded: $showsDisconnected
                             )
                             .padding(.top, connected.isEmpty ? 2 : 8)
-                            ForEach(disconnected) { provider in
-                                row(for: provider)
+
+                            if showsDisconnected || connected.isEmpty {
+                                ForEach(disconnected) { provider in
+                                    row(for: provider)
+                                }
                             }
                         }
                     }
                     .padding(.vertical, 6)
                 }
-                .frame(maxHeight: 420)
+                .frame(maxHeight: 560)
                 .scrollBounceBehaviorIfAvailable()
             }
 
@@ -154,6 +163,40 @@ public struct MenuBarContentView: View {
     }
 }
 
+/// A quiet group divider that folds the rows beneath it away.
+struct DisclosureHeader: View {
+    let title: String
+    let count: Int
+    @Binding var isExpanded: Bool
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                SectionLabel(title: title, count: count)
+            }
+            .padding(.vertical, 2)
+            .padding(.leading, 12)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(isHovered ? 0.05 : 0))
+                    .padding(.horizontal, 6)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(isExpanded ? "Hide" : "Show \(count) more")
+    }
+}
+
 /// A quiet group divider for the dropdown list.
 struct SectionLabel: View {
     let title: String
@@ -175,7 +218,7 @@ struct SectionLabel: View {
                 .fill(Color.primary.opacity(0.07))
                 .frame(height: 1)
         }
-        .padding(.horizontal, 12)
+        .padding(.trailing, 12)
         .padding(.bottom, 2)
     }
 }
