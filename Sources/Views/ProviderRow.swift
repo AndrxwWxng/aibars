@@ -235,6 +235,12 @@ public struct UsageBar: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
+                    if let reset = resetText {
+                        Text("·").font(.system(size: 10)).foregroundStyle(.tertiary)
+                        Text(reset)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
                 } else {
                     Text(amountText)
                         .font(.system(size: 11))
@@ -303,7 +309,7 @@ public struct StatusLine: View {
             Circle()
                 .fill(metric.used > 0 ? UsageTint.color(for: 0) : Color.secondary)
                 .frame(width: 6, height: 6)
-            Text(metric.label)
+            Text(text)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             if let reset = metric.resetDate, let countdown = Countdown.short(until: reset) {
@@ -315,6 +321,15 @@ public struct StatusLine: View {
             Spacer(minLength: 0)
         }
         .frame(height: 14)
+    }
+
+    /// A unit is the provider saying "this is a count", so lead with the
+    /// figure: "0 reqs this cycle" answers something, "GPT-4 class requests"
+    /// does not. Without a unit the metric is a state — Copilot's "Active" —
+    /// and prefixing it with a number would be nonsense.
+    private var text: String {
+        guard let unit = metric.unit else { return metric.label }
+        return "\(metric.displayUsed) \(unit) \(metric.label.lowercased())"
     }
 }
 
