@@ -22,23 +22,54 @@ final class UsageMetricTests: XCTestCase {
 }
 
 final class ClaudeUsageParserTests: XCTestCase {
-    func testParsesFiveHourAndWeekly() throws {
+    /// The shape a live Max account returns: three enforced windows, one of
+    /// them per-model. Reading only five_hour/seven_day dropped the third.
+    func testParsesEveryEnforcedWindow() throws {
         let raw: [String: Any] = [
-            "five_hour": [
-                "utilization": 0.42,
-                "resets_at": "2026-08-01T18:00:00Z"
+            "limits": [
+                ["kind": "session", "group": "session", "percent": 5,
+                 "resets_at": "2026-08-07T04:19:59Z", "severity": "normal"],
+                ["kind": "weekly_all", "group": "weekly", "percent": 79,
+                 "resets_at": "2026-08-09T15:59:59Z", "severity": "warning"],
+                ["kind": "weekly_scoped", "group": "weekly", "percent": 59,
+                 "resets_at": "2026-08-09T15:59:59Z", "scope": ["model": "Opus"]]
             ],
-            "seven_day": [
-                "utilization": 0.11,
-                "resets_at": "2026-08-05T00:00:00Z"
-            ]
+            "five_hour": ["utilization": 5, "resets_at": "2026-08-07T04:19:59Z"],
+            "seven_day": ["utilization": 79, "resets_at": "2026-08-09T15:59:59Z"]
         ]
-        let data = try! ClaudeUsageParser.parse(raw, planName: "pro", orgName: "Test")
-        XCTAssertEqual(data.primary.used, 0.42, accuracy: 0.001)
-        XCTAssertEqual(data.primary.windowLabel, "5h window")
+        let data = try ClaudeUsageParser.parse(raw, planName: "max", orgName: "Test")
+
+        XCTAssertEqual(data.secondary.count, 2, "a window went missing")
+        // Busiest first: the weekly cap is the one at risk, not the 5-hour one.
+        XCTAssertEqual(data.primary.used, 79)
+        XCTAssertEqual(data.primary.label, "Weekly · all models")
+        XCTAssertEqual(data.secondary.map(\.used), [59, 5])
+        XCTAssertEqual(data.secondary.first?.label, "Weekly · Opus")
+        XCTAssertEqual(data.secondary.last?.label, "5h session")
+    }
+
+    func testUnnamedScopeStillReads() throws {
+        let raw: [String: Any] = [
+            "limits": [["kind": "weekly_scoped", "percent": 12, "scope": ["model": [:]]]]
+        ]
+        let data = try ClaudeUsageParser.parse(raw, planName: nil, orgName: "Test")
+        XCTAssertEqual(data.primary.label, "Weekly · per-model")
+    }
+
+    /// Older responses carried only the two named buckets.
+    func testFallsBackToTheNamedBuckets() throws {
+        let raw: [String: Any] = [
+            "five_hour": ["utilization": 42, "resets_at": "2026-08-01T18:00:00Z"],
+            "seven_day": ["utilization": 11, "resets_at": "2026-08-05T00:00:00Z"]
+        ]
+        let data = try ClaudeUsageParser.parse(raw, planName: "pro", orgName: "Test")
+        XCTAssertEqual(data.primary.used, 42, accuracy: 0.001)
         XCTAssertEqual(data.secondary.count, 1)
-        let weekly = try XCTUnwrap(data.secondary.first)
-        XCTAssertEqual(weekly.used, 0.11, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(data.secondary.first).used, 11, accuracy: 0.001)
+    }
+
+    func testNoWindowsIsAnError() {
+        XCTAssertThrowsError(try ClaudeUsageParser.parse([:], planName: nil, orgName: "Test"))
     }
 }
 

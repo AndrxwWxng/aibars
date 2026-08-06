@@ -96,45 +96,102 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
 }
 
 public enum ClaudeUsageParser {
+    /// Claude publishes every window it enforces in a `limits` array:
+    ///
+    ///     limits: [
+    ///       { kind: "session",       percent: 5,  resets_at: …, severity: "normal"  },
+    ///       { kind: "weekly_all",    percent: 79, resets_at: …, severity: "warning" },
+    ///       { kind: "weekly_scoped", percent: 59, resets_at: …, scope: { model: … } }
+    ///     ]
+    ///
+    /// Reading only `five_hour` and `seven_day` — which is all this used to do —
+    /// silently dropped the per-model weekly cap, so an account 59% through one
+    /// of its limits was shown no sign of it. Every window it reports is now a
+    /// window aibars shows.
     public static func parse(_ raw: [String: Any], planName: String?, orgName: String) throws -> UsageData {
-        // Claude's /usage endpoint shape varies. We accept a few common keys.
-        let fiveHour = (raw["five_hour"] as? [String: Any]) ?? [:]
-        let sevenDay = (raw["seven_day"] as? [String: Any]) ?? [:]
+        var windows = (raw["limits"] as? [[String: Any]]).map(metrics(from:)) ?? []
 
-        func metric(_ bucket: [String: Any], fallback: String) -> UsageMetric? {
-            let utilization = ProviderNumber.coerce(bucket["utilization"]) ?? 0
-            let resetsAt = (bucket["resets_at"] as? String).flatMap { ProviderDate.parse($0) }
-            return UsageMetric(
-                label: bucket["label"] as? String ?? fallback,
-                used: utilization,
-                limit: 100,
-                unit: "%",
-                resetDate: resetsAt,
-                windowLabel: fallback
-            )
+        // Older responses only carried the two named buckets.
+        if windows.isEmpty {
+            windows = [("five_hour", "5h window"), ("seven_day", "7d window")]
+                .compactMap { key, label in
+                    guard let bucket = raw[key] as? [String: Any] else { return nil }
+                    return metric(
+                        label: bucket["label"] as? String ?? label,
+                        percent: ProviderNumber.coerce(bucket["utilization"]) ?? 0,
+                        resetsAt: bucket["resets_at"] as? String
+                    )
+                }
+        }
+        guard !windows.isEmpty else {
+            throw ProviderError.parse("No usage windows in the Claude response")
         }
 
-        guard let primary = metric(fiveHour, fallback: "5h window") else {
-            throw ProviderError.parse("Unexpected Claude response shape")
-        }
-        var secondary: [UsageMetric] = []
-        if let weekly = metric(sevenDay, fallback: "7d window") {
-            secondary.append(weekly)
-        }
+        // Busiest first, so the headline figure is the limit actually at risk.
+        // The 5-hour window used to lead unconditionally, which reported 5%
+        // while the weekly cap sat at 79%.
+        let sorted = windows.sorted { $0.percent > $1.percent }
 
         return UsageData(
             providerID: "claude",
             planName: planName.map { $0.capitalized } ?? "Pro",
-            primary: UsageMetric(
-                label: primary.label,
-                used: primary.used,
-                limit: 100,
-                unit: "%",
-                resetDate: primary.resetDate,
-                windowLabel: primary.windowLabel
-            ),
-            secondary: secondary,
+            primary: sorted[0],
+            secondary: Array(sorted.dropFirst()),
             rawJSON: try? JSONSerialization.data(withJSONObject: raw).base64EncodedString()
         )
+    }
+
+    private static func metrics(from limits: [[String: Any]]) -> [UsageMetric] {
+        limits.compactMap { entry in
+            guard let percent = ProviderNumber.coerce(entry["percent"]) else { return nil }
+            return metric(
+                label: label(for: entry),
+                percent: percent,
+                resetsAt: entry["resets_at"] as? String
+            )
+        }
+    }
+
+    private static func metric(label: String, percent: Double, resetsAt: String?) -> UsageMetric {
+        UsageMetric(
+            label: label,
+            used: percent,
+            limit: 100,
+            unit: "%",
+            resetDate: resetsAt.flatMap { ProviderDate.parse($0) },
+            windowLabel: label
+        )
+    }
+
+    /// `kind` is the specific window, `group` the family it belongs to. A
+    /// scoped weekly limit applies to particular models, and names them when it
+    /// can — "Weekly · Opus" is worth far more than "weekly_scoped".
+    private static func label(for entry: [String: Any]) -> String {
+        let kind = (entry["kind"] as? String) ?? (entry["group"] as? String) ?? "limit"
+        switch kind {
+        case "session":
+            return "5h session"
+        case "weekly_all":
+            return "Weekly · all models"
+        case "weekly_scoped":
+            if let scope = entry["scope"] as? [String: Any],
+               let model = scopedModelName(scope) {
+                return "Weekly · \(model)"
+            }
+            return "Weekly · per-model"
+        default:
+            return kind.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private static func scopedModelName(_ scope: [String: Any]) -> String? {
+        if let name = scope["model"] as? String, !name.isEmpty { return name }
+        // Some responses nest it a level deeper.
+        if let model = scope["model"] as? [String: Any] {
+            for key in ["display_name", "name", "id"] {
+                if let name = model[key] as? String, !name.isEmpty { return name }
+            }
+        }
+        return nil
     }
 }
