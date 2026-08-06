@@ -6,6 +6,11 @@ import Combine
 /// drives the refresh loop, and surfaces the data the dropdown renders.
 @MainActor
 public final class AppState: ObservableObject {
+    /// The app's single instance. Shared because the refresh loop is started by
+    /// the app delegate at launch, while the views are built later and have to
+    /// observe the same object.
+    public static let shared = AppState()
+
     @Published public var providers: [AnyUsageProvider] = []
     @Published public var snapshots: [String: Result<UsageData, ProviderError>] = [:]
     @Published public var isRefreshing: Bool = false
