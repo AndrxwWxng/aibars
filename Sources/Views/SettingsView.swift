@@ -9,6 +9,12 @@ public struct SettingsView: View {
 
     public init() {}
 
+    /// Opens on a specific pane, for previews and snapshots — which otherwise
+    /// can only ever see the default one.
+    init(initialPane: Pane) {
+        _pane = State(initialValue: initialPane)
+    }
+
     enum Pane: String, CaseIterable, Identifiable {
         case services, general, about
         var id: String { rawValue }
@@ -98,15 +104,20 @@ public struct SettingsView: View {
                     state.stop(); state.start()
                 }
             }
-            Section("Dropdown") {
+            Section {
                 Toggle("Show every usage window", isOn: $state.showsAllWindows)
-                Text("Weekly caps and per-model allowances get their own bar instead of a chip. Off shows only the window closest to its cap.")
+                Toggle("Show plan names", isOn: $state.showsPlanNames)
+            } header: {
+                Text("Dropdown")
+            } footer: {
+                // A footer, not a row: as a row it reads like a third setting
+                // that happens to have no control.
+                Text("With every window shown, weekly caps and per-model allowances each get their own bar. Off shows only the window closest to its cap.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Toggle("Show plan names", isOn: $state.showsPlanNames)
             }
             Section("Menu bar") {
-                Picker("Show", selection: $state.showInMenuBar) {
+                Picker("Style", selection: $state.showInMenuBar) {
                     ForEach(AppState.MenuBarDisplay.allCases) { display in
                         Text(display.label).tag(display)
                     }
@@ -155,32 +166,75 @@ public struct SettingsView: View {
                 }
             }
 
-            ForEach(state.providers) { provider in
-                Section {
+            // One section for all of them, one line each. A section per service
+            // meant reading the words "Show in menu bar" nine times down the
+            // pane — more label than content, and it buried the services
+            // themselves under their own settings.
+            Section {
+                ForEach(state.providers) { provider in
                     HStack(spacing: 10) {
                         ProviderLogo(
                             providerID: provider.id,
                             fallbackName: provider.displayName,
                             fallbackColor: provider.accentColor,
-                            size: 28
+                            size: 26
                         )
+                        .opacity(provider.isEnabled ? 1 : 0.4)
+
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(provider.displayName).font(.system(size: 13, weight: .semibold))
-                            Text(provider.isAuthenticated ? "Connected" : "Not connected")
+                            Text(provider.displayName)
+                                .font(.system(size: 13, weight: .medium))
+                            Text(status(for: provider))
                                 .font(.caption)
-                                .foregroundStyle(provider.isAuthenticated ? .green : .secondary)
+                                .foregroundStyle(statusColor(for: provider))
                         }
+
                         Spacer()
+
+                        Toggle("", isOn: Binding(
+                            get: { provider.isEnabled },
+                            set: { provider.setEnabled($0) }
+                        ))
+                        .labelsHidden()
+                        .help(provider.isEnabled ? "Hide from the dropdown" : "Show in the dropdown")
+
                         signInControl(for: provider)
+                            .controlSize(.small)
                     }
-                    Toggle("Show in menu bar", isOn: Binding(
-                        get: { provider.isEnabled },
-                        set: { provider.setEnabled($0) }
-                    ))
+                    .padding(.vertical, 2)
                 }
+            } footer: {
+                Text("The switch controls whether a service appears in the dropdown.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Green is reserved for "working". A connected service that isn't
+    /// answering was reading as green, which is the one thing it isn't.
+    private func statusColor(for provider: AnyUsageProvider) -> Color {
+        guard provider.isAuthenticated else { return .secondary }
+        if case .failure = state.snapshots[provider.id] { return .orange }
+        return .green
+    }
+
+    /// What the row says under the name. "Connected" alone leaves the obvious
+    /// next question — connected to what plan, and is it actually working.
+    private func status(for provider: AnyUsageProvider) -> String {
+        guard provider.isAuthenticated else {
+            return provider.webLogin == nil ? "Needs a token" : "Not connected"
+        }
+        switch state.snapshots[provider.id] {
+        case .success(let data):
+            guard let plan = data.planName else { return "Connected" }
+            return "Connected · \(PlanName.pretty(plan, service: provider.displayName))"
+        case .failure:
+            return "Connected · not responding"
+        case .none:
+            return "Connected"
+        }
     }
 
     private func adopt() async {

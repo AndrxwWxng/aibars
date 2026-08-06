@@ -119,10 +119,12 @@ public enum CursorUsageParser {
 
         let leading = sorted.first
         let primary = UsageMetric(
-            label: leading.map { $0.limit > 0 ? "Requests" : "\($0.label) requests" } ?? "Requests",
+            label: leading.map { $0.limit > 0 ? "Requests" : "this cycle" } ?? "Requests",
             used: leading?.used ?? 0,
             limit: leading?.limit ?? 0,
-            unit: leading.map { $0.limit > 0 ? "reqs" : nil } ?? nil,
+            // A unit even when uncapped: it marks the figure as a count, so the
+            // row reads "0 reqs this cycle" rather than a bare label.
+            unit: "reqs",
             resetDate: resetDate,
             windowLabel: "Monthly"
         )
