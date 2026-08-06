@@ -17,8 +17,61 @@ public enum KeychainStore {
     /// first write and reused, so the fallback isn't re-probed per call.
     private static let usesDataProtection = Lock<Bool?>(nil)
 
+    /// Under XCTest, storage is in memory and the real Keychain is never
+    /// touched.
+    ///
+    /// This is not tidiness. The test runner is a different binary from the app,
+    /// so the ACL on the app's item doesn't cover it, and every test run put a
+    /// "xctest wants to access key dev.aibars.app" dialog on screen — during
+    /// someone's actual working day. It also means tests can no longer read,
+    /// overwrite or delete the credentials a real install depends on.
+    private static let isTesting = ProcessInfo.processInfo
+        .environment["XCTestConfigurationFilePath"] != nil
+        || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+        || NSClassFromString("XCTestCase") != nil
+
+    private static let memory = Lock<[String: Data]>([:])
+
+    /// The outcome of a read. "Denied" has to be distinguishable from "absent":
+    /// the user dismissing the access dialog is not the same as never having
+    /// signed in, and telling them to sign in again would not help.
+    public enum ReadResult {
+        case success(Data?)
+        case denied
+    }
+
+    public static func read(_ key: String) -> ReadResult {
+        if isTesting { return .success(memory.withLock { $0[key] }) }
+        var lastDenied = false
+        for dataProtection in [true, false] {
+            if usesDataProtection.withLock({ $0 }) == !dataProtection { continue }
+            var query = baseQuery(for: key, dataProtection: dataProtection)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &item)
+            switch status {
+            case errSecSuccess:
+                return .success(item as? Data)
+            case errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed:
+                lastDenied = true
+            default:
+                continue
+            }
+        }
+        return lastDenied ? .denied : .success(nil)
+    }
+
     public static func set(_ value: String, for key: String) throws {
-        let data = Data(value.utf8)
+        try set(Data(value.utf8), for: key)
+    }
+
+    public static func set(_ data: Data, for key: String) throws {
+        if isTesting {
+            memory.withLock { $0[key] = data }
+            return
+        }
 
         // Try the modern keychain first, unless a previous call established that
         // this build can't use it.
@@ -40,23 +93,15 @@ public enum KeychainStore {
     }
 
     public static func get(_ key: String) -> String? {
-        for dataProtection in [true, false] {
-            if usesDataProtection.withLock({ $0 }) == !dataProtection { continue }
-            var query = baseQuery(for: key, dataProtection: dataProtection)
-            query[kSecReturnData as String] = true
-            query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-            var item: CFTypeRef?
-            guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-                  let data = item as? Data,
-                  let string = String(data: data, encoding: .utf8)
-            else { continue }
-            return string
-        }
-        return nil
+        guard case .success(let data) = read(key), let data else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     public static func delete(_ key: String) {
+        if isTesting {
+            memory.withLock { $0[key] = nil }
+            return
+        }
         // Both keychains: an item may predate a change in which one is in use.
         for dataProtection in [true, false] {
             SecItemDelete(baseQuery(for: key, dataProtection: dataProtection) as CFDictionary)

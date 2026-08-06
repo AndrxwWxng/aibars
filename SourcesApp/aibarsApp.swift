@@ -32,17 +32,22 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            UsageMeterGlyph(
+            // A pre-rendered image, not the SwiftUI view: MenuBarExtra draws
+            // Shape-based labels as nothing at all.
+            Image(nsImage: MenuBarIcon.image(
                 levels: state.usageLevels,
-                alertColor: UsageTint.menuBarTint(for: state.topUsagePercent),
-                height: 13
-            )
+                tint: UsageTint.menuBarTint(for: state.topUsagePercent)
+            ))
 
             switch state.showInMenuBar {
             case .iconOnly:
                 EmptyView()
             case .iconAndPercent:
-                Text("\(Int((state.topUsagePercent * 100).rounded()))%")
+                // "0%" would claim every service is untouched when the truth is
+                // that none of them reported.
+                Text(state.usageLevels.isEmpty
+                     ? "–"
+                     : "\(Int((state.topUsagePercent * 100).rounded()))%")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .monospacedDigit()
             case .iconAndName:

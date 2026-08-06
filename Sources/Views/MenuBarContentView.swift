@@ -90,7 +90,7 @@ public struct MenuBarContentView: View {
                     .frame(width: 24, height: 24)
             } else {
                 HoverIconButton(systemName: "arrow.clockwise", help: "Refresh all (⌘R)") {
-                    Task { await state.refreshAll() }
+                    Task { await state.refreshAll(userInitiated: true) }
                 }
                 .keyboardShortcut("r")
             }

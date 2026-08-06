@@ -75,7 +75,14 @@ public final class AppState: ObservableObject {
         refreshTask = nil
     }
 
-    public func refreshAll() async {
+    /// `userInitiated` is the difference between the timer coming round and the
+    /// user clicking refresh. Only the latter retries a Keychain read that was
+    /// refused — retrying on the timer would put the dialog back on screen every
+    /// minute, which is the behaviour this app is trying not to have.
+    public func refreshAll(userInitiated: Bool = false) async {
+        if userInitiated, SessionStore.shared.isAccessDenied {
+            SessionStore.shared.invalidateCache()
+        }
         isRefreshing = true
         defer { isRefreshing = false; lastRefresh = Date() }
         await withTaskGroup(of: (String, Result<UsageData, ProviderError>).self) { group in
@@ -93,9 +100,23 @@ public final class AppState: ObservableObject {
                 }
             }
             for await (id, result) in group {
-                snapshots[id] = result
+                snapshots[id] = clarify(result)
             }
         }
+    }
+
+    /// A provider whose token couldn't be read out of the Keychain throws
+    /// `notAuthenticated`, which renders as "Not signed in. Open Settings to
+    /// authenticate." — advice that cannot work, for a user who is signed in.
+    /// Name the real cause instead.
+    private func clarify(_ result: Result<UsageData, ProviderError>) -> Result<UsageData, ProviderError> {
+        guard case .failure(let error) = result,
+              case .notAuthenticated = error,
+              SessionStore.shared.isAccessDenied
+        else { return result }
+        return .failure(.configuration(
+            "aibars couldn't read your saved sign-in — Keychain access was denied. Hit refresh to ask again."
+        ))
     }
 
     /// Connects any provider whose session is already sitting in one of the
@@ -154,12 +175,16 @@ public final class AppState: ObservableObject {
     public func refresh(_ providerID: String) async {
         guard let provider = provider(for: providerID) else { return }
         snapshots.removeValue(forKey: providerID)
+        if SessionStore.shared.isAccessDenied {
+            // A per-row refresh is a user action, so retry the Keychain.
+            SessionStore.shared.invalidateCache()
+        }
         do {
             snapshots[providerID] = .success(try await provider.fetchUsage())
         } catch let error as ProviderError {
-            snapshots[providerID] = .failure(error)
+            snapshots[providerID] = clarify(.failure(error))
         } catch {
-            snapshots[providerID] = .failure(.network(error.localizedDescription))
+            snapshots[providerID] = clarify(.failure(.network(error.localizedDescription)))
         }
     }
 
@@ -227,15 +252,41 @@ public final class AppState: ObservableObject {
 
     /// One line for the dropdown header — what the user would want to know
     /// without reading the whole list.
+    ///
+    /// "No quotas reported" was technically true and completely unhelpful: it
+    /// showed while every connected provider was failing, and said nothing about
+    /// why. The failure count is the useful part, and a Keychain refusal gets
+    /// named outright because nothing else in the UI would explain it.
     public var headlineSummary: String {
-        let connected = providers.filter { $0.isEnabled && $0.isAuthenticated }.count
-        guard connected > 0 else { return "No services connected yet" }
-        guard let name = topProviderName, let top = usageLevels.max() else {
-            return "\(connected) connected · no quotas reported"
+        let enabled = providers.filter(\.isEnabled)
+        let connected = enabled.filter(\.isAuthenticated)
+        guard !connected.isEmpty else { return "No services connected yet" }
+
+        if SessionStore.shared.isAccessDenied {
+            return "Keychain access denied — click to retry"
         }
-        let percent = Int((top * 100).rounded())
-        if top >= 0.85 { return "\(name) is nearly capped — \(percent)%" }
-        return "\(name) highest at \(percent)%"
+
+        let failures = connected.filter { provider in
+            if case .failure = snapshots[provider.id] { return true }
+            return false
+        }.count
+        let pending = connected.filter { snapshots[$0.id] == nil }.count
+
+        if let name = topProviderName, let top = usageLevels.max() {
+            let percent = Int((top * 100).rounded())
+            let lead = top >= 0.85
+                ? "\(name) is nearly capped — \(percent)%"
+                : "\(name) highest at \(percent)%"
+            return failures > 0 ? "\(lead) · \(failures) failing" : lead
+        }
+
+        if pending > 0 { return "\(connected.count) connected · checking…" }
+        if failures > 0 {
+            return failures == connected.count
+                ? "\(failures) connected but not responding"
+                : "\(connected.count) connected · \(failures) failing"
+        }
+        return "\(connected.count) connected · no quota to report"
     }
 
     /// Display name of the provider currently closest to its cap.
