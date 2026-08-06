@@ -72,7 +72,12 @@ public final class BrowserLoginCoordinator: ObservableObject {
     /// A single look at the cookie stores. Also the "Check now" button.
     @discardableResult
     public func checkOnce() async -> Bool {
-        guard let cookie = await WebLoginEnvironment.capturedCookie(for: config, preferring: browser.kind) else {
+        guard let cookie = await WebLoginEnvironment.capturedCookie(
+            for: config,
+            preferring: browser.kind,
+            // The user is sitting in front of a window they opened to sign in.
+            allowingKeychainPrompt: true
+        ) else {
             return false
         }
         phase = .found(browser: cookie.source.displayName)

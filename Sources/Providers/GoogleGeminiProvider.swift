@@ -73,7 +73,7 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
 
     public init() {
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.token(for: "gemini") != nil
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: "gemini")
     }
 
     public var dashboardURL: URL? { URL(string: "https://gemini.google.com/usage") }

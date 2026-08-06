@@ -50,8 +50,10 @@ public final class ChromeCookieExtractor: CookieExtractor {
         FileManager.default.fileExists(atPath: dbURL.path)
     }
 
+    /// Silent by default. A caller that wants the keychain prompt has to say so
+    /// through `cookies(forAnyOf:allowingKeychainPrompt:)`.
     public func cookies(for domain: String) throws -> [BrowserCookie] {
-        try cookies(forAnyOf: [domain], allowingKeychainPrompt: true)
+        try cookies(forAnyOf: [domain], allowingKeychainPrompt: false)
     }
 
     public func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool) throws -> [BrowserCookie] {
