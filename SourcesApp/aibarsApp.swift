@@ -3,14 +3,14 @@ import aibarsCore
 
 @main
 struct aibarsApp: App {
-    @StateObject private var state = AppState()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var state = AppState.shared
     @State private var showSettings = false
 
     var body: some Scene {
         MenuBarExtra {
             MenuBarContentView(state: state, showSettings: $showSettings)
                 .environmentObject(state)
-                .task { state.start() }
         } label: {
             MenuBarLabel(state: state)
         }
@@ -21,6 +21,18 @@ struct aibarsApp: App {
                 showSettings = false
             }
         }
+    }
+}
+
+/// Starts the refresh loop when the app launches.
+///
+/// It used to hang off the dropdown's `.task`, and `MenuBarExtra` only builds
+/// its content when the menu is opened — so nothing refreshed until the user
+/// clicked the icon, and the icon they were deciding whether to click showed no
+/// data. A menu bar app has to be working before anyone looks at it.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { AppState.shared.start() }
     }
 }
 
