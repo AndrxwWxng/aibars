@@ -11,6 +11,8 @@ public struct MenuBarContentView: View {
     }
 
     @State private var showsDisconnected = false
+    /// Roughly two thirds of a laptop screen. Past this the list scrolls.
+    private static let maximumListHeight: CGFloat = 560
 
     private var ranked: [AnyUsageProvider] { state.rankedProviders }
     private var connected: [AnyUsageProvider] { ranked.filter(\.isAuthenticated) }
@@ -50,7 +52,21 @@ public struct MenuBarContentView: View {
                     }
                     .padding(.vertical, 6)
                 }
-                .frame(maxHeight: 560)
+                // `fixedSize` is what makes the panel a usable size at all.
+                //
+                // A ScrollView has no intrinsic height, and MenuBarExtra sizes
+                // its window to whatever the content asks for — so this
+                // collapsed to zero and the panel opened as a 51pt strip
+                // containing nothing but the header. `maxHeight` caps a height,
+                // it never supplies one. Fixing the vertical axis makes the
+                // ScrollView adopt its content's height, which the cap then
+                // trims; past the cap it scrolls as before.
+                //
+                // Measuring the content and feeding the height back through a
+                // preference also works, but only after a layout pass — so the
+                // window opens short and visibly jumps.
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxHeight: Self.maximumListHeight)
                 .scrollBounceBehaviorIfAvailable()
             }
 
