@@ -19,11 +19,23 @@ final class MenuBarIconTests: XCTestCase {
         }
     }
 
+    /// Colour is what makes the glyph say "one service is red and the rest are
+    /// fine" instead of just "the worst one is at N%", and AppKit repaints
+    /// template images — so an icon carrying usage must not be one.
     @MainActor
-    func testMonochromeIconIsATemplateSoTheMenuBarCanTintIt() {
-        XCTAssertTrue(MenuBarIcon.image(levels: [0.4], tint: nil).isTemplate)
-        // An alert colour has to survive, so that one can't be a template.
+    func testIconWithUsageKeepsItsColour() {
+        XCTAssertFalse(MenuBarIcon.image(levels: [0.4], tint: nil).isTemplate)
         XCTAssertFalse(MenuBarIcon.image(levels: [0.95], tint: .red).isTemplate)
+    }
+
+    /// Nothing reporting means no colour to keep, so the glyph goes back to
+    /// being a template and inherits the menu bar's own light/dark treatment.
+    @MainActor
+    func testIdleIconIsATemplate() {
+        XCTAssertTrue(MenuBarIcon.image(levels: [], tint: nil).isTemplate)
+        XCTAssertTrue(MenuBarIcon.image(levels: [0, 0], tint: nil).isTemplate)
+        // And the caller can always ask for the monochrome version.
+        XCTAssertTrue(MenuBarIcon.image(levels: [0.4], tint: nil, colourPerBar: false).isTemplate)
     }
 
     @MainActor

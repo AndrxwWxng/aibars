@@ -17,6 +17,10 @@ public struct UsageMeterGlyph: View {
     /// whole meter look maxed out.
     public let alertColor: Color?
     public let alertThreshold: Double
+    /// Colour every bar by its own level rather than only flagging the worst
+    /// one. Four grey bars and a number tell you how bad the worst service is;
+    /// they don't tell you whether that's one service or all of them.
+    public let perBarColour: Bool
     public let height: CGFloat
     public let barCount: Int
 
@@ -24,12 +28,14 @@ public struct UsageMeterGlyph: View {
         levels: [Double],
         alertColor: Color? = nil,
         alertThreshold: Double = 0.85,
+        perBarColour: Bool = false,
         height: CGFloat = 13,
         barCount: Int = 4
     ) {
         self.levels = levels
         self.alertColor = alertColor
         self.alertThreshold = alertThreshold
+        self.perBarColour = perBarColour
         self.height = height
         self.barCount = barCount
     }
@@ -72,6 +78,7 @@ public struct UsageMeterGlyph: View {
     /// not reporting usage.
     private func fill(for level: Double) -> Color {
         guard level > 0 else { return Color.primary.opacity(0.32) }
+        if perBarColour { return UsageTint.color(for: level) }
         guard let alertColor, level >= alertThreshold else { return .primary }
         return alertColor
     }
