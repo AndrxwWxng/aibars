@@ -71,6 +71,43 @@ public struct UsageData: Codable, Hashable {
     }
 }
 
+/// Tidies the plan identifiers providers hand back.
+///
+/// These are internal tier names, not labels meant for people: Claude reports
+/// `Default_Claude_Max_20X`, which is accurate and unreadable. The service's own
+/// name is redundant next to its logo, so it comes off too.
+public enum PlanName {
+    public static func pretty(_ raw: String, service: String) -> String {
+        var words = raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        // Boilerplate that carries no information for the reader.
+        let noise: Set<String> = ["default", "plan", "tier", "subscription"]
+        let serviceWords = Set(service.lowercased().split(separator: " ").map(String.init))
+        words = words.filter {
+            let lower = $0.lowercased()
+            return !noise.contains(lower) && !serviceWords.contains(lower)
+        }
+        guard !words.isEmpty else { return raw }
+
+        return words
+            .map { word -> String in
+                // "20X" is a multiplier, not a word.
+                if let digits = word.first, digits.isNumber, word.lowercased().hasSuffix("x") {
+                    return word.dropLast() + "×"
+                }
+                // Leave things that are already deliberately cased (GPT, API).
+                if word == word.uppercased() { return word }
+                return word.capitalized
+            }
+            .joined(separator: " ")
+    }
+}
+
 public enum ProviderError: LocalizedError {
     case notAuthenticated
     case sessionExpired

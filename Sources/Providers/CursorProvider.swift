@@ -39,7 +39,9 @@ public final class CursorProvider: ObservableObject, UsageProvider {
             throw ProviderError.notAuthenticated
         }
 
-        let url = URL(string: "https://www.cursor.com/api/dashboard/usage")!
+        // `/api/dashboard/usage` returns 404 — it moved. `/api/usage` is what the
+        // dashboard calls now, verified against a live Pro session.
+        let url = URL(string: "https://cursor.com/api/usage")!
         let (data, _) = try await ProviderHTTP(headers: [
             "Cookie": "\(cookieName)=\(token)",
             "Origin": "https://www.cursor.com",
@@ -74,52 +76,86 @@ public final class CursorProvider: ObservableObject, UsageProvider {
 }
 
 public enum CursorUsageParser {
+    /// `/api/usage` answers with one entry per model plus `startOfMonth`:
+    ///
+    ///     { "gpt-4": { "numRequests": 12, "maxRequestUsage": 500, … },
+    ///       "gpt-3.5-turbo": { … },
+    ///       "startOfMonth": "2026-07-21T23:37:30.000Z" }
+    ///
+    /// `maxRequestUsage` is null on plans that no longer meter requests — the
+    /// usage-based tiers bill instead of capping — so a null ceiling is reported
+    /// as a status rather than invented as a percentage.
     public static func parse(_ raw: [String: Any]) -> UsageData {
-        // Cursor's usage endpoint returns either individual buckets or
-        // a `gpt-4`/`gpt-3.5-turbo` style breakdown. Be defensive.
         let plan = (raw["plan"] as? String) ?? (raw["membershipType"] as? String) ?? "Pro"
         let usage = (raw["usage"] as? [String: Any]) ?? raw
-        let limit = ProviderNumber.coerce(raw["limit"]) ?? ProviderNumber.coerce(usage["limit"]) ?? 500
 
-        let used = ProviderNumber.coerce(usage["numRequests"])
-            ?? ProviderNumber.coerce(usage["totalRequests"])
-            ?? ProviderNumber.coerce(usage["used"])
-            ?? 0
+        // The cycle rolls a month after it started.
+        let cycleStart = (usage["startOfMonth"] as? String).flatMap { ProviderDate.parse($0) }
+            ?? (raw["startOfMonth"] as? String).flatMap { ProviderDate.parse($0) }
+        let resetDate = cycleStart.flatMap {
+            Calendar.current.date(byAdding: .month, value: 1, to: $0)
+        } ?? (raw["cycleEnd"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
 
-        let cycleEnd = (raw["cycleEnd"] as? Double)
-            ?? (raw["cycle_end"] as? Double)
-            ?? (raw["resetAt"] as? Double)
+        var buckets: [(label: String, used: Double, limit: Double)] = []
+        for (key, value) in usage {
+            guard let bucket = value as? [String: Any] else { continue }
+            let used = ProviderNumber.coerce(bucket["numRequests"])
+                ?? ProviderNumber.coerce(bucket["numRequestsTotal"])
+                ?? ProviderNumber.coerce(bucket["used"])
+                ?? 0
+            // Absent or null means "no ceiling on this plan".
+            let limit = ProviderNumber.coerce(bucket["maxRequestUsage"])
+                ?? ProviderNumber.coerce(bucket["limit"])
+                ?? 0
+            buckets.append((label(for: key), used, limit))
+        }
 
+        // The metered bucket is the interesting one; ties break on usage so the
+        // busiest model leads.
+        let sorted = buckets.sorted { lhs, rhs in
+            if (lhs.limit > 0) != (rhs.limit > 0) { return lhs.limit > 0 }
+            return lhs.used > rhs.used
+        }
+
+        let leading = sorted.first
         let primary = UsageMetric(
-            label: "Fast requests",
-            used: used,
-            limit: limit,
-            unit: "reqs",
-            resetDate: cycleEnd.map { Date(timeIntervalSince1970: $0 / 1000) },
+            label: leading.map { $0.limit > 0 ? "Requests" : "\($0.label) requests" } ?? "Requests",
+            used: leading?.used ?? 0,
+            limit: leading?.limit ?? 0,
+            unit: leading.map { $0.limit > 0 ? "reqs" : nil } ?? nil,
+            resetDate: resetDate,
             windowLabel: "Monthly"
         )
 
-        var secondary: [UsageMetric] = []
-        for key in ["gpt-4", "gpt-3.5-turbo", "gpt-4-turbo", "claude-3-5-sonnet"] {
-            if let bucket = usage[key] as? [String: Any],
-               let bucketUsed = ProviderNumber.coerce(bucket["numRequests"]) ?? ProviderNumber.coerce(bucket["used"]),
-               let bucketLimit = ProviderNumber.coerce(bucket["limit"]) {
-                secondary.append(UsageMetric(
-                    label: key,
-                    used: bucketUsed,
-                    limit: bucketLimit,
+        let secondary = sorted.dropFirst()
+            .filter { $0.limit > 0 || $0.used > 0 }
+            .prefix(3)
+            .map {
+                UsageMetric(
+                    label: $0.label,
+                    used: $0.used,
+                    limit: $0.limit,
                     unit: "reqs",
+                    resetDate: resetDate,
                     windowLabel: "Monthly"
-                ))
+                )
             }
-        }
 
         return UsageData(
             providerID: "cursor",
             planName: plan,
             primary: primary,
-            secondary: secondary,
+            secondary: Array(secondary),
             rawJSON: try? JSONSerialization.data(withJSONObject: raw).base64EncodedString()
         )
+    }
+
+    private static func label(for key: String) -> String {
+        switch key {
+        case "gpt-4": return "GPT-4 class"
+        case "gpt-3.5-turbo": return "GPT-3.5"
+        case "gpt-4-turbo": return "GPT-4 Turbo"
+        default: return key
+        }
     }
 }
