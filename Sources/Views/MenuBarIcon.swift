@@ -17,15 +17,22 @@ public enum MenuBarIcon {
 
     private static let cache = Lock<[String: NSImage]>([:])
 
-    /// - Parameter tint: non-nil paints the alert colour, which also means the
-    ///   image can't be a template — templates are recoloured by AppKit.
-    public static func image(levels: [Double], tint: Color?) -> NSImage {
-        let key = cacheKey(levels: levels, tint: tint)
+    /// - Parameter colourPerBar: paint each bar by its own usage level. That
+    ///   turns the glyph from "the worst service is at N%" into "here is every
+    ///   service", which is the whole reason for having bars rather than a
+    ///   number. A coloured image can't be a template, so AppKit stops
+    ///   recolouring it — which is fine, since the colour is the point.
+    public static func image(levels: [Double], tint: Color?, colourPerBar: Bool = true) -> NSImage {
+        // With nothing reporting there is no colour to show, so the glyph goes
+        // back to being a template and inherits the menu bar's own treatment.
+        let coloured = colourPerBar && levels.contains { $0 > 0 }
+        let key = cacheKey(levels: levels, tint: tint, coloured: coloured)
         if let cached = cache.withLock({ $0[key] }) { return cached }
 
         let glyph = UsageMeterGlyph(
             levels: levels,
             alertColor: tint,
+            perBarColour: coloured,
             height: height
         )
         // Rendered in black; a template image's colour is supplied by AppKit.
@@ -33,7 +40,7 @@ public enum MenuBarIcon {
         renderer.scale = 2
 
         let image = renderer.nsImage ?? NSImage(size: NSSize(width: 18, height: height))
-        image.isTemplate = tint == nil
+        image.isTemplate = !coloured
         image.accessibilityDescription = "AI usage"
 
         cache.withLock { $0[key] = image }
@@ -43,13 +50,13 @@ public enum MenuBarIcon {
     /// Levels are bucketed before they reach the cache key: the meter can only
     /// show so many distinct bar heights, and a key per raw percentage would
     /// re-render on every refresh for no visible difference.
-    private static func cacheKey(levels: [Double], tint: Color?) -> String {
+    private static func cacheKey(levels: [Double], tint: Color?, coloured: Bool) -> String {
         let bucketed = levels
             .map { Int((min(max($0, 0), 1) * 20).rounded()) }
             .sorted(by: >)
             .prefix(4)
             .map(String.init)
             .joined(separator: "-")
-        return "\(bucketed)|\(tint == nil ? "mono" : "alert")"
+        return "\(bucketed)|\(tint == nil ? "mono" : "alert")|\(coloured ? "rgb" : "tpl")"
     }
 }
