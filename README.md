@@ -40,10 +40,10 @@ You probably pay for three or four AI tools and have no idea whether you're abou
 
 - **Menu bar meter** — one bar per service, tallest usage first, tinted red only when something is actually near its cap. Click for the dropdown.
 - **Nine providers out of the box**: Claude, ChatGPT, Gemini, Grok, Perplexity, DeepSeek, Cursor, GitHub Copilot, and a generic JSON provider — each with its own logo.
-- **One-click sign-in** — aibars hosts the provider's real login page and picks up the session itself. No DevTools, no copy-paste.
+- **Usually no sign-in at all** — if you're logged in in your browser, aibars adopts that session at launch. Otherwise one click opens the real login page in your default browser. No DevTools, no copy-paste.
 - **Generic provider** — point at any JSON endpoint and aibars will display whatever it returns.
 - **Refresh interval, display mode, enable/disable per provider** — all configurable in Settings.
-- **Tokens stored in macOS Keychain**, never on disk.
+- **Nothing to store for most services** — a session read from your browser is kept in memory and re-derived at launch, so there is no credential on disk and no Keychain dialog. Pasted API keys, which can't be re-derived, go in the Keychain.
 - **Open source, MIT licensed**.
 
 ## Install (development)
@@ -88,7 +88,11 @@ The split exists so the app can ship with `@main` while unit tests run against t
 
 ## Sign in
 
-Click **Sign in** on any row — in the dropdown or in Settings → Services. aibars opens that provider's own login page in a window, you log in the way you normally would, and the session is picked up and stored in the Keychain the moment it appears. The window closes itself.
+Usually you don't. If you're already logged into a service in your browser, aibars picks that session up at launch and the row is connected before you touch anything.
+
+When you do need it, click **Sign in** on any row — in the dropdown or in Settings → Services. aibars opens that provider's own login page in your default browser, you log in the way you normally would, and the session is picked up the moment it appears.
+
+Sessions read from a browser are held in memory only. They cost nothing to reproduce — the launch sweep takes about half a second — and storing them would mean a macOS Keychain dialog every time the app's signature changes, for no benefit. Only pasted API keys are written to the Keychain, because those can't be recovered any other way.
 
 | Provider    | What happens                                                                     |
 |-------------|----------------------------------------------------------------------------------|
