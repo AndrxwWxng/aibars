@@ -31,18 +31,24 @@ public final class SessionStore {
     private let defaults = UserDefaults.standard
     private let metaKey = "aibars.sessionMeta"
 
-    /// Every token in one Keychain item, read once per launch.
+    /// Sessions lifted from a browser cookie. Memory only — deliberately never
+    /// written to the Keychain.
     ///
-    /// Each read of a Keychain item is an access-control check, and a locally
-    /// signed build gets a new code signature every time it is rebuilt, which no
-    /// longer matches the ACL recorded on items the previous build wrote — so
-    /// macOS asks the user to approve it. One item read once is one dialog at
-    /// worst, and none after "Always Allow". Nine items read on every refresh
-    /// was a dialog every few seconds.
+    /// Every Keychain operation is an access-control check, and a locally signed
+    /// build gets a new code signature on every rebuild, so the ACL written by
+    /// the previous build no longer matches and macOS asks the user to approve.
+    /// The cheapest way to stop being asked is to have nothing to ask about:
+    /// these tokens are re-derived from the browser at launch in about half a
+    /// second, silently, so storing them buys nothing and costs a dialog.
+    private let ephemeral = Lock<[String: String]>([:])
+
+    /// Pasted API keys, which cannot be re-derived from anything and so do have
+    /// to be kept. One Keychain item for all of them, read at most once per
+    /// launch — and not read at all when the metadata says none were ever
+    /// stored, which is the common case.
     ///
-    /// `nil` means "not loaded yet"; an empty dictionary means "loaded, nothing
-    /// stored", so a disconnected provider doesn't send us back to the Keychain.
-    private let tokens = Lock<[String: String]?>(nil)
+    /// `nil` means "not loaded yet"; empty means "loaded, nothing there".
+    private let persisted = Lock<[String: String]?>(nil)
 
     /// Set when the Keychain refused to hand the item over — almost always the
     /// user dismissing the access dialog. Worth telling them apart from "you
@@ -56,10 +62,14 @@ public final class SessionStore {
     // MARK: - Token CRUD
 
     public func setToken(_ token: String, for providerID: String, source: SessionSource = .manualPaste, accountHint: String? = nil) throws {
-        var current = loadTokens()
-        if current[providerID] != token {
-            current[providerID] = token
-            try persist(current)
+        if source == .browserCookie {
+            ephemeral.withLock { $0[providerID] = token }
+        } else {
+            var current = loadPersisted()
+            if current[providerID] != token {
+                current[providerID] = token
+                try persist(current)
+            }
         }
         // The metadata is refreshed either way: it's what `hasCredential`
         // answers from, so skipping it would leave a provider looking
@@ -70,7 +80,8 @@ public final class SessionStore {
     }
 
     public func token(for providerID: String) -> String? {
-        loadTokens()[providerID]
+        if let live = ephemeral.withLock({ $0[providerID] }) { return live }
+        return loadPersisted()[providerID]
     }
 
     /// True when the Keychain item exists but couldn't be read.
@@ -79,18 +90,25 @@ public final class SessionStore {
     }
 
     public func clear(_ providerID: String) {
-        var current = loadTokens()
-        current.removeValue(forKey: providerID)
-        try? persist(current)
+        ephemeral.withLock { $0[providerID] = nil }
+        // Only touch the Keychain if this provider actually had something there.
+        let wasPersisted = loadMeta()[providerID].map { $0.source != .browserCookie } ?? false
+        if wasPersisted {
+            var current = loadPersisted()
+            if current.removeValue(forKey: providerID) != nil {
+                try? persist(current)
+            }
+        }
         var meta = loadMeta()
         meta.removeValue(forKey: providerID)
         saveMeta(meta)
     }
 
     /// Drops the in-memory copy, so the next read goes back to the Keychain.
-    /// Only needed if something outside this process could have changed it.
+    /// Only needed if something outside this process could have changed it, or
+    /// to retry after the user refused an access prompt.
     public func invalidateCache() {
-        tokens.withLock { $0 = nil }
+        persisted.withLock { $0 = nil }
         accessDenied.withLock { $0 = false }
     }
 
@@ -121,10 +139,19 @@ public final class SessionStore {
         "aibars.\(providerID).token"
     }
 
-    /// Reads the combined item once, migrating anything left in the old
-    /// per-provider items on the way.
-    private func loadTokens() -> [String: String] {
-        if let loaded = tokens.withLock({ $0 }) { return loaded }
+    /// Reads the pasted-key item, at most once, and only if there is reason to
+    /// think it exists.
+    private func loadPersisted() -> [String: String] {
+        if let loaded = persisted.withLock({ $0 }) { return loaded }
+
+        // The metadata says whether anything was ever pasted. If nothing was,
+        // there is nothing in the Keychain to read — and not reading is the only
+        // way to be certain no dialog appears.
+        let irreplaceable = loadMeta().values.filter { $0.source != .browserCookie }
+        guard !irreplaceable.isEmpty else {
+            persisted.withLock { $0 = [:] }
+            return [:]
+        }
 
         var result: [String: String] = [:]
         switch KeychainStore.read(Self.combinedKey) {
@@ -134,30 +161,32 @@ public final class SessionStore {
             }
             accessDenied.withLock { $0 = false }
         case .denied:
-            // Leave the cache unset so a later attempt — after the user allows
-            // access — can still succeed.
+            // Cache the refusal. Leaving it unset meant every provider's fetch
+            // asked again, and then again on the next refresh — the dialog came
+            // back every few seconds. `invalidateCache()` is how a retry the
+            // user actually asked for gets through.
             accessDenied.withLock { $0 = true }
+            persisted.withLock { $0 = [:] }
             return [:]
         }
 
-        let migrated = migrateLegacyItems(into: &result)
-        tokens.withLock { $0 = result }
+        let migrated = migrateLegacyItems(into: &result, irreplaceable: irreplaceable.map(\.providerID))
+        persisted.withLock { $0 = result }
         if migrated {
             try? persist(result)
         }
         return result
     }
 
-    /// Earlier builds stored one item per provider. Each of those reads can cost
-    /// a dialog, so only credentials that cannot be recovered any other way are
-    /// worth migrating: a pasted API key is gone if we drop it, while a session
-    /// taken from a browser cookie gets re-adopted at the next launch for free.
-    private func migrateLegacyItems(into result: inout [String: String]) -> Bool {
-        let meta = loadMeta()
-        let irreplaceable = meta.values
-            .filter { $0.source != .browserCookie }
-            .map(\.providerID)
-        guard !irreplaceable.isEmpty else { return false }
+    /// Earlier builds stored one item per provider.
+    ///
+    /// Only pasted credentials are migrated, and nothing is deleted here.
+    /// Deleting a Keychain item is itself an authorised operation, so tidying
+    /// away the browser-derived leftovers cost one dialog each — which is how a
+    /// change meant to stop the prompts ended up causing a burst of them. The
+    /// leftovers are inert: nothing reads them, and the sessions they hold are
+    /// re-derived from the browser anyway.
+    private func migrateLegacyItems(into result: inout [String: String], irreplaceable: [String]) -> Bool {
         var moved = false
         for providerID in irreplaceable where result[providerID] == nil {
             guard case .success(let data) = KeychainStore.read(tokenKey(providerID)),
@@ -166,20 +195,16 @@ public final class SessionStore {
                   !value.isEmpty
             else { continue }
             result[providerID] = value
+            // Safe to remove: reading it just succeeded, so this is covered by
+            // the same authorisation.
             KeychainStore.delete(tokenKey(providerID))
             moved = true
-        }
-        // The browser-derived ones are re-adopted at launch, so their old items
-        // are dead weight — and every one left behind is a dialog waiting to
-        // happen on some future read.
-        for credential in meta.values where credential.source == .browserCookie {
-            KeychainStore.delete(tokenKey(credential.providerID))
         }
         return moved
     }
 
     private func persist(_ values: [String: String]) throws {
-        tokens.withLock { $0 = values }
+        persisted.withLock { $0 = values }
         guard !values.isEmpty else {
             KeychainStore.delete(Self.combinedKey)
             return

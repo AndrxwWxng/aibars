@@ -81,16 +81,17 @@ public final class BrowserLoginCoordinator: ObservableObject {
             return false
         }
         phase = .found(browser: cookie.source.displayName)
-        await save(cookie.value)
+        // Captured from a browser, so it's re-derivable and doesn't need storing.
+        await save(cookie.value, source: .browserCookie)
         return true
     }
 
-    public func save(_ value: String) async {
+    public func save(_ value: String, source: SessionSource = .manualPaste) async {
         let token = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { return }
         pollTask?.cancel()
         do {
-            try provider.saveTokenManually(token)
+            try provider.saveToken(token, source: source)
             phase = .verifying
             _ = try await provider.fetchUsage()
             phase = .done

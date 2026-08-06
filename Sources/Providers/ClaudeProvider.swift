@@ -84,8 +84,8 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
         await MainActor.run { self.isAuthenticated = false }
     }
 
-    public func saveTokenManually(_ token: String) throws {
-        try session.setToken(token, for: "claude", source: .manualPaste)
+    public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
+        try session.setToken(token, for: "claude", source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

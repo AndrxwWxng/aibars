@@ -94,7 +94,7 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
         await MainActor.run { self.isAuthenticated = false }
     }
 
-    public func saveTokenManually(_ token: String) throws {
+    public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
         try session.setToken(token, for: "deepseek", source: .apiKey)
         Task { @MainActor in self.isAuthenticated = true }
     }
