@@ -22,29 +22,23 @@ public struct SessionCredential: Codable, Hashable {
     }
 }
 
-/// Caches session tokens in the Keychain. Each provider's token is keyed
-/// `aibars.<providerID>.token`. The SessionCredential metadata is stored
-/// in UserDefaults for the settings UI.
+/// Stores session tokens in the Keychain, all of them in a single item keyed
+/// `aibars.tokens`. The SessionCredential metadata lives in UserDefaults, which
+/// is what answers "is this provider connected" without a Keychain read.
 public final class SessionStore {
     public static let shared = SessionStore()
 
     private let defaults = UserDefaults.standard
     private let metaKey = "aibars.sessionMeta"
 
-    /// Tokens are cached in memory for the life of the process.
+    /// Every token in one Keychain item, read once per launch.
     ///
-    /// Every provider reads its token on every refresh — nine providers a
-    /// minute — and each read of a Keychain item is an access-control check.
-    /// A locally signed build gets a new code signature every time it is
-    /// rebuilt, which no longer matches the ACL on items the previous build
-    /// created, so macOS asks the user to approve the read. Doing that once per
-    /// token per launch is tolerable; doing it every minute is not.
-    ///
-    /// All tokens live in a single Keychain item, loaded once.
-    ///
-    /// Nine items meant nine access-control checks, and therefore up to nine
-    /// dialogs, every time the app's code signature changed. One item is one
-    /// dialog — and once "Always Allow" is granted for it, none.
+    /// Each read of a Keychain item is an access-control check, and a locally
+    /// signed build gets a new code signature every time it is rebuilt, which no
+    /// longer matches the ACL recorded on items the previous build wrote — so
+    /// macOS asks the user to approve it. One item read once is one dialog at
+    /// worst, and none after "Always Allow". Nine items read on every refresh
+    /// was a dialog every few seconds.
     ///
     /// `nil` means "not loaded yet"; an empty dictionary means "loaded, nothing
     /// stored", so a disconnected provider doesn't send us back to the Keychain.
@@ -154,14 +148,18 @@ public final class SessionStore {
         return result
     }
 
-    /// Earlier builds stored one item per provider. Fold any that are still
-    /// readable into the combined item and delete them, so the nine dialogs
-    /// happen at most once more.
+    /// Earlier builds stored one item per provider. Each of those reads can cost
+    /// a dialog, so only credentials that cannot be recovered any other way are
+    /// worth migrating: a pasted API key is gone if we drop it, while a session
+    /// taken from a browser cookie gets re-adopted at the next launch for free.
     private func migrateLegacyItems(into result: inout [String: String]) -> Bool {
-        let known = Set(loadMeta().keys)
-        guard !known.isEmpty else { return false }
+        let meta = loadMeta()
+        let irreplaceable = meta.values
+            .filter { $0.source != .browserCookie }
+            .map(\.providerID)
+        guard !irreplaceable.isEmpty else { return false }
         var moved = false
-        for providerID in known where result[providerID] == nil {
+        for providerID in irreplaceable where result[providerID] == nil {
             guard case .success(let data) = KeychainStore.read(tokenKey(providerID)),
                   let data,
                   let value = String(data: data, encoding: .utf8),
@@ -170,6 +168,12 @@ public final class SessionStore {
             result[providerID] = value
             KeychainStore.delete(tokenKey(providerID))
             moved = true
+        }
+        // The browser-derived ones are re-adopted at launch, so their old items
+        // are dead weight — and every one left behind is a dialog waiting to
+        // happen on some future read.
+        for credential in meta.values where credential.source == .browserCookie {
+            KeychainStore.delete(tokenKey(credential.providerID))
         }
         return moved
     }
