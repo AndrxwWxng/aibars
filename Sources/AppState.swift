@@ -62,18 +62,30 @@ public final class AppState: ObservableObject {
         self.showsAllWindows = userDefaults.object(forKey: allWindowsKey) as? Bool ?? true
         self.showsPlanNames = userDefaults.object(forKey: planNamesKey) as? Bool ?? true
 
-        self.providers = [
-            AnyUsageProvider(ClaudeProvider()),
-            AnyUsageProvider(ChatGPTProvider()),
-            AnyUsageProvider(GoogleGeminiProvider()),
-            AnyUsageProvider(GrokProvider()),
-            AnyUsageProvider(PerplexityProvider()),
-            AnyUsageProvider(DeepSeekProvider()),
-            AnyUsageProvider(CursorProvider()),
-            AnyUsageProvider(CopilotProvider()),
-            AnyUsageProvider(MiniMaxProvider())
-        ]
+        self.providers = Self.services.map { $0.make(nil) }
     }
+
+    /// One entry per service aibars knows how to read. `make` builds an
+    /// instance for a given account, so a service signed into several times
+    /// becomes several providers rather than one that silently picks a winner.
+    struct Service {
+        let id: String
+        /// Wraps at the call site, where the concrete type is still known —
+        /// the type-erasing initialiser needs that.
+        let make: (String?) -> AnyUsageProvider
+    }
+
+    static let services: [Service] = [
+        Service(id: "claude") { AnyUsageProvider(ClaudeProvider(accountID: $0)) },
+        Service(id: "chatgpt") { AnyUsageProvider(ChatGPTProvider(accountID: $0)) },
+        Service(id: "gemini") { AnyUsageProvider(GoogleGeminiProvider(accountID: $0)) },
+        Service(id: "grok") { AnyUsageProvider(GrokProvider(accountID: $0)) },
+        Service(id: "perplexity") { AnyUsageProvider(PerplexityProvider(accountID: $0)) },
+        Service(id: "deepseek") { AnyUsageProvider(DeepSeekProvider(accountID: $0)) },
+        Service(id: "cursor") { AnyUsageProvider(CursorProvider(accountID: $0)) },
+        Service(id: "copilot") { AnyUsageProvider(CopilotProvider(accountID: $0)) },
+        Service(id: "minimax") { AnyUsageProvider(MiniMaxProvider(accountID: $0)) }
+    ]
 
     public func start() {
         guard refreshTask == nil else { return }
@@ -155,46 +167,72 @@ public final class AppState: ObservableObject {
     /// Returns the providers it connected.
     @discardableResult
     public func adoptBrowserSessions(allowingKeychainPrompt: Bool = false) async -> [String] {
-        // Keyed on "has no token right now" rather than "looks disconnected".
-        // Browser-derived sessions are held in memory only, so after a restart a
-        // provider can be marked connected and still have nothing to send —
-        // filtering on `isAuthenticated` would skip exactly the rows that need
-        // re-deriving and leave them failing forever.
-        let pending = providers.filter { provider in
-            provider.isEnabled
-                && provider.webLogin?.cookieDomain != nil
-                && SessionStore.shared.token(for: provider.id) == nil
-        }
-        guard !pending.isEmpty else { return [] }
-
-        let queries = pending.compactMap { provider -> CookieExtractors.Query? in
-            guard let config = provider.webLogin, let domain = config.cookieDomain else { return nil }
+        // One query per service, not per provider: several providers can share
+        // a service once its accounts have been discovered.
+        let queries = Self.services.compactMap { service -> CookieExtractors.Query? in
+            guard let template = providers.first(where: { $0.serviceID == service.id }),
+                  let config = template.webLogin,
+                  let domain = config.cookieDomain
+            else { return nil }
             return CookieExtractors.Query(
-                key: provider.id,
+                key: service.id,
                 names: config.candidateCookieNames,
                 domain: domain
             )
         }
-        let preferred = DefaultBrowser.current().kind
-        let found = await Task.detached(priority: .utility) {
-            CookieExtractors.search(
-                queries,
-                preferring: preferred,
-                allowingKeychainPrompt: allowingKeychainPrompt
-            )
+        guard !queries.isEmpty else { return [] }
+
+        let sessions = await Task.detached(priority: .utility) {
+            CookieExtractors.searchAll(queries, allowingKeychainPrompt: allowingKeychainPrompt)
         }.value
 
         var adopted: [String] = []
-        for provider in pending {
-            guard let cookie = found[provider.id] else { continue }
+        for service in Self.services {
+            let found = sessions[service.id] ?? []
+            guard !found.isEmpty else { continue }
+            adopted.append(contentsOf: attach(found, to: service))
+        }
+        if !adopted.isEmpty { pruneEmptyAccounts() }
+        return adopted
+    }
+
+    /// Gives every discovered session a provider of its own.
+    ///
+    /// The first keeps the plain service id so existing settings and stored
+    /// keys carry over; the rest get "<service>#<n>". Providers are reused
+    /// across sweeps by matching the credential, so a session that moves
+    /// between profiles doesn't spawn a duplicate row.
+    private func attach(_ sessions: [BrowserCookie], to service: Service) -> [String] {
+        var adopted: [String] = []
+        for (index, cookie) in sessions.enumerated() {
+            let accountID = index == 0 ? nil : String(index + 1)
+            let id = accountID.map { "\(service.id)#\($0)" } ?? service.id
+
+            let provider = providers.first { $0.id == id } ?? {
+                let created = service.make(accountID)
+                providers.append(created)
+                return created
+            }()
+
+            // Nothing to do if this provider already holds this exact session.
+            guard SessionStore.shared.token(for: id) != cookie.value else { continue }
             do {
                 try provider.adoptBrowserSession(cookie.value)
-                adopted.append(provider.id)
+                provider.browserOrigin = cookie.origin
+                adopted.append(id)
             } catch {
                 continue
             }
         }
         return adopted
+    }
+
+    /// Drops extra accounts that no longer have a session, so signing out of a
+    /// browser profile removes its row rather than leaving a dead one.
+    private func pruneEmptyAccounts() {
+        providers.removeAll { provider in
+            provider.accountID != nil && SessionStore.shared.token(for: provider.id) == nil
+        }
     }
 
     /// Refreshes a single provider, for the per-row refresh button and for the
@@ -334,6 +372,10 @@ public final class AppState: ObservableObject {
 /// Type-erased wrapper so AppState can hold heterogeneous providers.
 public final class AnyUsageProvider: ObservableObject, Identifiable {
     public let id: String
+    /// The service family — what the logo and the name come from. Several
+    /// accounts of one service share it while their `id`s differ.
+    public let serviceID: String
+    public let accountID: String?
     public let displayName: String
     public let iconName: String
     public let accentColor: Color
@@ -342,6 +384,10 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
 
     @Published public var isEnabled: Bool
     @Published public var isAuthenticated: Bool
+    /// "Chrome · Profile 2" — which browser and profile this account's session
+    /// came from. The only thing distinguishing two accounts before either has
+    /// reported who it is.
+    @Published public var browserOrigin: String?
 
     private let _fetch: () async throws -> UsageData
     private let _authenticate: () async throws -> Void
@@ -356,6 +402,8 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
 
     public init<P: UsageProvider>(_ provider: P) where P: ObservableObject {
         self.id = provider.id
+        self.serviceID = provider.serviceID
+        self.accountID = provider.accountID
         self.displayName = provider.displayName
         self.iconName = provider.iconName
         self.accentColor = provider.accentColor
@@ -363,6 +411,7 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
         self.dashboardURL = provider.dashboardURL
         self.isEnabled = provider.isEnabled
         self.isAuthenticated = provider.isAuthenticated
+        self.browserOrigin = nil
         self._fetch = { try await provider.fetchUsage() }
         self._authenticate = { try await provider.authenticate() }
         self._signOut = { try await provider.signOut() }
@@ -377,19 +426,11 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
             self._configure = nil
             self._readEndpoint = nil
         }
-        self._saveToken = { token, source in
-            switch provider.id {
-            case "claude": try (provider as? ClaudeProvider)?.saveTokenManually(token, source: source)
-            case "chatgpt": try (provider as? ChatGPTProvider)?.saveTokenManually(token, source: source)
-            case "gemini": try (provider as? GoogleGeminiProvider)?.saveTokenManually(token, source: source)
-            case "grok": try (provider as? GrokProvider)?.saveTokenManually(token, source: source)
-            case "perplexity": try (provider as? PerplexityProvider)?.saveTokenManually(token, source: source)
-            case "deepseek": try (provider as? DeepSeekProvider)?.saveTokenManually(token, source: source)
-            case "cursor": try (provider as? CursorProvider)?.saveTokenManually(token, source: source)
-            case "copilot": try (provider as? CopilotProvider)?.saveTokenManually(token, source: source)
-            case "minimax": try (provider as? MiniMaxProvider)?.saveTokenManually(token, source: source)
-            default: throw ProviderError.unsupported
-            }
+        // Dispatched through the protocol rather than a switch on the id
+        // string, which stopped working the moment an id could be "claude#2".
+        self._saveToken = { [weak provider] token, source in
+            guard let provider else { throw ProviderError.unsupported }
+            try provider.saveTokenManually(token, source: source)
         }
     }
 

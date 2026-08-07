@@ -8,6 +8,34 @@ public struct BrowserCookie: Hashable {
     public let path: String
     public let expiresAt: Date?
     public let source: Browser
+    /// Which browser profile it came from. Two profiles signed into the same
+    /// service are two accounts, and this is the only thing that tells them
+    /// apart before either has been queried.
+    public var profile: String?
+
+    /// "Chrome" or "Chrome · Work", for showing next to an account.
+    public var origin: String {
+        guard let profile, !profile.isEmpty, profile != "Default" else { return source.displayName }
+        return "\(source.displayName) · \(profile)"
+    }
+
+    public init(
+        name: String,
+        value: String,
+        domain: String,
+        path: String,
+        expiresAt: Date?,
+        source: Browser,
+        profile: String? = nil
+    ) {
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.expiresAt = expiresAt
+        self.source = source
+        self.profile = profile
+    }
 
     public enum Browser: String, Codable, CaseIterable {
         case chrome, safari, firefox, edge, brave, arc
@@ -131,6 +159,45 @@ public enum CookieExtractors {
                 let scoped = jar.filter { matches(domain: $0.domain, query.domain) }
                 guard let cookie = resolve(names: query.names, in: scoped) else { continue }
                 found[query.key] = cookie
+            }
+        }
+        return found
+    }
+
+    /// Every distinct session for each query, across every browser and profile.
+    ///
+    /// One person can be signed into the same service several times — Chrome
+    /// profiles are the usual way — and `search` deliberately stops at the
+    /// first. This does not stop, and dedupes on the credential itself so the
+    /// same session seen twice is still one account.
+    public static func searchAll(
+        _ queries: [Query],
+        allowingKeychainPrompt: Bool = false
+    ) -> [String: [BrowserCookie]] {
+        guard !queries.isEmpty else { return [:] }
+        let domains = Array(Set(queries.map(\.domain)))
+
+        var found: [String: [BrowserCookie]] = [:]
+        var seen: Set<String> = []
+        for extractor in available() {
+            guard let jar = try? extractor.cookies(
+                forAnyOf: domains,
+                allowingKeychainPrompt: allowingKeychainPrompt
+            ) else { continue }
+
+            for query in queries {
+                let scoped = jar.filter { matches(domain: $0.domain, query.domain) }
+                // Group by profile: one profile holds at most one session per
+                // service, and its cookies have to be resolved together so a
+                // chunked token isn't stitched across two accounts.
+                for profile in Set(scoped.map { $0.profile ?? "" }).sorted() {
+                    let inProfile = scoped.filter { ($0.profile ?? "") == profile }
+                    guard let cookie = resolve(names: query.names, in: inProfile) else { continue }
+                    let fingerprint = "\(query.key)|\(cookie.value)"
+                    guard !seen.contains(fingerprint) else { continue }
+                    seen.insert(fingerprint)
+                    found[query.key, default: []].append(cookie)
+                }
             }
         }
         return found

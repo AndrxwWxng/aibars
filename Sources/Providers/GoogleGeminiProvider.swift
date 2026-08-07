@@ -14,7 +14,11 @@ import SwiftUI
 /// is only a marker that the user connected this provider, plus the fallback for
 /// a manually pasted session.
 public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
-    public let id = "gemini"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "gemini" }
     public let displayName = "Gemini"
     public let iconName = "sparkle"
     public let accentColor: Color = Color(red: 0.26, green: 0.52, blue: 0.96)
@@ -25,7 +29,7 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
 
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.gemini.enabled"
+    private let enabledKey: String
 
     /// The cookie that decides whether a Google session exists at all.
     private static let primaryCookieName = "__Secure-1PSID"
@@ -71,9 +75,12 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     private var cachedTokens: PageTokens?
     private static let tokenLifetime: TimeInterval = 10 * 60
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "gemini#\($0)" } ?? "gemini"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "gemini")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://gemini.google.com/usage") }

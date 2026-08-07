@@ -7,7 +7,11 @@ import SwiftUI
 /// installed browsers first; if none returns a usable token, the user
 /// is asked to paste it via the Settings sheet.
 public final class ClaudeProvider: ObservableObject, UsageProvider {
-    public let id = "claude"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "claude" }
     public let displayName = "Claude"
     public let iconName = "sparkles"
     public let accentColor: Color = Color(red: 0.85, green: 0.45, blue: 0.30)
@@ -19,11 +23,14 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
     private let cookieName = "sessionKey"
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.claude.enabled"
+    private let enabledKey: String
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "claude#\($0)" } ?? "claude"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "claude")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://claude.ai/settings/usage") }
@@ -38,7 +45,7 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
     }
 
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "claude") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -71,7 +78,7 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
     public func authenticate() async throws {
         if let cookie = CookieExtractors.firstAvailableCookie(named: cookieName, for: "claude.ai"),
            !cookie.value.isEmpty {
-            try session.setToken(cookie.value, for: "claude", source: .browserCookie, accountHint: cookie.source.displayName)
+            try session.setToken(cookie.value, for: id, source: .browserCookie, accountHint: cookie.source.displayName)
             await MainActor.run {
                 self.isAuthenticated = true
                 self.lastError = nil
@@ -80,12 +87,12 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
     }
 
     public func signOut() async throws {
-        session.clear("claude")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "claude", source: source)
+        try session.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

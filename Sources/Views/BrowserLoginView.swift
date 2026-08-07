@@ -161,7 +161,7 @@ public struct BrowserLoginView: View {
     private var headline: some View {
         HStack(spacing: 11) {
             ProviderLogo(
-                providerID: provider.id,
+                providerID: provider.serviceID,
                 fallbackName: provider.displayName,
                 fallbackColor: provider.accentColor,
                 size: 34

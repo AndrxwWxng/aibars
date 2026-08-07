@@ -33,7 +33,7 @@ public struct ProviderRow: View {
     public var body: some View {
         HStack(alignment: .top, spacing: 11) {
             ProviderLogo(
-                providerID: provider.id,
+                providerID: provider.serviceID,
                 fallbackName: provider.displayName,
                 fallbackColor: provider.accentColor,
                 size: 30
@@ -70,6 +70,17 @@ public struct ProviderRow: View {
             Text(provider.displayName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
+
+            // With several accounts of one service, the name alone is the same
+            // word repeated — say which account it is.
+            if let account = accountLabel {
+                Text(account)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(-1)
+            }
 
             if showsPlanName, let plan = planName {
                 Text(plan)
@@ -185,6 +196,17 @@ public struct ProviderRow: View {
         provider.webLogin == nil
             ? "Not connected — add a token in Settings"
             : "Not connected"
+    }
+
+    /// Who this row is. The service's own answer when it gives one, otherwise
+    /// the browser profile the session came from — which is at least enough to
+    /// tell two accounts apart.
+    private var accountLabel: String? {
+        if case .success(let data) = result, let account = data.accountLabel, !account.isEmpty {
+            return account
+        }
+        guard provider.accountID != nil || provider.browserOrigin != nil else { return nil }
+        return provider.browserOrigin
     }
 
     private var planName: String? {

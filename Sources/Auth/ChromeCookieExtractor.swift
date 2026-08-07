@@ -10,7 +10,10 @@ import SQLite3
 /// with an empty value and the caller falls back to manual entry.
 public final class ChromeCookieExtractor: CookieExtractor {
     public let browser: BrowserCookie.Browser
-    private let dbURL: URL
+    /// Every profile's cookie database, not just Default. Chrome profiles are
+    /// how one person keeps several accounts for the same service signed in at
+    /// once — reading only Default found one of four Claude sessions here.
+    private let databases: [(profile: String, url: URL)]
     public let variant: ChromeBasedBrowser
     /// Derived lazily and only once: each miss is a keychain round trip, and a
     /// denied prompt should not be re-asked for every cookie in the table.
@@ -19,8 +22,9 @@ public final class ChromeCookieExtractor: CookieExtractor {
     public init?(variant: ChromeBasedBrowser) {
         self.variant = variant
         self.browser = variant.browserEnum
-        guard let url = variant.cookiesURL() else { return nil }
-        self.dbURL = url
+        let found = variant.cookieDatabases()
+        guard !found.isEmpty else { return nil }
+        self.databases = found
     }
 
     /// Whether a key is already in hand, so a read can proceed without putting
@@ -46,9 +50,7 @@ public final class ChromeCookieExtractor: CookieExtractor {
         return try? result.get()
     }
 
-    public var isAvailable: Bool {
-        FileManager.default.fileExists(atPath: dbURL.path)
-    }
+    public var isAvailable: Bool { !databases.isEmpty }
 
     /// Silent by default. A caller that wants the keychain prompt has to say so
     /// through `cookies(forAnyOf:allowingKeychainPrompt:)`.
@@ -58,7 +60,20 @@ public final class ChromeCookieExtractor: CookieExtractor {
 
     public func cookies(forAnyOf domains: [String], allowingKeychainPrompt: Bool) throws -> [BrowserCookie] {
         guard !domains.isEmpty else { return [] }
-        let snapshot = try SQLiteSnapshot(of: dbURL)
+        var cookies: [BrowserCookie] = []
+        for database in databases {
+            guard let found = try? profileCookies(database, domains: domains, allowingKeychainPrompt: allowingKeychainPrompt) else { continue }
+            cookies.append(contentsOf: found)
+        }
+        return cookies
+    }
+
+    private func profileCookies(
+        _ database: (profile: String, url: URL),
+        domains: [String],
+        allowingKeychainPrompt: Bool
+    ) throws -> [BrowserCookie] {
+        let snapshot = try SQLiteSnapshot(of: database.url)
         defer { snapshot.close() }
 
         let clause = domains.map { _ in "host_key LIKE ?" }.joined(separator: " OR ")
@@ -84,7 +99,8 @@ public final class ChromeCookieExtractor: CookieExtractor {
                 domain: SQLiteSnapshot.text(row, 1) ?? "",
                 path: SQLiteSnapshot.text(row, 2) ?? "/",
                 expiresAt: expiresAt,
-                source: browser
+                source: browser,
+                profile: database.profile
             ))
         }
         return cookies
@@ -151,8 +167,34 @@ public enum ChromeBasedBrowser: String, CaseIterable {
     }
 
     public func cookiesURL() -> URL? {
+        cookieDatabases().first?.url
+    }
+
+    /// Chromium keeps one directory per profile beside `Default`, each with its
+    /// own cookie database.
+    public func cookieDatabases() -> [(profile: String, url: URL)] {
+        guard let root = userDataDirectory else { return [] }
+        let manager = FileManager.default
+        let candidates = ((try? manager.contentsOfDirectory(atPath: root.path)) ?? [])
+            .filter { $0 == "Default" || $0.hasPrefix("Profile ") }
+            .sorted { lhs, rhs in
+                // Default first, then numerically rather than "Profile 10" < "Profile 2".
+                if lhs == "Default" { return true }
+                if rhs == "Default" { return false }
+                return (Int(lhs.dropFirst(8)) ?? 0) < (Int(rhs.dropFirst(8)) ?? 0)
+            }
+        return candidates.compactMap { name in
+            let url = root.appendingPathComponent(name).appendingPathComponent("Cookies")
+            guard manager.fileExists(atPath: url.path) else { return nil }
+            return (name, url)
+        }
+    }
+
+    /// The directory holding the profile folders.
+    private var userDataDirectory: URL? {
         guard let rel = cookiesRelativePath else { return nil }
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(rel)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        // "…/Chrome/Default/Cookies" -> "…/Chrome"
+        let full = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(rel)
+        return full.deletingLastPathComponent().deletingLastPathComponent()
     }
 }

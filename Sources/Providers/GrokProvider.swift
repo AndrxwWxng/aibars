@@ -14,7 +14,11 @@ import SwiftUI
 /// against a separate ledger and says nothing about a SuperGrok subscription, so
 /// it is deliberately not accepted here.
 public final class GrokProvider: ObservableObject, UsageProvider {
-    public let id = "grok"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "grok" }
     public let displayName = "Grok"
     public let iconName = "x.circle"
     public let accentColor: Color = Color(red: 0.20, green: 0.22, blue: 0.26)
@@ -30,7 +34,7 @@ public final class GrokProvider: ObservableObject, UsageProvider {
 
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.grok.enabled"
+    private let enabledKey: String
 
     /// Grok quota is per mode (auto | fast | expert | heavy | build), not one
     /// shared pool — `expert` and `heavy` report their own `totalQueries`.
@@ -41,9 +45,12 @@ public final class GrokProvider: ObservableObject, UsageProvider {
     private let subscriptionsURL = URL(string: "https://grok.com/rest/subscriptions")!
     private let freeUsageGatesURL = URL(string: "https://grok.com/rest/usage/free-usage-gates")!
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "grok#\($0)" } ?? "grok"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "grok")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://grok.com/") }
@@ -62,7 +69,7 @@ public final class GrokProvider: ObservableObject, UsageProvider {
     /// badge reads. Neither is documented; both are cookie-gated and POST-only /
     /// GET-only respectively (the other verb answers 501).
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "grok") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -127,7 +134,7 @@ public final class GrokProvider: ObservableObject, UsageProvider {
         }
         guard let found = await lookup.value else { return }
 
-        try session.setToken(found.header, for: "grok", source: .browserCookie, accountHint: found.browser.displayName)
+        try session.setToken(found.header, for: id, source: .browserCookie, accountHint: found.browser.displayName)
         await MainActor.run {
             self.isAuthenticated = true
             self.lastError = nil
@@ -135,12 +142,12 @@ public final class GrokProvider: ObservableObject, UsageProvider {
     }
 
     public func signOut() async throws {
-        session.clear("grok")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "grok", source: source)
+        try session.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 
