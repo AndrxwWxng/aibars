@@ -6,6 +6,28 @@ import Combine
 /// drives the refresh loop, and surfaces the data the dropdown renders.
 @MainActor
 public final class AppState: ObservableObject {
+    /// Names the user has given accounts, keyed by provider id.
+    ///
+    /// Two Gemini accounts labelled "Firefox" and "Firefox · Profile 1" are
+    /// technically distinguished and practically not — nobody knows which
+    /// profile holds which account. Google's app HTML carries no email and its
+    /// account-list endpoint refuses anything but a Chromium client, so the
+    /// reliable answer is to let people write it down.
+    public static func customAccountName(for providerID: String) -> String? {
+        let value = UserDefaults.standard.string(forKey: "aibars.accountName.\(providerID)")
+        return (value?.isEmpty ?? true) ? nil : value
+    }
+
+    public static func setCustomAccountName(_ name: String?, for providerID: String) {
+        let key = "aibars.accountName.\(providerID)"
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            UserDefaults.standard.set(trimmed, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
     /// The app's single instance. Shared because the refresh loop is started by
     /// the app delegate at launch, while the views are built later and have to
     /// observe the same object.
@@ -14,6 +36,10 @@ public final class AppState: ObservableObject {
     @Published public var providers: [AnyUsageProvider] = []
     @Published public var snapshots: [String: Result<UsageData, ProviderError>] = [:]
     @Published public var isRefreshing: Bool = false
+    /// Sessions found but not readable, keyed by service. Chromium cookies need
+    /// a keychain key the silent sweep will not ask for, so these exist and are
+    /// simply locked — worth saying so rather than looking like nothing is there.
+    @Published public var lockedAccounts: [String: Int] = [:]
     @Published public var lastRefresh: Date?
     @Published public var refreshIntervalSeconds: Int {
         didSet { userDefaults.set(refreshIntervalSeconds, forKey: intervalKey) }
@@ -150,6 +176,10 @@ public final class AppState: ObservableObject {
         let sessions = await Task.detached(priority: .utility) {
             CookieExtractors.searchAll(queries, allowingKeychainPrompt: allowingKeychainPrompt)
         }.value
+        let locked = await Task.detached(priority: .utility) {
+            CookieExtractors.lockedSessionCounts(queries)
+        }.value
+        lockedAccounts = locked
 
         var adopted: [String] = []
         for service in Self.services {

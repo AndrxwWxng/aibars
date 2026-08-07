@@ -23,6 +23,9 @@ public struct SettingsView: View {
     @State private var pane: Pane = .services
     @State private var isAdopting = false
     @State private var adoptionStatus: String?
+    /// Bumped on rename so the list redraws; the names live in UserDefaults
+    /// rather than in observable state.
+    @State private var renameTick = 0
 
     public init() {}
 
@@ -138,6 +141,10 @@ public struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    private var lockedTotal: Int {
+        state.lockedAccounts.values.reduce(0, +)
+    }
+
     /// Accounts beyond the first for any service — what the toggle reveals.
     private var extraAccounts: Int {
         state.providers.count - Set(state.providers.map(\.serviceID)).count
@@ -161,8 +168,25 @@ public struct SettingsView: View {
                     if isAdopting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Button("Check now") { Task { await adopt() } }
+                        // Two buttons rather than one with a computed style:
+                        // buttonStyle takes a type, so it cannot be chosen at
+                        // runtime without erasing it, and erasing a button style
+                        // is a lot of machinery for one emphasis change.
+                        if lockedTotal > 0 {
+                            Button("Unlock \(lockedTotal) more") { Task { await adopt() } }
+                                .buttonStyle(.borderedProminent)
+                        } else {
+                            Button("Check now") { Task { await adopt() } }
+                        }
                     }
+                }
+            } footer: {
+                if lockedTotal > 0 {
+                    // These are found, not missing. Saying so is the difference
+                    // between an actionable prompt and the app looking broken.
+                    Text("\(lockedTotal) more account\(lockedTotal == 1 ? " is" : "s are") signed in elsewhere — reading them needs one Keychain approval, which only happens when you ask.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -202,6 +226,23 @@ public struct SettingsView: View {
                             .controlSize(.small)
                     }
                     .padding(.vertical, 2)
+
+                    // Only worth the space when there is something to tell apart.
+                    if state.accountCount(ofService: provider.serviceID) > 1 {
+                        TextField(
+                            "Name this account",
+                            text: Binding(
+                                get: { AppState.customAccountName(for: provider.id) ?? "" },
+                                set: {
+                                    AppState.setCustomAccountName($0, for: provider.id)
+                                    renameTick &+= 1
+                                }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .padding(.leading, 36)
+                    }
                 }
             } footer: {
                 Text("The switch controls whether a service appears in the dropdown.")
@@ -458,3 +499,4 @@ public struct AuthSheet: View {
         }
     }
 }
+

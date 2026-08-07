@@ -164,6 +164,36 @@ public enum CookieExtractors {
         return found
     }
 
+    /// Sessions that exist but could not be read, per query.
+    ///
+    /// A Chromium cookie whose value decrypts to nothing is not absent — it is
+    /// locked, because deriving the key needs a keychain dialog the silent sweep
+    /// will not raise. Counting them is what lets the UI say "three more Claude
+    /// accounts are in Chrome" instead of pretending they do not exist.
+    public static func lockedSessionCounts(_ queries: [Query]) -> [String: Int] {
+        guard !queries.isEmpty else { return [:] }
+        let domains = Array(Set(queries.map(\.domain)))
+
+        var counts: [String: Int] = [:]
+        for extractor in available() {
+            // Silent: the whole point is to report what is locked, not unlock it.
+            guard let jar = try? extractor.cookies(forAnyOf: domains, allowingKeychainPrompt: false) else { continue }
+            for query in queries {
+                let scoped = jar.filter { matches(domain: $0.domain, query.domain) }
+                for profile in Set(scoped.map { $0.profile ?? "" }) {
+                    let inProfile = scoped.filter { ($0.profile ?? "") == profile }
+                    // The name is there, the value is not.
+                    let named = inProfile.filter { cookie in
+                        query.names.contains { cookie.name == $0 || cookie.name.hasPrefix($0 + ".") }
+                    }
+                    guard !named.isEmpty, named.allSatisfy({ $0.value.isEmpty }) else { continue }
+                    counts[query.key, default: 0] += 1
+                }
+            }
+        }
+        return counts
+    }
+
     /// Every distinct session for each query, across every browser and profile.
     ///
     /// One person can be signed into the same service several times — Chrome
