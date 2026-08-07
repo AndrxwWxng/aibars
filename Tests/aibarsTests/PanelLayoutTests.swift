@@ -64,3 +64,55 @@ final class PanelLayoutTests: XCTestCase {
         XCTAssertEqual(panel(connected: 3).fittingSize.width, 356)
     }
 }
+
+/// Hovering a row must not change its height.
+///
+/// The per-row actions were inserted on hover, so every row grew as the pointer
+/// crossed it — and because MenuBarExtra sizes its window to the content, the
+/// whole panel resized under the cursor. The space is reserved now and only
+/// opacity changes, which this measures by comparing a row that shows its
+/// actions against one that does not.
+final class RowHoverLayoutTests: XCTestCase {
+    @MainActor
+    private func rowHeight(actions: AppearanceSettings.RowActionVisibility) -> CGFloat {
+        let appearance = AppearanceSettings(store: UserDefaults(suiteName: "hover-\(actions.id)")!)
+        appearance.rowActions = actions
+
+        let state = AppState()
+        let provider = state.providers[0]
+        provider.isAuthenticated = true
+        let snapshot = UsageData(
+            providerID: provider.id,
+            planName: "Pro",
+            primary: UsageMetric(label: "5h window", used: 40, limit: 100, unit: "%")
+        )
+
+        let row = ProviderRow(
+            provider: provider,
+            result: .success(snapshot),
+            onSignIn: {},
+            appearance: appearance
+        )
+        let host = NSHostingView(rootView: AnyView(row.frame(width: 356)))
+        host.layoutSubtreeIfNeeded()
+        return host.fittingSize.height
+    }
+
+    /// `.always` is the hovered layout and `.onHover` the resting one. Equal
+    /// heights mean crossing the row cannot move anything.
+    @MainActor
+    func testShowingActionsDoesNotChangeRowHeight() {
+        let resting = rowHeight(actions: .onHover)
+        let shown = rowHeight(actions: .always)
+        XCTAssertEqual(
+            resting, shown, accuracy: 0.5,
+            "the row is \(shown)pt with actions and \(resting)pt without — hovering will resize the panel"
+        )
+    }
+
+    /// Turning them off entirely may reclaim the space; it must not add any.
+    @MainActor
+    func testHidingActionsNeverGrowsTheRow() {
+        XCTAssertLessThanOrEqual(rowHeight(actions: .never), rowHeight(actions: .onHover) + 0.5)
+    }
+}
