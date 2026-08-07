@@ -73,7 +73,7 @@ public struct SettingsView: View {
                 .scrollContentBackgroundHidden()
                 .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 980, height: 600)
+        .frame(minWidth: 980, idealWidth: 1060, maxWidth: .infinity, minHeight: 560, idealHeight: 620, maxHeight: .infinity)
         .sheet(item: $showAuthSheet) { provider in
             AuthSheet(provider: provider)
         }

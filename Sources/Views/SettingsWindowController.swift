@@ -12,8 +12,8 @@ public enum SettingsWindowController {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 980, height: 600),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 1060, height: 620),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -26,6 +26,8 @@ public enum SettingsWindowController {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
 
+        // Resizable, and with a floor that keeps both columns whole.
+        window.minSize = NSSize(width: 980, height: 560)
         window.contentView = NSHostingView(
             rootView: SettingsView()
                 .environmentObject(state)
