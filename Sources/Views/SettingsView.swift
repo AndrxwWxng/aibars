@@ -33,12 +33,13 @@ public struct SettingsView: View {
     }
 
     enum Pane: String, CaseIterable, Identifiable {
-        case services, general, about
+        case services, appearance, general, about
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .services: return "Services"
+            case .appearance: return "Appearance"
             case .general:  return "General"
             case .about:    return "About"
             }
@@ -47,6 +48,7 @@ public struct SettingsView: View {
         var symbol: String {
             switch self {
             case .services: return "square.grid.2x2"
+            case .appearance: return "paintbrush"
             case .general:  return "gearshape"
             case .about:    return "info.circle"
             }
@@ -98,6 +100,7 @@ public struct SettingsView: View {
     private var detail: some View {
         switch pane {
         case .services: providersTab
+        case .appearance: AppearancePane()
         case .general:  generalTab
         case .about:    aboutTab
         }
@@ -118,47 +121,18 @@ public struct SettingsView: View {
                 }
             }
             Section {
-                Toggle("Show every usage window", isOn: $state.showsAllWindows)
-                Toggle("Show plan names", isOn: $state.showsPlanNames)
-                Toggle("Show every account", isOn: $state.showsAllAccounts)
-                if extraAccounts > 0 {
-                    Text(state.showsAllAccounts
-                         ? "Showing \(extraAccounts) extra account\(extraAccounts == 1 ? "" : "s")."
-                         : "\(extraAccounts) extra account\(extraAccounts == 1 ? " is" : "s are") hidden.")
+                // The menu bar mark and everything else about how the panel
+                // looks lives in Appearance now; two homes for one setting is
+                // how they drift apart.
+                LabeledContent("Appearance") {
+                    Text("Density, colours, the menu bar mark and more")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } header: {
-                Text("Dropdown")
             } footer: {
-                // A footer, not a row: as a row it reads like a third setting
-                // that happens to have no control.
-                Text("With every window shown, weekly caps and per-model allowances each get their own bar. Off shows only the window closest to its cap.")
+                Text("See the Appearance tab.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            Section("Menu bar") {
-                Picker("Style", selection: $state.showInMenuBar) {
-                    ForEach(AppState.MenuBarDisplay.allCases) { display in
-                        Text(display.label).tag(display)
-                    }
-                }
-                LabeledContent("Preview") {
-                    HStack(spacing: 5) {
-                        UsageMeterGlyph(
-                            levels: state.usageLevels,
-                            alertColor: UsageTint.menuBarTint(for: state.topUsagePercent),
-                            height: 13
-                        )
-                        if state.showInMenuBar == .iconAndPercent {
-                            Text("\(Int((state.topUsagePercent * 100).rounded()))%")
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                .monospacedDigit()
-                        } else if state.showInMenuBar == .iconAndName, let name = state.topProviderName {
-                            Text(name).font(.system(size: 11, weight: .medium))
-                        }
-                    }
-                }
             }
         }
         .formStyle(.grouped)
