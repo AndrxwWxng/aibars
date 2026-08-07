@@ -6,6 +6,29 @@ import Combine
 /// drives the refresh loop, and surfaces the data the dropdown renders.
 @MainActor
 public final class AppState: ObservableObject {
+    /// Providers the user deliberately signed out of.
+    ///
+    /// Without this the launch sweep simply adopted the session again, so signing
+    /// out lasted until the next refresh. An explicit sign-in clears the mark;
+    /// automatic adoption respects it.
+    private static let signedOutKey = "aibars.signedOut"
+
+    nonisolated public static var signedOutProviders: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: signedOutKey) ?? [])
+    }
+
+    nonisolated static func markSignedOut(_ providerID: String) {
+        var ids = signedOutProviders
+        ids.insert(providerID)
+        UserDefaults.standard.set(Array(ids), forKey: signedOutKey)
+    }
+
+    nonisolated static func clearSignedOut(_ providerID: String) {
+        var ids = signedOutProviders
+        guard ids.remove(providerID) != nil else { return }
+        UserDefaults.standard.set(Array(ids), forKey: signedOutKey)
+    }
+
     /// Names the user has given accounts, keyed by provider id.
     ///
     /// Two Gemini accounts labelled "Firefox" and "Firefox · Profile 1" are
@@ -202,6 +225,9 @@ public final class AppState: ObservableObject {
         for (index, cookie) in sessions.enumerated() {
             let accountID = index == 0 ? nil : String(index + 1)
             let id = accountID.map { "\(service.id)#\($0)" } ?? service.id
+
+            // A deliberate sign-out outranks a session sitting in a browser.
+            if Self.signedOutProviders.contains(id) { continue }
 
             let provider = providers.first { $0.id == id } ?? {
                 let created = service.make(accountID)
@@ -446,7 +472,9 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
     public func signOut() async throws {
         // Only aibars' own copy of the credential is dropped. The session lives
         // in the user's browser and is theirs — clearing it would silently log
-        // them out of the website itself.
+        // them out of the website itself. The mark is what stops the next sweep
+        // from adopting that very session straight back.
+        AppState.markSignedOut(id)
         try await _signOut()
         await syncAuthState()
     }
@@ -468,6 +496,10 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
     }
 
     public func saveToken(_ token: String, source: SessionSource) throws {
+        // Signing in is the user changing their mind, so the sign-out mark goes.
+        // `adoptBrowserSession` filters marked providers out before reaching
+        // here, so automatic adoption cannot clear it by accident.
+        AppState.clearSignedOut(id)
         try _saveToken(token, source)
         // The save succeeded, so the credential exists regardless of when the
         // underlying provider gets around to flipping its own flag.

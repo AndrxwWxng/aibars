@@ -276,25 +276,24 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     /// Prefers whatever the browsers hold right now, because `__Secure-1PSIDTS`
     /// in the Keychain is stale within minutes. Falls back to a pasted value.
     private func currentCookieHeader() async -> String? {
-        // Scoped to this account's own session. Google rotates
-        // __Secure-1PSIDTS within minutes, so the browser still has to be
-        // consulted every fetch — but for the right profile.
-        let stored = session.token(for: id)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wanted = (stored?.contains("=") ?? true) ? nil : stored
-        let live = await Task.detached(priority: .utility) { [wanted] in
-            GoogleGeminiProvider.browserCookies(matching: wanted)
-        }.value
+        // No token, no session. This used to fall through to "any Google session
+        // in any browser" and store it, which meant signing out did nothing: the
+        // next refresh, seconds later, claimed a session again and the row came
+        // back. Adopting a session is AppState's job and happens once, where the
+        // user's choice to sign out can be honoured.
+        guard let stored = session.token(for: id)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !stored.isEmpty
+        else { return nil }
 
-        if let live {
-            // Only claim a session when this account had none. Writing a
-            // different account's SID here is what made them converge.
-            if stored == nil || stored?.isEmpty == true {
-                try? session.setToken(live.sid, for: id, source: .browserCookie, accountHint: live.browser.displayName)
-            }
+        // Google rotates __Secure-1PSIDTS within minutes, so the browser is
+        // still consulted every fetch — but only for this account's own profile.
+        let wanted = stored.contains("=") ? nil : stored
+        if let live = await Task.detached(priority: .utility) { [wanted] in
+            GoogleGeminiProvider.browserCookies(matching: wanted)
+        }.value {
             return live.header
         }
 
-        guard let stored, !stored.isEmpty else { return nil }
         // A paste is either a whole Cookie header copied from DevTools or a bare
         // __Secure-1PSID value. The bare value will usually earn a logged-out
         // shell, which surfaces as .sessionExpired.
