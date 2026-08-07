@@ -3,7 +3,11 @@ import SwiftUI
 
 /// Tracks Cursor Pro / Business usage via the dashboard API.
 public final class CursorProvider: ObservableObject, UsageProvider {
-    public let id = "cursor"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "cursor" }
     public let displayName = "Cursor"
     public let iconName = "chevron.left.forwardslash.chevron.right"
     public let accentColor: Color = Color(red: 0.20, green: 0.20, blue: 0.20)
@@ -14,11 +18,14 @@ public final class CursorProvider: ObservableObject, UsageProvider {
     private let cookieName = "WorkosCursorSessionToken"
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.cursor.enabled"
+    private let enabledKey: String
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "cursor#\($0)" } ?? "cursor"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "cursor")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://www.cursor.com/dashboard") }
@@ -35,7 +42,7 @@ public final class CursorProvider: ObservableObject, UsageProvider {
     }
 
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "cursor") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -54,18 +61,18 @@ public final class CursorProvider: ObservableObject, UsageProvider {
 
     public func authenticate() async throws {
         if let cookie = CookieExtractors.firstAvailableCookie(named: cookieName, for: "cursor.com") {
-            try session.setToken(cookie.value, for: "cursor", source: .browserCookie, accountHint: cookie.source.displayName)
+            try session.setToken(cookie.value, for: id, source: .browserCookie, accountHint: cookie.source.displayName)
             await MainActor.run { self.isAuthenticated = true }
         }
     }
 
     public func signOut() async throws {
-        session.clear("cursor")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "cursor", source: source)
+        try session.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

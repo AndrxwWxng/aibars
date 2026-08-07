@@ -6,7 +6,11 @@ import SwiftUI
 /// Uses the official Copilot user info endpoint. Detailed usage metrics
 /// require a GitHub token; without one, we surface plan + seat info.
 public final class CopilotProvider: ObservableObject, UsageProvider {
-    public let id = "copilot"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "copilot" }
     public let displayName = "GitHub Copilot"
     public let iconName = "chevron.left.slash.chevron.right"
     public let accentColor: Color = Color(red: 0.10, green: 0.10, blue: 0.10)
@@ -16,11 +20,14 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
 
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.copilot.enabled"
+    private let enabledKey: String
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "copilot#\($0)" } ?? "copilot"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "copilot")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://github.com/settings/copilot") }
@@ -38,7 +45,7 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
     }
 
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "copilot") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -66,19 +73,19 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws {
-        if let token = session.token(for: "copilot") {
+        if let token = session.token(for: id) {
             await MainActor.run { self.isAuthenticated = true }
             _ = token
         }
     }
 
     public func signOut() async throws {
-        session.clear("copilot")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "copilot", source: source)
+        try session.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

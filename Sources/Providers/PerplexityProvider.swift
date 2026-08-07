@@ -11,7 +11,11 @@ import SwiftUI
 /// bills against a separate ledger and tells you nothing about a Pro/Max
 /// subscription, so it is deliberately not used here.
 public final class PerplexityProvider: ObservableObject, UsageProvider {
-    public let id = "perplexity"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "perplexity" }
     public let displayName = "Perplexity"
     public let iconName = "magnifyingglass.circle.fill"
     public let accentColor: Color = Color(red: 0.13, green: 0.50, blue: 0.55)
@@ -48,11 +52,14 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
 
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.perplexity.enabled"
+    private let enabledKey: String
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "perplexity#\($0)" } ?? "perplexity"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "perplexity")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     /// The internal /account/usage route the credits endpoint belongs to is not
@@ -76,7 +83,7 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
     /// calls for itself. There is no documented plan or subscription endpoint,
     /// which is why the plan name is inferred from the recurring grant size.
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "perplexity") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -112,7 +119,7 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
 
     public func authenticate() async throws {
         guard let found = Self.resolveSessionCookie(names: cookieNames, domain: Self.cookieDomain) else { return }
-        try session.setToken(found.value, for: "perplexity", source: .browserCookie, accountHint: found.browser.displayName)
+        try session.setToken(found.value, for: id, source: .browserCookie, accountHint: found.browser.displayName)
         await MainActor.run {
             self.isAuthenticated = true
             self.lastError = nil
@@ -120,12 +127,12 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
     }
 
     public func signOut() async throws {
-        session.clear("perplexity")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "perplexity", source: source)
+        try session.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

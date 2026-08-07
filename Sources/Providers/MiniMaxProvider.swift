@@ -6,7 +6,11 @@ import SwiftUI
 /// Users configure a URL, optional headers, and a JSONPath expression
 /// for the primary usage number. See README → Adding a Provider.
 public final class MiniMaxProvider: ObservableObject, UsageProvider {
-    public let id = "minimax"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "minimax" }
     public let displayName = "MiniMax"
     public let iconName = "hexagon.fill"
     public let accentColor: Color = Color(red: 0.45, green: 0.30, blue: 0.85)
@@ -15,14 +19,17 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
     @Published public private(set) var isAuthenticated: Bool = false
 
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.minimax.enabled"
+    private let enabledKey: String
     private let endpointKey = "aibars.minimax.endpoint"
     private let tokenKey = "aibars.minimax.token"
     private let planNameKey = "aibars.minimax.planName"
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "minimax#\($0)" } ?? "minimax"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "minimax")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public func fetchUsage() async throws -> UsageData {
@@ -30,7 +37,7 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
               let url = URL(string: endpoint) else {
             throw ProviderError.configuration("Set a usage endpoint in Settings → MiniMax.")
         }
-        guard let token = SessionStore.shared.token(for: "minimax") else {
+        guard let token = SessionStore.shared.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -42,18 +49,18 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws {
-        if SessionStore.shared.hasCredential(for: "minimax") {
+        if SessionStore.shared.hasCredential(for: id) {
             await MainActor.run { self.isAuthenticated = true }
         }
     }
 
     public func signOut() async throws {
-        SessionStore.shared.clear("minimax")
+        SessionStore.shared.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try SessionStore.shared.setToken(token, for: "minimax", source: source)
+        try SessionStore.shared.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

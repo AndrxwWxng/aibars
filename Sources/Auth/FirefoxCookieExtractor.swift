@@ -27,6 +27,14 @@ public final class FirefoxCookieExtractor: CookieExtractor {
             .map(\.url)
     }
 
+    /// Firefox names profile directories "<salt>.<name>"; the salt is noise.
+    private static func profileName(of directory: URL) -> String {
+        let name = directory.lastPathComponent
+        guard let dot = name.firstIndex(of: ".") else { return name }
+        let suffix = String(name[name.index(after: dot)...])
+        return suffix == "default-release" ? "Default" : suffix
+    }
+
     private static func cookieDatabaseSize(in profile: URL) -> Int {
         let file = profile.appendingPathComponent("cookies.sqlite")
         let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
@@ -65,7 +73,8 @@ public final class FirefoxCookieExtractor: CookieExtractor {
                     domain: SQLiteSnapshot.text(row, 2) ?? "",
                     path: SQLiteSnapshot.text(row, 3) ?? "/",
                     expiresAt: expirySeconds > 0 ? Date(timeIntervalSince1970: TimeInterval(expirySeconds)) : nil,
-                    source: .firefox
+                    source: .firefox,
+                    profile: Self.profileName(of: profile)
                 ))
             }
         }

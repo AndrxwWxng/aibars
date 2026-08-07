@@ -3,7 +3,11 @@ import SwiftUI
 
 /// Tracks ChatGPT (Plus, Team, Pro) usage via the public usage endpoint.
 public final class ChatGPTProvider: ObservableObject, UsageProvider {
-    public let id = "chatgpt"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "chatgpt" }
     public let displayName = "ChatGPT"
     public let iconName = "bubble.left.and.bubble.right.fill"
     public let accentColor: Color = Color(red: 0.10, green: 0.55, blue: 0.40)
@@ -15,11 +19,14 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     private let cookieName = "__Secure-next-auth.session-token"
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.chatgpt.enabled"
+    private let enabledKey: String
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "chatgpt#\($0)" } ?? "chatgpt"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "chatgpt")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://chatgpt.com/#settings") }
@@ -45,7 +52,7 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     /// account genuinely publishes: who is signed in, which plan they are on,
     /// and when it renews.
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "chatgpt") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -102,18 +109,18 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
 
     public func authenticate() async throws {
         if let cookie = CookieExtractors.firstAvailableCookie(named: cookieName, for: "chatgpt.com") {
-            try session.setToken(cookie.value, for: "chatgpt", source: .browserCookie, accountHint: cookie.source.displayName)
+            try session.setToken(cookie.value, for: id, source: .browserCookie, accountHint: cookie.source.displayName)
             await MainActor.run { self.isAuthenticated = true }
         }
     }
 
     public func signOut() async throws {
-        session.clear("chatgpt")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "chatgpt", source: source)
+        try session.setToken(token, for: id, source: source)
         Task { @MainActor in self.isAuthenticated = true }
     }
 

@@ -7,7 +7,13 @@ import SwiftUI
 /// (cookies, session tokens, API keys) and calling the upstream API to
 /// surface current usage. Providers are stateless beyond their config.
 public protocol UsageProvider: AnyObject, Identifiable {
+    /// Unique per account: "claude" for the only one, "claude#2" for a second.
     var id: String { get }
+    /// The service family, shared by every account of it. Logos and labels key
+    /// off this; storage and identity key off `id`.
+    var serviceID: String { get }
+    /// Which account, when a service is signed into more than once.
+    var accountID: String? { get }
     var displayName: String { get }
     var iconName: String { get }
     var accentColor: Color { get }
@@ -26,9 +32,14 @@ public protocol UsageProvider: AnyObject, Identifiable {
     /// wrapper reaches the implementation that persists the choice, rather than
     /// assigning `isEnabled` and silently skipping the UserDefaults write.
     func setEnabled(_ enabled: Bool)
+    /// Store a credential. `source` decides whether it is persisted at all —
+    /// browser sessions are re-derived, so they stay in memory.
+    func saveTokenManually(_ token: String, source: SessionSource) throws
 }
 
 public extension UsageProvider {
+    var serviceID: String { id }
+    var accountID: String? { nil }
     var webLogin: WebLoginConfig? { nil }
     var dashboardURL: URL? { nil }
 

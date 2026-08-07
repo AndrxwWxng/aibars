@@ -14,7 +14,11 @@ import SwiftUI
 /// What it does expose is the remaining balance, which this provider reports as
 /// a status-only figure.
 public final class DeepSeekProvider: ObservableObject, UsageProvider {
-    public let id = "deepseek"
+    public let id: String
+    /// The account this instance follows, when a service is signed into more
+    /// than once. Nil is the only-account case.
+    public let accountID: String?
+    public var serviceID: String { "deepseek" }
     public let displayName = "DeepSeek"
     public let iconName = "water.waves"
     public let accentColor: Color = Color(red: 0.30, green: 0.42, blue: 1.00)
@@ -24,7 +28,7 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
 
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
-    private let enabledKey = "aibars.deepseek.enabled"
+    private let enabledKey: String
 
     /// The documented balance endpoint.
     private let balanceURL = URL(string: "https://api.deepseek.com/user/balance")!
@@ -33,9 +37,12 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
     /// the unprefixed path fails at the transport level.
     private let compatBalanceURL = URL(string: "https://api.deepseek.com/v1/user/balance")!
 
-    public init() {
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "deepseek#\($0)" } ?? "deepseek"
+        self.enabledKey = "aibars.\(self.id).enabled"
         self.isEnabled = userDefaults.object(forKey: enabledKey) as? Bool ?? true
-        self.isAuthenticated = SessionStore.shared.hasCredential(for: "deepseek")
+        self.isAuthenticated = SessionStore.shared.hasCredential(for: id)
     }
 
     public var dashboardURL: URL? { URL(string: "https://platform.deepseek.com/usage") }
@@ -50,7 +57,7 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
     }
 
     public func fetchUsage() async throws -> UsageData {
-        guard let token = session.token(for: "deepseek") else {
+        guard let token = session.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
 
@@ -84,18 +91,18 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws {
-        if session.token(for: "deepseek") != nil {
+        if session.token(for: id) != nil {
             await MainActor.run { self.isAuthenticated = true }
         }
     }
 
     public func signOut() async throws {
-        session.clear("deepseek")
+        session.clear(id)
         await MainActor.run { self.isAuthenticated = false }
     }
 
     public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
-        try session.setToken(token, for: "deepseek", source: .apiKey)
+        try session.setToken(token, for: id, source: .apiKey)
         Task { @MainActor in self.isAuthenticated = true }
     }
 
