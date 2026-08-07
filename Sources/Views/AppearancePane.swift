@@ -23,7 +23,11 @@ public struct AppearancePane: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
+        // Preview beside the controls, not beneath them. Underneath, it
+        // competed with the form for a 520pt window and the thing you were
+        // adjusting sat off the bottom edge; alongside, a change and its effect
+        // are visible at the same time.
+        HStack(spacing: 0) {
             Form {
                 presetSection
                 sizeSection
@@ -35,6 +39,7 @@ public struct AppearancePane: View {
                 resetSection
             }
             .formStyle(.grouped)
+            .frame(minWidth: 300)
 
             Divider().opacity(0.5)
             preview
@@ -385,9 +390,11 @@ public struct AppearancePane: View {
                     .padding(.bottom, 12)
             }
         }
-        .padding(.top, 8)
-        .frame(height: 214)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 14)
+        // A column, so a comfortable row with six windows is visible whole
+        // rather than cropped to a strip.
+        .frame(width: 300)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
