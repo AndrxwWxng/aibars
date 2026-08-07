@@ -178,13 +178,22 @@ public struct ProviderRow: View {
 
             Spacer(minLength: 4)
 
-            if showsActions && provider.isAuthenticated {
-                HoverIconButton(systemName: "arrow.clockwise", help: "Refresh \(provider.displayName)", action: onRefresh)
-                    .frame(width: 20, height: 18)
-                if provider.dashboardURL != nil {
-                    HoverIconButton(systemName: "arrow.up.right", help: "Open usage page", action: onOpenDashboard)
+            // Reserved, not inserted. Adding the buttons on hover changed the
+            // row's height, so every row grew as the pointer crossed it and the
+            // panel resized under the cursor. They occupy their space always and
+            // only their opacity changes.
+            if reservesActionSpace {
+                HStack(spacing: 0) {
+                    HoverIconButton(systemName: "arrow.clockwise", help: "Refresh \(provider.displayName)", action: onRefresh)
                         .frame(width: 20, height: 18)
+                    if provider.dashboardURL != nil {
+                        HoverIconButton(systemName: "arrow.up.right", help: "Open usage page", action: onOpenDashboard)
+                            .frame(width: 20, height: 18)
+                    }
                 }
+                .opacity(showsActions ? 1 : 0)
+                // Invisible buttons must not be clickable.
+                .allowsHitTesting(showsActions)
             }
 
             trailingValue
@@ -194,6 +203,12 @@ public struct ProviderRow: View {
     /// Hover reveals the per-row actions in place of the plan pill's whitespace,
     /// so the resting state stays uncluttered — unless the user has asked for
     /// them to be permanent, or gone.
+    /// Whether to hold the space at all. `.never` reclaims it; the other modes
+    /// keep it so the row is the same height hovered or not.
+    private var reservesActionSpace: Bool {
+        provider.isAuthenticated && appearance.rowActions != .never
+    }
+
     private var showsActions: Bool {
         switch appearance.rowActions {
         case .onHover: return isHovered
@@ -394,6 +409,9 @@ public struct ProviderRow: View {
     /// the browser profile the session came from — which is at least enough to
     /// tell two accounts apart.
     private var accountLabel: String? {
+        // A name the user typed wins over anything we inferred — they know which
+        // account is which and we frequently do not.
+        if let custom = AppState.customAccountName(for: provider.id) { return custom }
         if case .success(let data) = result, let account = data.accountLabel, !account.isEmpty {
             return account
         }
