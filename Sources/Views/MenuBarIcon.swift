@@ -22,18 +22,27 @@ public enum MenuBarIcon {
     ///   service", which is the whole reason for having bars rather than a
     ///   number. A coloured image can't be a template, so AppKit stops
     ///   recolouring it — which is fine, since the colour is the point.
-    public static func image(levels: [Double], tint: Color?, colourPerBar: Bool = true) -> NSImage {
+    public static func image(
+        levels: [Double],
+        tint: Color?,
+        colourPerBar: Bool = true,
+        height: CGFloat = MenuBarIcon.height,
+        barCount: Int = 4
+    ) -> NSImage {
         // With nothing reporting there is no colour to show, so the glyph goes
         // back to being a template and inherits the menu bar's own treatment.
         let coloured = colourPerBar && levels.contains { $0 > 0 }
-        let key = cacheKey(levels: levels, tint: tint, coloured: coloured)
+        // Height and bar count are settings now, so they belong in the key —
+        // otherwise changing either returns the previously rendered size.
+        let key = cacheKey(levels: levels, tint: tint, coloured: coloured, height: height, barCount: barCount)
         if let cached = cache.withLock({ $0[key] }) { return cached }
 
         let glyph = UsageMeterGlyph(
             levels: levels,
             alertColor: tint,
             perBarColour: coloured,
-            height: height
+            height: height,
+            barCount: barCount
         )
         // Rendered in black; a template image's colour is supplied by AppKit.
         let renderer = ImageRenderer(content: glyph.foregroundStyle(.black))
@@ -50,13 +59,19 @@ public enum MenuBarIcon {
     /// Levels are bucketed before they reach the cache key: the meter can only
     /// show so many distinct bar heights, and a key per raw percentage would
     /// re-render on every refresh for no visible difference.
-    private static func cacheKey(levels: [Double], tint: Color?, coloured: Bool) -> String {
+    private static func cacheKey(
+        levels: [Double],
+        tint: Color?,
+        coloured: Bool,
+        height: CGFloat,
+        barCount: Int
+    ) -> String {
         let bucketed = levels
             .map { Int((min(max($0, 0), 1) * 20).rounded()) }
             .sorted(by: >)
-            .prefix(4)
+            .prefix(barCount)
             .map(String.init)
             .joined(separator: "-")
-        return "\(bucketed)|\(tint == nil ? "mono" : "alert")|\(coloured ? "rgb" : "tpl")"
+        return "\(bucketed)|\(tint == nil ? "mono" : "alert")|\(coloured ? "rgb" : "tpl")|\(Int(height))|\(barCount)"
     }
 }

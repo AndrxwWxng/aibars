@@ -26,7 +26,11 @@ public enum SettingsWindowController {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
 
-        window.contentView = NSHostingView(rootView: SettingsView().environmentObject(state))
+        window.contentView = NSHostingView(
+            rootView: SettingsView()
+                .environmentObject(state)
+                .environmentObject(AppearanceSettings.shared)
+        )
         window.center()
         window.isReleasedWhenClosed = false
         self.window = window

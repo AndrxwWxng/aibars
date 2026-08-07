@@ -5,14 +5,16 @@ import aibarsCore
 struct aibarsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state = AppState.shared
+    @StateObject private var appearance = AppearanceSettings.shared
     @State private var showSettings = false
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContentView(state: state, showSettings: $showSettings)
+            MenuBarContentView(state: state, showSettings: $showSettings, appearance: appearance)
                 .environmentObject(state)
+                .environmentObject(appearance)
         } label: {
-            MenuBarLabel(state: state)
+            MenuBarLabel(state: state, appearance: appearance)
         }
         .menuBarExtraStyle(.window)
         .onChange(of: showSettings) { newValue in
@@ -41,25 +43,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// warning threshold, at which point it picks up the usage tint.
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
+    @ObservedObject var appearance: AppearanceSettings
+
+    /// Highest or average across services, whichever the user picked.
+    private var percent: Double { appearance.menuBarPercent(in: state) }
 
     var body: some View {
         HStack(spacing: 5) {
             // A pre-rendered image, not the SwiftUI view: MenuBarExtra draws
             // Shape-based labels as nothing at all.
-            Image(nsImage: MenuBarIcon.image(
-                levels: state.usageLevels,
-                tint: UsageTint.menuBarTint(for: state.topUsagePercent)
-            ))
+            if appearance.menuBarLabel.showsGlyph {
+                Image(nsImage: MenuBarIcon.image(
+                    levels: state.usageLevels,
+                    tint: appearance.menuBarTint(for: percent),
+                    colourPerBar: appearance.coloursEveryMenuBarBar,
+                    height: appearance.menuBarGlyphHeight,
+                    barCount: appearance.menuBarBarCount
+                ))
+            }
 
-            switch state.showInMenuBar {
+            switch appearance.menuBarLabel {
             case .iconOnly:
                 EmptyView()
-            case .iconAndPercent:
+            case .percentOnly, .iconAndPercent:
                 // "0%" would claim every service is untouched when the truth is
                 // that none of them reported.
-                Text(state.usageLevels.isEmpty
-                     ? "–"
-                     : "\(Int((state.topUsagePercent * 100).rounded()))%")
+                Text(state.usageLevels.isEmpty ? "–" : "\(Int((percent * 100).rounded()))%")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .monospacedDigit()
             case .iconAndName:
