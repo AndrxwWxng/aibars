@@ -39,7 +39,9 @@ public struct AppearancePane: View {
                 resetSection
             }
             .formStyle(.grouped)
-            .frame(minWidth: 300)
+            // At least as wide as the other panes were before the preview
+            // existed, so adding it did not narrow the controls.
+            .frame(minWidth: 460)
 
             Divider().opacity(0.5)
             preview

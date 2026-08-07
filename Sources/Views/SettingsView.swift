@@ -73,7 +73,7 @@ public struct SettingsView: View {
                 .scrollContentBackgroundHidden()
                 .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 800, height: 560)
+        .frame(width: 980, height: 600)
         .sheet(item: $showAuthSheet) { provider in
             AuthSheet(provider: provider)
         }
@@ -224,6 +224,9 @@ public struct SettingsView: View {
 
                         signInControl(for: provider)
                             .controlSize(.small)
+                            // One width for every state, or the column of them
+                            // steps in and out as services connect.
+                            .frame(width: 86)
                     }
                     .padding(.vertical, 2)
 
