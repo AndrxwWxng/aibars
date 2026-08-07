@@ -137,6 +137,8 @@ public enum ClaudeUsageParser {
             planName: planName.map { $0.capitalized } ?? "Pro",
             primary: sorted[0],
             secondary: Array(sorted.dropFirst()),
+            // The organisation was already being fetched and then discarded.
+            accountLabel: orgName.isEmpty ? nil : orgName,
             rawJSON: try? JSONSerialization.data(withJSONObject: raw).base64EncodedString()
         )
     }
