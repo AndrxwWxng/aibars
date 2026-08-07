@@ -1,5 +1,9 @@
 import SwiftUI
 
+private extension String {
+    func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
+}
+
 public struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var showAuthSheet: AnyUsageProvider?
@@ -42,19 +46,14 @@ public struct SettingsView: View {
         // the sidebar folds. The sidebar here is a fixed part of the window.
         HStack(spacing: 0) {
             sidebar
-            Divider()
-            VStack(alignment: .leading, spacing: 0) {
-                Text(pane.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .padding(.horizontal, 20)
-                    .padding(.top, 18)
-                    .padding(.bottom, 4)
-                detail
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.top, 22)
+                // Explicit, so the pane is never transparent against a
+                // full-size-content window.
+                .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(width: 660, height: 520)
-        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $showAuthSheet) { provider in
             AuthSheet(provider: provider)
         }
@@ -74,11 +73,10 @@ public struct SettingsView: View {
             Spacer()
         }
         .padding(.horizontal, 8)
-        .padding(.top, 14)
+        // Clears the titlebar, which the sidebar now runs underneath.
+        .padding(.top, 38)
         .frame(width: 176)
-        // A relative tint rather than a named control colour: it stays a subtle
-        // step away from the window background in both appearances.
-        .background(Color.primary.opacity(0.045))
+        .background(VisualEffectBackground(material: .sidebar).ignoresSafeArea())
     }
 
     @ViewBuilder
@@ -228,8 +226,13 @@ public struct SettingsView: View {
         }
         switch state.snapshots[provider.id] {
         case .success(let data):
-            guard let plan = data.planName else { return "Connected" }
-            return "Connected · \(PlanName.pretty(plan, service: provider.displayName))"
+            // Prefer the account over the plan: with more than one subscription
+            // in the list, "which account" is the question "Connected" leaves.
+            let plan = data.planName.map { PlanName.pretty($0, service: provider.displayName) }
+            return [data.accountLabel, plan]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+                .ifEmpty("Connected")
         case .failure:
             return "Connected · not responding"
         case .none:
