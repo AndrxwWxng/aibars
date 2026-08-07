@@ -30,12 +30,21 @@ public final class AppState: ObservableObject {
     @Published public var showsPlanNames: Bool {
         didSet { userDefaults.set(showsPlanNames, forKey: planNamesKey) }
     }
+    /// Show every account of a service, not just the first.
+    ///
+    /// Off by default: most people have one account per service, and someone
+    /// with four Chrome profiles signed into Claude does not want four Claude
+    /// rows unless they asked for them.
+    @Published public var showsAllAccounts: Bool {
+        didSet { userDefaults.set(showsAllAccounts, forKey: allAccountsKey) }
+    }
 
     private let userDefaults = UserDefaults.standard
     private let intervalKey = "aibars.refreshInterval"
     private let displayKey = "aibars.menuBarDisplay"
     private let allWindowsKey = "aibars.showsAllWindows"
     private let planNamesKey = "aibars.showsPlanNames"
+    private let allAccountsKey = "aibars.showsAllAccounts"
     private var refreshTask: Task<Void, Never>?
 
     public enum MenuBarDisplay: String, CaseIterable, Identifiable {
@@ -61,6 +70,7 @@ public final class AppState: ObservableObject {
         // and hiding them by default would mean nobody finds them.
         self.showsAllWindows = userDefaults.object(forKey: allWindowsKey) as? Bool ?? true
         self.showsPlanNames = userDefaults.object(forKey: planNamesKey) as? Bool ?? true
+        self.showsAllAccounts = userDefaults.object(forKey: allAccountsKey) as? Bool ?? false
 
         self.providers = Self.services.map { $0.make(nil) }
     }
@@ -283,6 +293,21 @@ public final class AppState: ObservableObject {
         let values = usageLevels
         guard !values.isEmpty else { return 0 }
         return values.reduce(0, +) / Double(values.count)
+    }
+
+    /// What the dropdown actually lists: ranked, and narrowed to one account
+    /// per service unless the user asked for all of them. The busiest account
+    /// of a service is the one kept, since that is the one worth knowing about.
+    public var visibleProviders: [AnyUsageProvider] {
+        let ranked = rankedProviders
+        guard !showsAllAccounts else { return ranked }
+        var seen: Set<String> = []
+        return ranked.filter { seen.insert($0.serviceID).inserted }
+    }
+
+    /// How many accounts exist for a service, for the settings UI to mention.
+    public func accountCount(ofService serviceID: String) -> Int {
+        providers.filter { $0.serviceID == serviceID }.count
     }
 
     /// Enabled providers in the order the dropdown should show them: the ones

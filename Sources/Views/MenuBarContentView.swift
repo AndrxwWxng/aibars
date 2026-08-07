@@ -11,10 +11,15 @@ public struct MenuBarContentView: View {
     }
 
     @State private var showsDisconnected = false
-    /// Roughly two thirds of a laptop screen. Past this the list scrolls.
-    private static let maximumListHeight: CGFloat = 560
+    /// As much of the screen as the panel can reasonably take, rather than a
+    /// fixed 560pt that clipped the list on every display. Leaves room for the
+    /// menu bar, the header, and a margin at the bottom.
+    private var maximumListHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 800
+        return max(320, screen - 160)
+    }
 
-    private var ranked: [AnyUsageProvider] { state.rankedProviders }
+    private var ranked: [AnyUsageProvider] { state.visibleProviders }
     private var connected: [AnyUsageProvider] { ranked.filter(\.isAuthenticated) }
     private var disconnected: [AnyUsageProvider] { ranked.filter { !$0.isAuthenticated } }
 
@@ -66,7 +71,7 @@ public struct MenuBarContentView: View {
                 // preference also works, but only after a layout pass — so the
                 // window opens short and visibly jumps.
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxHeight: Self.maximumListHeight)
+                .frame(maxHeight: maximumListHeight)
                 .scrollBounceBehaviorIfAvailable()
             }
 

@@ -49,11 +49,14 @@ final class PanelLayoutTests: XCTestCase {
     }
 
     /// And it has to stop somewhere, or a long list runs off the screen instead
-    /// of scrolling.
+    /// of scrolling. The ceiling follows the display rather than a fixed number,
+    /// so the invariant is "fits on screen with room for the menu bar", not any
+    /// particular height.
     @MainActor
-    func testHeightIsCapped() {
+    func testHeightStaysOnScreen() {
+        let available = NSScreen.main?.visibleFrame.height ?? 800
         let host = panel(connected: 9)
-        XCTAssertLessThanOrEqual(host.fittingSize.height, 700)
+        XCTAssertLessThanOrEqual(host.fittingSize.height, available - 60)
     }
 
     @MainActor
