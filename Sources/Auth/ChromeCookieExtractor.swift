@@ -33,6 +33,14 @@ public final class ChromeCookieExtractor: CookieExtractor {
         (try? cachedKey?.get()) != nil
     }
 
+    /// Clears a remembered refusal so the next explicit request asks again. A
+    /// key that worked is kept, so approving one browser doesn't re-prompt for
+    /// the others.
+    func forgetFailedKey() {
+        guard let cachedKey, (try? cachedKey.get()) == nil else { return }
+        self.cachedKey = nil
+    }
+
     private func decryptionKey(allowingPrompt: Bool) -> Data? {
         if let cachedKey { return try? cachedKey.get() }
         // Deriving the key is what triggers the dialog, so a background sweep

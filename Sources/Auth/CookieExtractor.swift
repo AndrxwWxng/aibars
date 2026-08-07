@@ -120,10 +120,24 @@ public enum CookieExtractors {
         }
     }
 
-    /// Forgets the cached extractors, so a browser installed or a keychain
-    /// prompt approved mid-session is picked up on the next pass.
+    /// Forgets the cached extractors, so a browser installed mid-session is
+    /// picked up on the next pass. This also discards derived keys, so prefer
+    /// `retryLockedKeys()` when the only thing that changed is the user's mind
+    /// about a keychain prompt.
     public static func invalidate() {
         cached.withLock { $0 = nil }
+    }
+
+    /// Lets a previously refused keychain read be attempted again, without
+    /// throwing away the keys that already worked.
+    ///
+    /// Rebuilding every extractor to retry one refusal meant re-asking for the
+    /// browsers that had already been approved — a dialog per browser, every
+    /// time the user pressed the button.
+    public static func retryLockedKeys() {
+        for extractor in available() {
+            (extractor as? ChromeCookieExtractor)?.forgetFailedKey()
+        }
     }
 
     /// Resolves several providers' sessions in one sweep.

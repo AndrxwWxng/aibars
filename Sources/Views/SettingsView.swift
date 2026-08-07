@@ -73,7 +73,7 @@ public struct SettingsView: View {
                 .scrollContentBackgroundHidden()
                 .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 660, height: 520)
+        .frame(width: 800, height: 560)
         .sheet(item: $showAuthSheet) { provider in
             AuthSheet(provider: provider)
         }
@@ -286,16 +286,28 @@ public struct SettingsView: View {
     private func adopt() async {
         isAdopting = true
         defer { isAdopting = false }
-        // A browser installed, or a keychain prompt approved, since the last
-        // sweep should count.
-        CookieExtractors.invalidate()
+        // Retry refusals only. Rebuilding every extractor re-asked for the
+        // browsers already approved, which is why pressing this repeatedly
+        // produced a dialog per browser per press.
+        CookieExtractors.retryLockedKeys()
         // The user clicked the button, so a keychain prompt is expected here.
         let adopted = await state.adoptBrowserSessions(allowingKeychainPrompt: true)
         if adopted.isEmpty {
-            adoptionStatus = "No new sessions found in your browsers."
+            adoptionStatus = lockedTotal > 0
+                ? "Keychain access was refused, so those accounts stay locked."
+                : "No new sessions found in your browsers."
         } else {
+            // Unlocking accounts and then not listing them is the same as not
+            // unlocking them. Asking for more accounts is asking to see them.
+            let extra = adopted.filter { state.provider(for: $0)?.accountID != nil }
+            if !extra.isEmpty {
+                AppearanceSettings.shared.showsAllAccounts = true
+            }
             let names = adopted.compactMap { state.provider(for: $0)?.displayName }
-            adoptionStatus = "Connected \(names.joined(separator: ", "))."
+            let unique = Array(Set(names)).sorted()
+            adoptionStatus = extra.isEmpty
+                ? "Connected \(unique.joined(separator: ", "))."
+                : "Connected \(adopted.count) account\(adopted.count == 1 ? "" : "s") — \(unique.joined(separator: ", ")). Now showing every account."
             await state.refreshAll()
         }
     }
