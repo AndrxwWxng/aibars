@@ -41,6 +41,11 @@ public enum ChromeCookieCrypto {
         }
     }
 
+    /// How many times the login keychain has been asked, for the life of the
+    /// process. Each ask is a dialog the user has to answer, so this is the
+    /// number that has to stay at one per browser.
+    static let keychainRequests = Lock<Int>(0)
+
     /// Reads the browser's Safe Storage password out of the login keychain.
     public static func storageKey(service: String, account: String) throws -> Data {
         let query: [String: Any] = [
@@ -50,6 +55,7 @@ public enum ChromeCookieCrypto {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        keychainRequests.withLock { $0 += 1 }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
