@@ -136,8 +136,8 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws {
-        let found = await Task.detached(priority: .utility) {
-            GoogleGeminiProvider.browserCookies()
+        let found = await Task.detached(priority: .utility) { [wanted = session.token(for: id)] in
+            GoogleGeminiProvider.browserCookies(matching: wanted)
         }.value
         guard let found else { return }
 
@@ -276,42 +276,67 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     /// Prefers whatever the browsers hold right now, because `__Secure-1PSIDTS`
     /// in the Keychain is stale within minutes. Falls back to a pasted value.
     private func currentCookieHeader() async -> String? {
-        let live = await Task.detached(priority: .utility) {
-            GoogleGeminiProvider.browserCookies()
+        // Scoped to this account's own session. Google rotates
+        // __Secure-1PSIDTS within minutes, so the browser still has to be
+        // consulted every fetch — but for the right profile.
+        let stored = session.token(for: id)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wanted = (stored?.contains("=") ?? true) ? nil : stored
+        let live = await Task.detached(priority: .utility) { [wanted] in
+            GoogleGeminiProvider.browserCookies(matching: wanted)
         }.value
 
         if let live {
-            if session.token(for: id) != live.sid {
+            // Only claim a session when this account had none. Writing a
+            // different account's SID here is what made them converge.
+            if stored == nil || stored?.isEmpty == true {
                 try? session.setToken(live.sid, for: id, source: .browserCookie, accountHint: live.browser.displayName)
             }
             return live.header
         }
 
-        guard let stored = session.token(for: id)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !stored.isEmpty else { return nil }
+        guard let stored, !stored.isEmpty else { return nil }
         // A paste is either a whole Cookie header copied from DevTools or a bare
         // __Secure-1PSID value. The bare value will usually earn a logged-out
         // shell, which surfaces as .sessionExpired.
         return stored.contains("=") ? stored : "\(Self.primaryCookieName)=\(stored)"
     }
 
-    private static func browserCookies() -> ResolvedCookies? {
+    /// Resolves the cookie family for one account.
+    ///
+    /// `matching` is the account's own `__Secure-1PSID`. Without it this took the
+    /// first profile it found for every instance, so several Gemini accounts all
+    /// read one session — same usage, same address — and each overwrote its own
+    /// stored token with that session's. Cookies must be grouped by profile and
+    /// the group matched to the account, because a profile holds exactly one
+    /// Google session and the family only makes sense taken together.
+    private static func browserCookies(matching sid: String?) -> ResolvedCookies? {
+        var fallback: ResolvedCookies?
         for extractor in CookieExtractors.available() {
             guard let cookies = try? extractor.cookies(for: "google.com") else { continue }
-            var byName: [String: String] = [:]
-            for cookie in cookies
-            where cookieFamily.contains(cookie.name)
-                && cookieHosts.contains(cookie.domain.lowercased())
-                && !cookie.value.isEmpty {
-                if byName[cookie.name] == nil { byName[cookie.name] = cookie.value }
+            for profile in Set(cookies.map { $0.profile ?? "" }).sorted() {
+                var byName: [String: String] = [:]
+                for cookie in cookies
+                where (cookie.profile ?? "") == profile
+                    && cookieFamily.contains(cookie.name)
+                    && cookieHosts.contains(cookie.domain.lowercased())
+                    && !cookie.value.isEmpty {
+                    if byName[cookie.name] == nil { byName[cookie.name] = cookie.value }
+                }
+                guard let found = byName[primaryCookieName] else { continue }
+                let header = cookieFamily
+                    .compactMap { name in byName[name].map { "\(name)=\($0)" } }
+                    .joined(separator: "; ")
+                let resolved = ResolvedCookies(header: header, sid: found, browser: extractor.browser)
+                if let sid {
+                    if found == sid { return resolved }
+                } else {
+                    // No account to match yet: remember the first and keep looking
+                    // in case a later profile is an exact match.
+                    if fallback == nil { fallback = resolved }
+                }
             }
-            guard let sid = byName[primaryCookieName] else { continue }
-            let header = cookieFamily
-                .compactMap { name in byName[name].map { "\(name)=\($0)" } }
-                .joined(separator: "; ")
-            return ResolvedCookies(header: header, sid: sid, browser: extractor.browser)
         }
-        return nil
+        return fallback
     }
 
     // MARK: - Helpers
