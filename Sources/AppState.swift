@@ -147,8 +147,34 @@ public final class AppState: ObservableObject {
             }
             for await (id, result) in group {
                 snapshots[id] = clarify(result)
+                await discardRejectedCredential(id, result)
             }
         }
+    }
+
+    /// A credential the service has rejected is not a credential.
+    ///
+    /// An expired session left `isAuthenticated` true because a token still
+    /// existed, so the row read "Connected · not responding" — which invites
+    /// waiting for it to recover. It never will. Dropping the token turns those
+    /// rows into "Not connected" with a Sign in button, and lets an extra
+    /// account whose session has died be pruned instead of sitting there
+    /// failing forever.
+    ///
+    /// The sign-out mark is deliberately not set: the session expired on its
+    /// own, so a fresh one appearing in the browser should still be adopted.
+    private func discardRejectedCredential(
+        _ providerID: String,
+        _ result: Result<UsageData, ProviderError>
+    ) async {
+        guard case .failure(let error) = result,
+              case .sessionExpired = error,
+              let provider = provider(for: providerID)
+        else { return }
+        SessionStore.shared.clear(providerID)
+        await provider.syncAuthState()
+        provider.isAuthenticated = false
+        pruneEmptyAccounts()
     }
 
     /// A provider whose token couldn't be read out of the Keychain throws
