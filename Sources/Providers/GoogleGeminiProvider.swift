@@ -193,6 +193,14 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
             throw ProviderError.sessionExpired
         }
 
+        // The page sometimes carries the signed-in address and sometimes does
+        // not — it varies by account and by whatever variant Google serves. When
+        // it is there it is worth far more than "Firefox · Profile 1", so take
+        // it opportunistically and leave the name the user typed to win either way.
+        if let email = Self.signedInEmail(in: html) {
+            discoveredAccount = email
+        }
+
         let tokens = PageTokens(
             at: at,
             bl: Self.wizValue("cfb2h", in: html) ?? "",
@@ -242,7 +250,19 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ProviderError.parse("Gemini batchexecute returned a body that isn't text")
         }
-        return try GoogleGeminiUsageParser.parse(GoogleGeminiUsageParser.envelope(text))
+        let usage = try GoogleGeminiUsageParser.parse(GoogleGeminiUsageParser.envelope(text))
+        guard let account = discoveredAccount else { return usage }
+        // Re-wrap rather than thread the address through the parser: the parser's
+        // job is the usage envelope, and the address came from a different page.
+        return UsageData(
+            providerID: usage.providerID,
+            fetchedAt: usage.fetchedAt,
+            planName: usage.planName,
+            primary: usage.primary,
+            secondary: usage.secondary,
+            accountLabel: account,
+            rawJSON: usage.rawJSON
+        )
     }
 
     // MARK: - Cookies
@@ -297,6 +317,32 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     // MARK: - Helpers
 
     /// Pulls `"<key>":"<value>"` out of the inline WIZ_global_data blob.
+    /// The most recently seen address for this account, if the page named one.
+    private var discoveredAccount: String?
+
+    /// Google's own domains appear as addresses all over the markup, so those
+    /// are excluded rather than reported as the user's account.
+    private static func signedInEmail(in html: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,10}"#
+        ) else { return nil }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        var found: String?
+        regex.enumerateMatches(in: html, range: range) { match, _, stop in
+            guard let match, let r = Range(match.range, in: html) else { return }
+            let candidate = String(html[r])
+            let lower = candidate.lowercased()
+            guard !lower.hasSuffix("google.com"),
+                  !lower.contains("gstatic"),
+                  !lower.contains("googleapis"),
+                  !lower.contains("example")
+            else { return }
+            found = candidate
+            stop.pointee = true
+        }
+        return found
+    }
+
     private static func wizValue(_ key: String, in html: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: "\"\(key)\":\"([^\"]+)\"") else { return nil }
         let range = NSRange(html.startIndex..<html.endIndex, in: html)
