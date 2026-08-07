@@ -189,7 +189,11 @@ struct DisclosureHeader: View {
 
     var body: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+            // Deliberately not animated. MenuBarExtra resizes its window to fit
+            // the content, so animating the rows in means the window chases a
+            // moving target — the panel jitters and the status item redraws
+            // mid-flight.
+            isExpanded.toggle()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.right")

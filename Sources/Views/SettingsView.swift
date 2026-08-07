@@ -4,6 +4,19 @@ private extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
+private extension View {
+    /// `scrollContentBackground` is macOS 13+, which is the deployment target,
+    /// but keep it guarded so the app still builds against older SDKs.
+    @ViewBuilder
+    func scrollContentBackgroundHidden() -> some View {
+        if #available(macOS 13.0, *) {
+            self.scrollContentBackground(.hidden)
+        } else {
+            self
+        }
+    }
+}
+
 public struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var showAuthSheet: AnyUsageProvider?
@@ -48,9 +61,11 @@ public struct SettingsView: View {
             sidebar
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 22)
-                // Explicit, so the pane is never transparent against a
-                // full-size-content window.
+                // The form's own scroll background is hidden and the pane paints
+                // one colour behind everything, titlebar strip included. Two
+                // backgrounds meeting partway down the pane is what produced the
+                // dark band across the top.
+                .scrollContentBackgroundHidden()
                 .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(width: 660, height: 520)
@@ -172,7 +187,7 @@ public struct SettingsView: View {
                 ForEach(state.providers) { provider in
                     HStack(spacing: 10) {
                         ProviderLogo(
-                            providerID: provider.id,
+                            providerID: provider.serviceID,
                             fallbackName: provider.displayName,
                             fallbackColor: provider.accentColor,
                             size: 26
@@ -354,7 +369,7 @@ public struct AuthSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 9) {
                 ProviderLogo(
-                    providerID: provider.id,
+                    providerID: provider.serviceID,
                     fallbackName: provider.displayName,
                     fallbackColor: provider.accentColor,
                     size: 26
