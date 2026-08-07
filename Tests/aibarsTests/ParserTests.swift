@@ -74,20 +74,70 @@ final class ClaudeUsageParserTests: XCTestCase {
 }
 
 final class ChatGPTUsageParserTests: XCTestCase {
-    func testPicksAdvancedAsPrimary() throws {
+    /// The account-check payload, which is all ChatGPT exposes. There is no
+    /// message allowance anywhere in its API — `/backend-api/usage`,
+    /// `/conversation_limit` and `/rate_limits` are all 404 — so the metric is
+    /// status-only and must never claim a quota.
+    func testReportsAnActiveSubscription() throws {
         let raw: [String: Any] = [
-            "account_plan": "Plus",
-            "rate_limits": [
-                "gpt-4o": ["primary": ["used": 5, "limit": 80, "reset_at": "2026-08-01T20:00:00Z"]],
-                "gpt-5":  ["primary": ["used": 30, "limit": 40, "reset_at": "2026-08-01T20:00:00Z"]]
+            "accounts": [
+                "70d6dbe3": [
+                    "entitlement": [
+                        "has_active_subscription": true,
+                        "subscription_plan": "chatgptplusplan",
+                        "renews_at": "2026-09-01T00:00:00Z"
+                    ]
+                ]
+            ]
+        ]
+        let data = ChatGPTUsageParser.parse(raw, account: "someone@example.com")
+        XCTAssertEqual(data.planName, "Plus")
+        XCTAssertEqual(data.accountLabel, "someone@example.com")
+        XCTAssertEqual(data.primary.limit, 0, "there is no quota to report")
+        XCTAssertEqual(data.primary.label, "Subscription active")
+        XCTAssertNotNil(data.primary.resetDate)
+    }
+
+    /// A lapsed subscription still returns its old plan identifier, so the flag
+    /// decides — otherwise an expired account reads as Plus forever.
+    func testLapsedSubscriptionReadsAsFree() {
+        let raw: [String: Any] = [
+            "accounts": [
+                "a": [
+                    "entitlement": [
+                        "has_active_subscription": 0,
+                        "subscription_plan": "chatgptplusplan",
+                        "expires_at": "2025-12-03T04:55:31Z"
+                    ]
+                ]
             ]
         ]
         let data = ChatGPTUsageParser.parse(raw)
-        XCTAssertEqual(data.primary.label, "GPT-5")
-        XCTAssertEqual(data.primary.used, 30)
-        XCTAssertEqual(data.secondary.count, 1)
-        let secondary = try XCTUnwrap(data.secondary.first)
-        XCTAssertEqual(secondary.label, "GPT-4o")
+        XCTAssertEqual(data.planName, "Free")
+        XCTAssertEqual(data.primary.label, "No active subscription")
+    }
+
+    func testPrefersThePayingAccount() {
+        let raw: [String: Any] = [
+            "accounts": [
+                "free": ["entitlement": ["has_active_subscription": 0, "subscription_plan": "free"]],
+                "paid": ["entitlement": ["has_active_subscription": true, "subscription_plan": "chatgptproplan"]]
+            ]
+        ]
+        XCTAssertEqual(ChatGPTUsageParser.parse(raw).planName, "Pro")
+    }
+
+    func testUnknownPlanIdentifierIsTidiedRatherThanShown() {
+        let raw: [String: Any] = [
+            "accounts": ["a": ["entitlement": ["has_active_subscription": true, "subscription_plan": "chatgptbusinessplan"]]]
+        ]
+        XCTAssertEqual(ChatGPTUsageParser.parse(raw).planName, "Business")
+    }
+
+    func testEmptyPayloadDoesNotCrash() {
+        let data = ChatGPTUsageParser.parse([:])
+        XCTAssertEqual(data.planName, "Free")
+        XCTAssertEqual(data.primary.limit, 0)
     }
 }
 

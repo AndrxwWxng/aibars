@@ -52,6 +52,10 @@ public struct UsageData: Codable, Hashable {
     public let planName: String?
     public let primary: UsageMetric
     public let secondary: [UsageMetric]
+    /// Which account this is, when the service says. With several subscriptions
+    /// in one list, "Connected" leaves open the obvious question of connected
+    /// as whom.
+    public let accountLabel: String?
     public let rawJSON: String?
 
     public init(
@@ -60,6 +64,7 @@ public struct UsageData: Codable, Hashable {
         planName: String? = nil,
         primary: UsageMetric,
         secondary: [UsageMetric] = [],
+        accountLabel: String? = nil,
         rawJSON: String? = nil
     ) {
         self.providerID = providerID
@@ -67,6 +72,7 @@ public struct UsageData: Codable, Hashable {
         self.planName = planName
         self.primary = primary
         self.secondary = secondary
+        self.accountLabel = accountLabel
         self.rawJSON = rawJSON
     }
 }

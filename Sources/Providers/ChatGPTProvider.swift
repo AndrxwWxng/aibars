@@ -33,60 +33,51 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
         )
     }
 
-    /// Two legs, because `/backend-api` does not accept the session cookie.
+    /// Two legs, because `/backend-api` does not accept the session cookie: the
+    /// web app trades it for a short-lived bearer token at `/api/auth/session`
+    /// first.
     ///
-    /// `/backend-api/usage` answered 404 for a signed-in Plus account: the web
-    /// app first exchanges its cookie for a short-lived bearer token at
-    /// `/api/auth/session`, then sends that as `Authorization` to
-    /// `/backend-api/*`. The cookie alone reaches nothing.
-    ///
-    /// Which endpoint carries the message allowance has also moved more than
-    /// once, so a few candidates are tried in order and the first recognisable
-    /// shape wins. All of this is undocumented and may break again.
+    /// There is no message allowance to report. `/backend-api/usage`,
+    /// `/conversation_limit` and `/rate_limits` are all 404 for a signed-in
+    /// account — ChatGPT delivers rate limits inline with conversation
+    /// responses rather than exposing them as something you can ask for. So
+    /// rather than inventing a number or failing loudly, this reports what the
+    /// account genuinely publishes: who is signed in, which plan they are on,
+    /// and when it renews.
     public func fetchUsage() async throws -> UsageData {
         guard let token = session.token(for: "chatgpt") else {
             throw ProviderError.notAuthenticated
         }
 
-        let accessToken = try await accessToken(sessionToken: token)
+        let identity = try await identity(sessionToken: token)
         let http = ProviderHTTP(headers: [
-            "Authorization": "Bearer \(accessToken)",
+            "Authorization": "Bearer \(identity.accessToken)",
             "Origin": "https://chatgpt.com",
             "Referer": "https://chatgpt.com/",
             "User-Agent": Self.browserUserAgent
         ])
 
-        var lastError: ProviderError = .parse("No ChatGPT usage endpoint answered")
-        for path in Self.usagePaths {
-            guard let url = URL(string: "https://chatgpt.com\(path)") else { continue }
-            do {
-                let (data, _) = try await http.get(url)
-                guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-                    lastError = .parse("\(path) returned \(data.count) bytes that are not a JSON object")
-                    continue
-                }
-                let usage = ChatGPTUsageParser.parse(raw)
-                // A shape with no recognisable allowance is not worth reporting
-                // as success; try the next candidate.
-                if usage.primary.limit > 0 || !usage.secondary.isEmpty {
-                    await MainActor.run { self.lastError = nil }
-                    return usage
-                }
-                lastError = .parse("\(path) had no recognisable message allowance")
-            } catch let error as ProviderError {
-                if error.isAuth {
-                    await MainActor.run { self.isAuthenticated = false }
-                    throw error
-                }
-                lastError = error
+        do {
+            let url = URL(string: "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27")!
+            let (data, _) = try await http.get(url)
+            guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                throw ProviderError.parse("Account check returned \(data.count) bytes that are not JSON")
             }
+            let usage = ChatGPTUsageParser.parse(raw, account: identity.email)
+            await MainActor.run { self.lastError = nil }
+            return usage
+        } catch let error as ProviderError {
+            if error.isAuth {
+                await MainActor.run { self.isAuthenticated = false }
+            }
+            await MainActor.run { self.lastError = error }
+            throw error
         }
-        await MainActor.run { self.lastError = lastError }
-        throw lastError
     }
 
-    /// The web app's own cookie-for-token exchange.
-    private func accessToken(sessionToken: String) async throws -> String {
+    /// The web app's own cookie-for-token exchange. It also names the signed-in
+    /// account, which is the only place that comes from.
+    private func identity(sessionToken: String) async throws -> (accessToken: String, email: String?) {
         let url = URL(string: "https://chatgpt.com/api/auth/session")!
         let (data, _) = try await ProviderHTTP(headers: [
             "Cookie": "\(cookieName)=\(sessionToken)",
@@ -101,16 +92,9 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
             // An expired cookie gets an empty object rather than an error.
             throw ProviderError.sessionExpired
         }
-        return accessToken
+        let email = (raw["user"] as? [String: Any])?["email"] as? String
+        return (accessToken, email)
     }
-
-    /// Tried in order. The first two are where the allowance has lived most
-    /// recently; `/models` is the fallback that at least confirms the session.
-    private static let usagePaths = [
-        "/backend-api/conversation_limit",
-        "/backend-api/accounts/check/v4-2023-04-27",
-        "/backend-api/models"
-    ]
 
     private static let browserUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -140,67 +124,69 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
 }
 
 public enum ChatGPTUsageParser {
-    public static func parse(_ raw: [String: Any]) -> UsageData {
-        // Known shape: { "total_usage": { "messages": ... }, "plan": ..., "rate_limits": { ... } }
-        let totalUsage = raw["total_usage"] as? [String: Any] ?? [:]
-        let planName = (raw["account_plan"] as? String) ?? (raw["plan"] as? String) ?? "Plus"
-        let rateLimits = raw["rate_limits"] as? [String: Any] ?? [:]
+    /// Reads `/backend-api/accounts/check/v4-2023-04-27`, whose useful part is
+    /// the entitlement:
+    ///
+    ///     entitlement: { has_active_subscription: 0,
+    ///                    subscription_plan: "chatgptplusplan",
+    ///                    renews_at: null, expires_at: "2025-12-03T…" }
+    ///
+    /// No message counts appear anywhere in it, so the metric is status-only —
+    /// a zero limit, which the row renders as a state rather than a bar. An
+    /// invented denominator would be worse than saying nothing.
+    public static func parse(_ raw: [String: Any], account: String? = nil) -> UsageData {
+        let entitlement = accounts(in: raw)
+            .compactMap { $0["entitlement"] as? [String: Any] }
+            // Prefer whichever account is actually paying.
+            .sorted { isActive($0) && !isActive($1) }
+            .first ?? [:]
 
-        let messageCount = ProviderNumber.coerce(totalUsage["num_messages"])
-            ?? ProviderNumber.coerce(totalUsage["messages"])
-            ?? 0
-
-        var primary = UsageMetric(
-            label: "Messages",
-            used: messageCount,
-            limit: 0,
-            unit: "msgs",
-            windowLabel: "Last 30 days"
-        )
-
-        var secondary: [UsageMetric] = []
-
-        // Rate limits are per-window (e.g. 3h, 24h). Each looks like:
-        //   { "primary": { "used": 12, "limit": 40, "reset_at": "..." } }
-        for (key, value) in rateLimits {
-            guard let dict = value as? [String: Any],
-                  let primaryBucket = dict["primary"] as? [String: Any] else { continue }
-            let used = ProviderNumber.coerce(primaryBucket["used"]) ?? 0
-            let limit = ProviderNumber.coerce(primaryBucket["limit"]) ?? 0
-            let reset = (primaryBucket["reset_at"] as? String).flatMap { ProviderDate.parse($0) }
-            if limit > 0 {
-                let label: String
-                switch key {
-                case "gpt-3.5": label = "GPT-3.5"
-                case "gpt-4": label = "GPT-4"
-                case "gpt-4o": label = "GPT-4o"
-                case "gpt-5": label = "GPT-5"
-                case "o1": label = "o1"
-                case "o3": label = "o3"
-                default: label = key
-                }
-                let metric = UsageMetric(
-                    label: label,
-                    used: used,
-                    limit: limit,
-                    unit: "msgs",
-                    resetDate: reset,
-                    windowLabel: "Window"
-                )
-                if key.contains("gpt-5") || key.contains("o1") || key.contains("o3") {
-                    primary = metric
-                } else {
-                    secondary.append(metric)
-                }
-            }
-        }
+        let active = isActive(entitlement)
+        let plan = (entitlement["subscription_plan"] as? String).map(planName(from:))
+        let renewal = ["renews_at", "expires_at", "cancels_at"]
+            .compactMap { entitlement[$0] as? String }
+            .compactMap { ProviderDate.parse($0) }
+            .first
 
         return UsageData(
             providerID: "chatgpt",
-            planName: planName,
-            primary: primary,
-            secondary: secondary,
+            planName: active ? (plan ?? "Plus") : "Free",
+            primary: UsageMetric(
+                label: active ? "Subscription active" : "No active subscription",
+                used: active ? 1 : 0,
+                limit: 0,
+                unit: nil,
+                resetDate: active ? renewal : nil,
+                windowLabel: nil
+            ),
+            secondary: [],
+            accountLabel: account,
             rawJSON: try? JSONSerialization.data(withJSONObject: raw).base64EncodedString()
         )
+    }
+
+    private static func accounts(in raw: [String: Any]) -> [[String: Any]] {
+        guard let accounts = raw["accounts"] as? [String: Any] else { return [] }
+        return accounts.values.compactMap { $0 as? [String: Any] }
+    }
+
+    private static func isActive(_ entitlement: [String: Any]) -> Bool {
+        if let flag = entitlement["has_active_subscription"] as? Bool { return flag }
+        return (ProviderNumber.coerce(entitlement["has_active_subscription"]) ?? 0) > 0
+    }
+
+    /// "chatgptplusplan" is not a label anyone should read.
+    private static func planName(from identifier: String) -> String {
+        switch identifier {
+        case "chatgptplusplan": return "Plus"
+        case "chatgptproplan": return "Pro"
+        case "chatgptteamplan": return "Team"
+        case "chatgptenterpriseplan": return "Enterprise"
+        default:
+            let trimmed = identifier
+                .replacingOccurrences(of: "chatgpt", with: "")
+                .replacingOccurrences(of: "plan", with: "")
+            return trimmed.isEmpty ? identifier : trimmed.capitalized
+        }
     }
 }
