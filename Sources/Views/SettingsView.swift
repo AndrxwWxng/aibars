@@ -120,6 +120,14 @@ public struct SettingsView: View {
             Section {
                 Toggle("Show every usage window", isOn: $state.showsAllWindows)
                 Toggle("Show plan names", isOn: $state.showsPlanNames)
+                Toggle("Show every account", isOn: $state.showsAllAccounts)
+                if extraAccounts > 0 {
+                    Text(state.showsAllAccounts
+                         ? "Showing \(extraAccounts) extra account\(extraAccounts == 1 ? "" : "s")."
+                         : "\(extraAccounts) extra account\(extraAccounts == 1 ? " is" : "s are") hidden.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Text("Dropdown")
             } footer: {
@@ -154,6 +162,11 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Accounts beyond the first for any service — what the toggle reveals.
+    private var extraAccounts: Int {
+        state.providers.count - Set(state.providers.map(\.serviceID)).count
     }
 
     private var providersTab: some View {
