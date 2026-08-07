@@ -374,6 +374,12 @@ public struct AppearancePane: View {
 
     // MARK: - The live sample
 
+    /// Tracks the panel width being previewed, so the sample is never clipped.
+    /// Bounded, because Dashboard's 460 would otherwise push the controls out.
+    private var previewColumnWidth: CGFloat {
+        min(max(appearance.panelWidth + 34, 340), 420)
+    }
+
     private var preview: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Preview — hovers like the real panel")
@@ -393,9 +399,10 @@ public struct AppearancePane: View {
             }
         }
         .padding(.top, 14)
-        // A column, so a comfortable row with six windows is visible whole
-        // rather than cropped to a strip.
-        .frame(width: 300)
+        // Wide enough for the panel it is previewing, plus its padding. At 300
+        // the sample was 356 and its right edge was cut off — a preview that
+        // hides what you are adjusting is worse than none.
+        .frame(width: previewColumnWidth)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .underPageBackgroundColor))
     }
