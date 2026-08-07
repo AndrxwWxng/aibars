@@ -20,6 +20,11 @@ public final class CursorProvider: ObservableObject, UsageProvider {
     private let userDefaults = UserDefaults.standard
     private let enabledKey: String
 
+    /// The signed-in address, once `/api/auth/me` has named it. Cached because
+    /// it does not change between refreshes and a second request per minute for
+    /// a value that never moves is waste.
+    private var discoveredAccount: String?
+
     public init(accountID: String? = nil) {
         self.accountID = accountID
         self.id = accountID.map { "cursor#\($0)" } ?? "cursor"
@@ -56,7 +61,37 @@ public final class CursorProvider: ObservableObject, UsageProvider {
         ]).get(url)
 
         let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        return CursorUsageParser.parse(raw)
+        var usage = CursorUsageParser.parse(raw)
+
+        if discoveredAccount == nil {
+            discoveredAccount = try? await accountEmail(cookie: token)
+        }
+        if let account = discoveredAccount {
+            usage = UsageData(
+                providerID: usage.providerID,
+                fetchedAt: usage.fetchedAt,
+                planName: usage.planName,
+                primary: usage.primary,
+                secondary: usage.secondary,
+                accountLabel: account,
+                rawJSON: usage.rawJSON
+            )
+        }
+        return usage
+    }
+
+    /// `/api/auth/me` answers with the account behind the session. Failure is not
+    /// worth surfacing — the usage already arrived, and an unnamed row is a
+    /// smaller problem than a row that errors over a label.
+    private func accountEmail(cookie token: String) async throws -> String? {
+        let url = URL(string: "https://cursor.com/api/auth/me")!
+        let (data, _) = try await ProviderHTTP(headers: [
+            "Cookie": "\(cookieName)=\(token)",
+            "Accept": "application/json"
+        ]).get(url)
+        let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let email = raw?["email"] as? String
+        return (email?.isEmpty ?? true) ? nil : email
     }
 
     public func authenticate() async throws {
