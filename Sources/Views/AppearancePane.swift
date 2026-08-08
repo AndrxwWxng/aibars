@@ -58,7 +58,7 @@ public struct AppearancePane: View {
                 spacing: 6
             ) {
                 ForEach(AppearanceSettings.Preset.allCases) { preset in
-                    PresetChip(
+                    SelectableChip(
                         title: preset.label,
                         isSelected: appearance.matchingPreset == preset,
                         help: preset.summary
@@ -446,37 +446,6 @@ private struct TunerRow: View {
 
 /// One preset, styled like the settings sidebar rows so the selected one reads
 /// as a state rather than a button that was pressed a while ago.
-private struct PresetChip: View {
-    let title: String
-    let isSelected: Bool
-    let help: String
-    let action: () -> Void
-
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(background)
-                )
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .help(help)
-    }
-
-    private var background: Color {
-        if isSelected { return .accentColor }
-        return Color.primary.opacity(isHovered ? 0.10 : 0.06)
-    }
-}
 
 /// The colour ramp end to end, with the bands where the thresholds currently
 /// put them. Two sliders describe the ramp; this is the ramp.
