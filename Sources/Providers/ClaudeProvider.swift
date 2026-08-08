@@ -141,13 +141,50 @@ public enum ClaudeUsageParser {
 
         return UsageData(
             providerID: "claude",
-            planName: planName.map { $0.capitalized } ?? "Pro",
+            planName: tierName(planName),
             primary: sorted[0],
             secondary: Array(sorted.dropFirst()),
-            // The organisation was already being fetched and then discarded.
-            accountLabel: orgName.isEmpty ? nil : orgName,
+            accountLabel: accountName(orgName),
             rawJSON: try? JSONSerialization.data(withJSONObject: raw).base64EncodedString()
         )
+    }
+
+    /// Turns a rate-limit tier into a plan someone would recognise.
+    ///
+    /// The API answers with identifiers like `Default_Claude_Max_20X` or
+    /// `Default_Claude_Ai`. Stripping the boilerplate off the latter leaves "Ai",
+    /// which is the product's name rather than a plan — so the tiers are mapped
+    /// rather than tidied, and only an unrecognised one falls back to tidying.
+    private static func tierName(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "Pro" }
+        let lower = raw.lowercased()
+        if lower.contains("max") {
+            // "Max_20X" is a multiplier worth keeping; "Max" alone is not.
+            if let multiplier = lower.split(separator: "_").last(where: { $0.hasSuffix("x") }),
+               let digits = Int(multiplier.dropLast()) {
+                return "Max \(digits)×"
+            }
+            return "Max"
+        }
+        if lower.contains("team") { return "Team" }
+        if lower.contains("enterprise") { return "Enterprise" }
+        if lower.contains("pro") { return "Pro" }
+        // `claude_ai` with nothing else is the tier every free account reports.
+        if lower.replacingOccurrences(of: "default_", with: "") == "claude_ai" { return "Free" }
+        return PlanName.pretty(raw, service: "Claude")
+    }
+
+    /// Personal organisations are all named "<email>'s Organization", so the
+    /// suffix is eleven characters that distinguish nothing — and it pushed the
+    /// address itself into an ellipsis.
+    private static func accountName(_ orgName: String) -> String? {
+        guard !orgName.isEmpty else { return nil }
+        for suffix in ["'s Organization", "’s Organization", "'s Org", "’s Org"] {
+            if orgName.hasSuffix(suffix) {
+                return String(orgName.dropLast(suffix.count))
+            }
+        }
+        return orgName
     }
 
     private static func metrics(from limits: [[String: Any]]) -> [UsageMetric] {

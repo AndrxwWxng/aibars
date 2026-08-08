@@ -234,3 +234,33 @@ final class PlanNameTests: XCTestCase {
         XCTAssertEqual(PlanName.pretty("Cursor", service: "Cursor"), "Cursor")
     }
 }
+
+final class ClaudeTierNameTests: XCTestCase {
+    /// The tier identifiers this account has actually reported.
+    func testMapsRealTiers() throws {
+        func plan(_ tier: String) throws -> String? {
+            let raw: [String: Any] = ["limits": [["kind": "session", "percent": 1]]]
+            return try ClaudeUsageParser.parse(raw, planName: tier, orgName: "").planName
+        }
+        XCTAssertEqual(try plan("Default_Claude_Max_20X"), "Max 20×")
+        XCTAssertEqual(try plan("Default_Claude_Max_5X"), "Max 5×")
+        // Stripping boilerplate off this one used to leave "Ai" — the product's
+        // name, not a plan.
+        XCTAssertEqual(try plan("Default_Claude_Ai"), "Free")
+        XCTAssertEqual(try plan("claude_pro"), "Pro")
+        XCTAssertEqual(try plan("Default_Claude_Team"), "Team")
+    }
+
+    /// Every personal organisation is "<email>'s Organization", so the suffix
+    /// distinguishes nothing and pushed the address into an ellipsis.
+    func testDropsTheOrganisationSuffix() throws {
+        let raw: [String: Any] = ["limits": [["kind": "session", "percent": 1]]]
+        let data = try ClaudeUsageParser.parse(
+            raw, planName: nil, orgName: "someone@example.com's Organization"
+        )
+        XCTAssertEqual(data.accountLabel, "someone@example.com")
+
+        let team = try ClaudeUsageParser.parse(raw, planName: nil, orgName: "Acme Inc")
+        XCTAssertEqual(team.accountLabel, "Acme Inc", "a real org name must survive")
+    }
+}
