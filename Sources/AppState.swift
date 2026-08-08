@@ -98,6 +98,8 @@ public final class AppState: ObservableObject {
         Service(id: "deepseek") { AnyUsageProvider(DeepSeekProvider(accountID: $0)) },
         Service(id: "cursor") { AnyUsageProvider(CursorProvider(accountID: $0)) },
         Service(id: "copilot") { AnyUsageProvider(CopilotProvider(accountID: $0)) },
+        Service(id: "openrouter") { AnyUsageProvider(OpenRouterProvider(accountID: $0)) },
+        Service(id: "mistral") { AnyUsageProvider(MistralProvider(accountID: $0)) },
         Service(id: "minimax") { AnyUsageProvider(MiniMaxProvider(accountID: $0)) }
     ]
 
