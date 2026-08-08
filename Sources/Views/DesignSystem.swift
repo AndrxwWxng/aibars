@@ -5,9 +5,9 @@ import SwiftUI
 /// `AppearanceSettings.Metrics` owns everything density and text scale move:
 /// row padding, the panel's three type sizes, bar and ring geometry. This owns
 /// what they don't — the gutters both windows share, the corner radii, the
-/// settings window's own type sizes, hit-target sizes, and the quiet fills that
-/// are currently written as `Color.primary.opacity(0.07)` at seven slightly
-/// different values across four files.
+/// settings window's own type sizes, hit-target sizes, and the quiet fills,
+/// which were seven slightly different `Color.primary.opacity` values across
+/// four files before they were named here.
 ///
 /// The rule for where a number goes: if the user can change it, it belongs in
 /// `Metrics`; if they cannot, it belongs here. Nothing in here is persisted and
@@ -20,8 +20,8 @@ public enum Tokens {
 
     /// Gaps between things, on a 2/4/6/8/12/16/24 scale. Three neighbouring
     /// gaps of 5, 6 and 7pt read as a mistake rather than as a rhythm, which is
-    /// what the panel currently has: `titleLine` at 6, its chips at 5, its
-    /// captions at 4 and its leading column at 7.
+    /// what the panel had: its title line at 6, its chips at 5 and its captions
+    /// at 4.
     public enum Space {
         /// The 1pt that is not a gap: the nudge that drops the leading column
         /// onto a cap-height title, the pill's own vertical padding, and the
@@ -38,22 +38,24 @@ public enum Tokens {
 
         /// Content inset for the panel and for each settings pane's own columns.
         /// `AppearanceSettings.Metrics.rowHorizontalPadding` is this value, and
-        /// so are the three hardcoded 12s that indent the panel's section
-        /// headers — those exist to line up with it and currently only do so by
-        /// coincidence.
+        /// so is the indent on the panel's section headers — they exist to line
+        /// up with the rows beneath them, which they did only by coincidence
+        /// while both were written as a literal 12.
         public static let gutter: CGFloat = 12
         /// How far a row's background is held inside the gutter, so a hovered
         /// card floats instead of touching the window edge.
         public static let cardInset: CGFloat = 6
-        /// Logo-and-dial column to the text beside it. Deliberately off the
-        /// scale: `ProviderRow.textGap` and `SampleRow.textGap` are 11 today,
-        /// and `AppearanceSettings.ringBudget` subtracts `leadingItems + 0` from
-        /// the panel width to decide how wide a dial may be. Moving either
-        /// changes what the dial is allowed to be at a 300pt panel, so they
-        /// are named at their current values rather than rounded onto the scale.
+        /// Logo-and-dial column to the text beside it, at the value both rows
+        /// were tuned at rather than rounded onto the scale: `leadingWidth` in
+        /// `ProviderRow` and in the Appearance pane's sample row both add it to
+        /// the column, and what is left of the panel is the text column their
+        /// chip estimate divides. Rounding it to 12 changes how many chips a
+        /// 300pt row draws.
         public static let leadingColumn: CGFloat = 11
-        /// Logo to dial inside that column. `ProviderRow.leadingSpacing`, and
-        /// the `+ 7` inside `ringBudget`.
+        /// Logo to dial inside that column: the spacing of the `leading` stack
+        /// in both rows, and the gap `AppearanceSettings.ringBudget` subtracts
+        /// along with the logo when it decides how wide a dial may be — which is
+        /// why this one is not free to move either.
         public static let leadingItems: CGFloat = 7
         /// Panel header: above the title line, and below it to the divider.
         /// Asymmetric because the divider reads as part of the bottom edge.
@@ -70,8 +72,8 @@ public enum Tokens {
     // MARK: - Corner radii
 
     /// Named by the kind of surface rather than by size, because each one is a
-    /// different thing: there are four kinds of rounded rectangle in the app and
-    /// five radii (5, 6, 7, 8, 10) drawing them.
+    /// different thing: four kinds of rounded rectangle were being drawn by five
+    /// radii (5, 6, 7, 8, 10), and no call site said which surface it meant.
     public enum Radius {
         /// A borderless icon button's hover plate.
         public static let control: CGFloat = 5
@@ -82,8 +84,8 @@ public enum Tokens {
         /// A floating surface: the appearance sample, a banner, a callout.
         public static let panel: CGFloat = 10
         /// Every corner in the app is continuous. Named so a caller cannot
-        /// forget to say so — the two places that do stand out badly next to a
-        /// neighbour that didn't.
+        /// forget to say so: the two that had forgotten stood out badly beside a
+        /// neighbour that hadn't.
         public static let style: RoundedCornerStyle = .continuous
     }
 
@@ -123,9 +125,11 @@ public enum Tokens {
 
     /// Group-header size: `Ramp.section`, following the panel's text scale
     /// upward only. The smallest scale would take 9pt to 7.6, and an uppercased
-    /// letter-spaced label at that size is a grey smear. Currently computed
-    /// inline in `MenuBarContentView.sectionFontSize` and defaulted again on
-    /// both `DisclosureHeader.fontSize` and `SectionLabel.fontSize`.
+    /// letter-spaced label at that size is a grey smear.
+    ///
+    /// `DisclosureHeader` and `SectionLabel` default their own `fontSize` to the
+    /// unscaled `Ramp.section`, which is right for a caller with no text scale to
+    /// apply and wrong for the panel — so the panel hands them this.
     public static func sectionSize(textScale: Double) -> CGFloat {
         max(Ramp.section, Ramp.section * CGFloat(textScale))
     }
@@ -138,10 +142,9 @@ public enum Tokens {
     /// A `ProgressView`, a status dot and a percentage are each taller than the
     /// text beside them, so a row that sizes itself to whichever one is in it
     /// changes height when a load finishes or a quota arrives. One box, one
-    /// height, whatever fills it. This is the `+ 3` that was written twice in
-    /// `ProviderRow` — on the loading row and inside `StatusLine` — and left off
-    /// the `MetricCaption` that replaces them, so the row lost those 3pt the
-    /// moment a quota arrived and the panel resized around it.
+    /// height, whatever fills it. It was a `+ 3` written twice in `ProviderRow`
+    /// and missing from `MetricCaption`, so a row lost those 3pt the moment a
+    /// quota arrived and the panel resized around it.
     public static func lineBox(_ size: CGFloat) -> CGFloat {
         size + lineBoxPad
     }
@@ -193,12 +196,26 @@ public enum Tokens {
         public static let titlebarInset: CGFloat = 38
         /// The narrowest a settings pane's form may be before its labels wrap.
         public static let formMinWidth: CGFloat = 460
-        /// The Appearance pane's preview column, which tracks the panel width
-        /// being previewed and is held between these. The ceiling is here
-        /// rather than inside the pane because the window's own minimum is
-        /// derived from it.
-        public static let previewColumnMin: CGFloat = 340
-        public static let previewColumnMax: CGFloat = 420
+        /// The Appearance pane's preview column. Here rather than in the pane
+        /// because the window's own minimum is derived from it.
+        ///
+        /// Deliberately not a function of the panel width being previewed. Sized
+        /// to the sample, the column grew 80pt as `panelWidth` went 300→386 and
+        /// took those 80pt off the form beside it — so dragging the panel-width
+        /// slider re-laid out the form that slider is in and walked the thumb out
+        /// from under the pointer.
+        ///
+        /// It is not a promise that every panel fits in it: the widest the
+        /// settings allow is 520pt, which with the pane's margins wants 548, and a
+        /// column that wide would push the window's minimum past 1180pt. The pane
+        /// scrolls the sample instead — which is why that scroll view has to be
+        /// given a definite width.
+        public static let previewColumn: CGFloat = 420
+        /// The narrowest a preset chip may be. The Appearance pane lays them out
+        /// in an adaptive grid, so this is the floor that decides how many share
+        /// a line — sized for the longest label, "Comfortable", at `Ramp.title`
+        /// with the chip's own padding.
+        public static let presetChip: CGFloat = 104
         /// The narrowest the settings window can be with all three of its
         /// columns whole, and the shortest it can be with a form and a preview
         /// strip in it.
@@ -207,7 +224,7 @@ public enum Tokens {
         /// the columns inside it by 50-80pt, and the column that gave way was
         /// the form — the only one of the three without a fixed frame.
         public static let settingsMinWidth: CGFloat =
-            sidebarWidth + formMinWidth + previewColumnMax + hairline
+            sidebarWidth + formMinWidth + previewColumn + hairline
         public static let settingsMinHeight: CGFloat = 560
         /// A slider and its readout in the Appearance pane.
         public static let sliderWidth: CGFloat = 168
@@ -246,8 +263,8 @@ public enum Tokens {
         public static let border: Double = 0.09
         /// The low stop of a gradient meter fill, as a fraction of the tint.
         public static let gradientFloor: Double = 0.75
-        /// The opacity a `Divider` is drawn at. The panel uses 0.5 and the
-        /// connect dialog 0.6 for the same hairline.
+        /// The opacity a `Divider` is drawn at. One value: the panel drew the
+        /// same hairline at 0.5 and the connect dialog at 0.6.
         public static let divider: Double = 0.5
     }
 
@@ -258,9 +275,9 @@ public enum Tokens {
     }
 
     /// The row background opacity for a background setting and a hover state.
-    /// The same three-case switch exists in `ProviderRow.backgroundOpacity` and
-    /// again in `AppearancePane`'s `SampleRow.backgroundOpacity`, which is how
-    /// the preview and the panel drift.
+    /// One switch for both callers: the panel's rows and the Appearance pane's
+    /// sample row each had their own copy, which is how a preview comes to
+    /// disagree with the thing it is previewing.
     public static func rowBackground(
         _ style: AppearanceSettings.RowBackground,
         isHovered: Bool
@@ -294,10 +311,8 @@ public enum Tokens {
     /// percentage goes through `AppearanceSettings.tint(for:providerAccent:)`,
     /// which the user configures. This is the small set of states that are not
     /// usage — a connection working, a connection that needs the user, a request
-    /// that failed — currently spelled `.green`, `.orange` and `.red` in
-    /// `SettingsView.statusColor`, `ProviderRow.detailContent`,
-    /// `BrowserLoginView.statusRow` and `limitationBanner` with no agreement
-    /// between them.
+    /// that failed — spelled `.green`, `.orange` and `.red` at four call sites in
+    /// three files, with no agreement between them, until they were named here.
     public enum Ink {
         /// Working. Reserved for exactly that: a connected service that is not
         /// answering is not green.
@@ -396,31 +411,35 @@ public struct SelectableChip: View {
     }
 }
 
+/// One line of prose under a form section.
+///
+/// Here rather than in a pane because the settings window has one voice for this
+/// and three chances to lose it: the Appearance pane had eight sections each
+/// saying `.font`, `.foregroundStyle` and `.fixedSize` in their own words, and
+/// `SettingsView` still has a private `PaneFooter` that is these same three
+/// lines. This is the copy to keep.
+public struct SectionFooter: View {
+    public let text: String
+
+    public init(_ text: String) { self.text = text }
+
+    public var body: some View {
+        Text(text)
+            .font(.system(size: Tokens.Ramp.caption))
+            .foregroundStyle(.secondary)
+            // Prose, so it wraps rather than truncating. A footer that is not
+            // allowed to grow downward can only ever say one line, and every
+            // footer in the window says two.
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 // ---------------------------------------------------------------------------
-// What this replaces, so the migration is mechanical rather than a judgement
-// call per call site:
-//
-//   AppearanceSettings.Metrics.rowHorizontalPadding -> Tokens.Space.gutter
-//     (the literal 12 in `metrics`, plus the three hardcoded 12s indenting
-//      section headers in MenuBarContentView, plus SectionLabel's trailing 12)
-//   ringBudget's `+ 7`                             -> Tokens.Space.leadingItems
-//   ProviderRow.textGap / leadingSpacing           -> Space.leadingColumn / leadingItems
-//     (and the private copies of both in AppearancePane.SampleRow)
-//   HoverIconButton's 24 / 12 / radius 5           -> Control.iconButton /
-//                                                     Control.iconGlyph / Radius.control
-//     plus a `size` parameter defaulting to Control.iconButton, so a row can
-//     ask for Control.rowIconButton instead of wrapping a 24pt button in a
-//     20x18 frame it overflows.
-//   ProviderRow's two `+ 3` height floors            -> Tokens.lineBox(_:)
-//   AppearancePane.PresetChip                        -> SelectableChip
-//     (SettingsView's own SidebarRow is already gone)
-//   AppearancePane's 460 / 340 / 420 / 168 / 42      -> Control.formMinWidth /
-//     previewColumnMin / previewColumnMax / sliderWidth / readoutWidth
-//   every RoundedRectangle(cornerRadius: 5|6|7|8|10) -> Tokens.surface(Radius.…)
-//   every Color.primary.opacity(0.05…0.12)           -> Tokens.quiet(Fill.…)
-//   Divider().opacity(0.5|0.6)                       -> .opacity(Fill.divider)
-//   MenuBarContentView.sectionFontSize               -> Tokens.sectionSize(textScale:)
-//   SettingsWindowController's minSize of 980        -> Control.settingsMinWidth
-//     — it is currently 77pt under what SettingsView can lay out, so the window
-//     can be dragged narrower than its own contents.
+// The migration checklist that used to sit here named call sites that no longer
+// exist — the Appearance pane's own literals were the last of them. The rule it
+// enforced outlives it, and this is the only place left to read it off: a spacing,
+// radius or `Color.primary.opacity` written into a view is a value nothing else
+// in the app can agree with, so it is named here first. The exceptions are the
+// literals derived from a subject's own size rather than from the window's
+// rhythm — a logo's tile radius, a glyph's bar width.
 // ---------------------------------------------------------------------------
