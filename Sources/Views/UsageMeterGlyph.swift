@@ -21,6 +21,14 @@ public struct UsageMeterGlyph: View {
     /// one. Four grey bars and a number tell you how bad the worst service is;
     /// they don't tell you whether that's one service or all of them.
     public let perBarColour: Bool
+    /// The colour for everything that is not carrying a usage tint: the baseline
+    /// and the stubs of bars with nothing to report.
+    ///
+    /// `Color.primary` cannot do this job here. A coloured glyph is rasterised
+    /// into a non-template image, so AppKit stops recolouring it and primary
+    /// resolves once — to black — which is invisible on a dark menu bar. The
+    /// caller resolves it against the menu bar's actual appearance instead.
+    public let neutral: Color
     public let height: CGFloat
     public let barCount: Int
 
@@ -29,6 +37,7 @@ public struct UsageMeterGlyph: View {
         alertColor: Color? = nil,
         alertThreshold: Double = 0.85,
         perBarColour: Bool = false,
+        neutral: Color = .primary,
         height: CGFloat = 13,
         barCount: Int = 4
     ) {
@@ -36,6 +45,7 @@ public struct UsageMeterGlyph: View {
         self.alertColor = alertColor
         self.alertThreshold = alertThreshold
         self.perBarColour = perBarColour
+        self.neutral = neutral
         self.height = height
         self.barCount = barCount
     }
@@ -68,7 +78,7 @@ public struct UsageMeterGlyph: View {
             .frame(height: plotHeight, alignment: .bottom)
 
             RoundedRectangle(cornerRadius: baselineHeight / 2, style: .continuous)
-                .fill(Color.primary.opacity(0.55))
+                .fill(neutral.opacity(0.55))
                 .frame(width: totalWidth, height: baselineHeight)
         }
         .frame(width: totalWidth, height: height, alignment: .bottom)
@@ -77,9 +87,9 @@ public struct UsageMeterGlyph: View {
     /// An empty bar stays as a faint stub on the axis — present, but clearly
     /// not reporting usage.
     private func fill(for level: Double) -> Color {
-        guard level > 0 else { return Color.primary.opacity(0.32) }
+        guard level > 0 else { return neutral.opacity(0.32) }
         if perBarColour { return UsageTint.color(for: level) }
-        guard let alertColor, level >= alertThreshold else { return .primary }
+        guard let alertColor, level >= alertThreshold else { return neutral }
         return alertColor
     }
 }

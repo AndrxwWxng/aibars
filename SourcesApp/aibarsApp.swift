@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
     @ObservedObject var appearance: AppearanceSettings
+    /// Observed only so a light/dark switch redraws the glyph, which bakes its
+    /// neutral colour in whenever it is carrying usage tints.
+    @ObservedObject private var systemAppearance = SystemAppearanceObserver.shared
 
     /// Highest or average across services, whichever the user picked.
     private var percent: Double { appearance.menuBarPercent(in: state) }
