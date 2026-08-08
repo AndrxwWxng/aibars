@@ -1,152 +1,60 @@
 import SwiftUI
 import AppKit
 
-/// Drives a sign-in that happens in the user's own browser.
+/// The one window that connects a service, whichever way that service connects.
 ///
-/// aibars opens the provider's login page, then watches the browser's cookie
-/// store until the session appears. Nothing is scraped and no page is rendered
-/// in-app — the user logs in exactly where their passwords and 2FA already live.
-@MainActor
-public final class BrowserLoginCoordinator: ObservableObject {
-    public enum Phase: Equatable {
-        case idle
-        case waiting
-        case found(browser: String)
-        case verifying
-        case failed(String)
-        case done
-    }
-
-    @Published public private(set) var phase: Phase = .idle
-
-    public let browser: DefaultBrowser
-    private let provider: AnyUsageProvider
-    private let config: WebLoginConfig
-    private var pollTask: Task<Void, Never>?
-
-    public init(provider: AnyUsageProvider, config: WebLoginConfig) {
-        self.provider = provider
-        self.config = config
-        self.browser = DefaultBrowser.current()
-    }
-
-    /// Checks for a session that already exists before sending the user
-    /// anywhere. Opening a login page for a service they're already logged into
-    /// is the most annoying thing this window could do.
-    public func begin() {
-        guard config.expectedCookieName != nil, browser.supportsAutomaticCapture else {
-            WebLoginEnvironment.openLoginPage(for: config)
-            phase = .idle
-            return
-        }
-        phase = .waiting
-        Task { [weak self] in
-            guard let self else { return }
-            if await self.checkOnce() { return }
-            WebLoginEnvironment.openLoginPage(for: config)
-            self.startPolling()
-        }
-    }
-
-    public func openLoginPageAgain() {
-        WebLoginEnvironment.openLoginPage(for: config)
-    }
-
-    public func startPolling() {
-        guard config.expectedCookieName != nil else { return }
-        pollTask?.cancel()
-        phase = .waiting
-        pollTask = Task { [weak self] in
-            // Ten minutes at a two-second cadence. Long enough for a password
-            // manager, a 2FA code and a captcha; short enough not to poll a
-            // forgotten window forever.
-            for _ in 0..<300 {
-                guard let self, !Task.isCancelled else { return }
-                if await self.checkOnce() { return }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-            }
-            self?.phase = .failed("Timed out waiting for a session. Paste a token instead.")
-        }
-    }
-
-    /// A single look at the cookie stores. Also the "Check now" button.
-    @discardableResult
-    public func checkOnce() async -> Bool {
-        guard let cookie = await WebLoginEnvironment.capturedCookie(
-            for: config,
-            preferring: browser.kind,
-            // The user is sitting in front of a window they opened to sign in.
-            allowingKeychainPrompt: true
-        ) else {
-            return false
-        }
-        phase = .found(browser: cookie.source.displayName)
-        // Captured from a browser, so it's re-derivable and doesn't need storing.
-        await save(cookie.value, source: .browserCookie)
-        return true
-    }
-
-    public func save(_ value: String, source: SessionSource = .manualPaste) async {
-        let token = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { return }
-        pollTask?.cancel()
-        do {
-            try provider.saveToken(token, source: source)
-            phase = .verifying
-            _ = try await provider.fetchUsage()
-            phase = .done
-        } catch {
-            // The credential saved; only the usage call failed. Keep it — the
-            // endpoint may just be temporarily unhappy — but say so.
-            phase = .failed("Signed in, but the usage check failed: \(error.localizedDescription)")
-        }
-    }
-
-    public func cancel() {
-        pollTask?.cancel()
-        pollTask = nil
-    }
-}
-
-public struct BrowserLoginView: View {
-    @StateObject private var coordinator: BrowserLoginCoordinator
-    private let provider: AnyUsageProvider
-    private let config: WebLoginConfig
+/// There used to be two. `BrowserLoginView` handled anything with a login page,
+/// `AuthSheet` handled MiniMax — the same anatomy at a different width, padding,
+/// logo size, headline weight and section spacing, with a "Try browser cookies"
+/// button that only the one provider with no cookie flow could ever reach, and
+/// instructions chosen by `provider.id == "minimax"`, which quietly gave the
+/// generic text to a second account called "minimax#2".
+///
+/// Everything the dialog shows comes from `ConnectionFlow`: one headline, one
+/// detail line, one set of buttons per stage. Nothing here decides what a state
+/// means, so the window cannot disagree with the row that opened it.
+public struct ConnectDialog: View {
+    @StateObject private var flow: ConnectionFlow
     private let onFinish: (Bool) -> Void
+    private let onContentResize: () -> Void
 
-    @State private var showsManualEntry: Bool
-    @State private var pastedToken: String = ""
-
-    public init(provider: AnyUsageProvider, config: WebLoginConfig, onFinish: @escaping (Bool) -> Void) {
-        self.provider = provider
-        self.config = config
+    /// `onContentResize` is called when the content's height changes — revealing
+    /// the token field, or a stage growing a second line. An `NSWindow` does not
+    /// follow its content, so without this the field opened underneath the
+    /// window's bottom edge and the only way to reach it was to drag the corner.
+    ///
+    /// Isolated because building the dialog builds its `ConnectionFlow`, which is
+    /// main-actor bound. `View` carries that isolation already; saying so here
+    /// stops the `StateObject` thunk depending on an inference rule to get it.
+    @MainActor
+    public init(
+        provider: AnyUsageProvider,
+        method: ConnectionFlow.Method? = nil,
+        onFinish: @escaping (Bool) -> Void,
+        onContentResize: @escaping () -> Void = {}
+    ) {
         self.onFinish = onFinish
-        self._coordinator = StateObject(
-            wrappedValue: BrowserLoginCoordinator(provider: provider, config: config)
-        )
-        // Nothing to watch for in the PAT flow, so the field starts open.
-        self._showsManualEntry = State(initialValue: config.expectedCookieName == nil)
+        self.onContentResize = onContentResize
+        self._flow = StateObject(wrappedValue: ConnectionFlow(provider: provider, method: method))
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             headline
-            Divider().opacity(0.6)
-            steps
-            Divider().opacity(0.6)
+            Divider().opacity(Tokens.Fill.divider)
+            if !steps.isEmpty {
+                stepList
+                Divider().opacity(Tokens.Fill.divider)
+            }
             statusArea
         }
-        .frame(width: 440)
+        .frame(width: Tokens.Control.dialogWidth)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear {
-            coordinator.begin()
-            if !coordinator.browser.supportsAutomaticCapture {
-                showsManualEntry = true
-            }
-        }
-        .onDisappear { coordinator.cancel() }
-        .onChange(of: coordinator.phase) { phase in
-            if phase == .done {
+        .onAppear { flow.begin() }
+        .onDisappear { flow.cancel() }
+        .onChange(of: flow.stage) { stage in
+            onContentResize()
+            if case .connected = stage {
                 // Let the checkmark land before the window disappears.
                 Task {
                     try? await Task.sleep(nanoseconds: 700_000_000)
@@ -154,147 +62,309 @@ public struct BrowserLoginView: View {
                 }
             }
         }
+        .onChange(of: flow.showsTokenField) { _ in onContentResize() }
     }
 
-    // MARK: - Sections
+    // MARK: - Headline
 
     private var headline: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: Tokens.Space.leadingColumn) {
             ProviderLogo(
-                providerID: provider.serviceID,
-                fallbackName: provider.displayName,
-                fallbackColor: provider.accentColor,
-                size: 34
+                providerID: flow.provider.serviceID,
+                fallbackName: flow.provider.displayName,
+                fallbackColor: flow.provider.accentColor,
+                size: Tokens.Control.dialogLogo
             )
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Sign in to \(provider.displayName)")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(config.startURL.host ?? "")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Tokens.Space.tight) {
+                Text(title)
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
+                if let host = flow.provider.webLogin?.startURL.host {
+                    Text(host)
+                        .font(.system(size: Tokens.Ramp.label))
+                        .foregroundStyle(.secondary)
+                }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(Tokens.Space.dialogMargin)
     }
 
-    private var steps: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            StepRow(number: 1, text: "aibars opened the login page in \(coordinator.browser.name).")
-            StepRow(number: 2, text: config.expectedCookieName == nil
-                    ? "Generate the token and copy it."
-                    : "Log in there as you normally would.")
-            StepRow(number: 3, text: config.expectedCookieName == nil
-                    ? "Paste it below."
-                    : "Come back here — aibars picks up the session on its own.")
-        }
-        .padding(16)
+    /// "Sign in" where there is a login to do, "Connect" where the user is
+    /// pasting a key they already have.
+    private var title: String {
+        flow.provider.webLogin == nil
+            ? "Connect \(flow.provider.displayName)"
+            : "Sign in to \(flow.provider.displayName)"
     }
+
+    // MARK: - Steps
+
+    /// What the user is expected to do, in order. Empty for a pasted key: there
+    /// is no browser trip to narrate, and three numbered circles around "paste
+    /// your token" is ceremony.
+    private var steps: [String] {
+        switch flow.method {
+        case .session:
+            return [
+                "aibars opened the login page in \(flow.browser.name).",
+                "Log in there as you normally would.",
+                "Come back here — aibars picks up the session on its own."
+            ]
+        case .tokenFromPage:
+            return [
+                "aibars opened the token page in \(flow.browser.name).",
+                "Generate the token and copy it.",
+                "Paste it below."
+            ]
+        case .pastedKey:
+            return []
+        }
+    }
+
+    private var stepList: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.medium) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, text in
+                StepRow(number: index + 1, text: text)
+            }
+        }
+        .padding(Tokens.Space.dialogMargin)
+    }
+
+    // MARK: - Status, picker, entry, controls
 
     private var statusArea: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let limitation = coordinator.browser.limitation, config.expectedCookieName != nil {
-                limitationBanner(limitation)
+        VStack(alignment: .leading, spacing: Tokens.Space.large) {
+            if case .unreadable = flow.stage {
+                limitationBanner
             } else {
                 statusRow
             }
 
-            if showsManualEntry {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(config.expectedCookieName.map { "Or paste “\($0)” manually" } ?? "Paste the token")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        SecureField("Token…", text: $pastedToken)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { Task { await coordinator.save(pastedToken) } }
-                        Button("Save") { Task { await coordinator.save(pastedToken) } }
-                            .disabled(pastedToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
+            if !flow.picks.isEmpty {
+                picker
             }
 
-            HStack(spacing: 10) {
-                Button("Open page again") { coordinator.openLoginPageAgain() }
-                    .buttonStyle(.link)
-                if config.expectedCookieName != nil {
-                    Button(showsManualEntry ? "Hide manual entry" : "Paste a token instead") {
-                        withAnimation(.easeInOut(duration: 0.15)) { showsManualEntry.toggle() }
-                    }
-                    .buttonStyle(.link)
-                }
-                Spacer()
-                Button("Cancel") { coordinator.cancel(); onFinish(false) }
-                    .keyboardShortcut(.cancelAction)
-                if config.expectedCookieName != nil, coordinator.browser.supportsAutomaticCapture {
-                    Button("Check now") { Task { await coordinator.checkOnce() } }
-                        .buttonStyle(.borderedProminent)
-                }
+            if flow.showsTokenField {
+                tokenEntry
             }
+
+            controls
         }
-        .padding(16)
+        .padding(Tokens.Space.dialogMargin)
     }
 
-    @ViewBuilder
     private var statusRow: some View {
-        HStack(spacing: 8) {
-            switch coordinator.phase {
-            case .idle:
-                Image(systemName: "arrow.up.forward.app").foregroundStyle(.secondary)
-                Text(config.hint).font(.system(size: 12)).foregroundStyle(.secondary)
-            case .waiting:
-                ProgressView().controlSize(.small).scaleEffect(0.8)
-                Text("Waiting for your session…")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-            case .found(let browser):
-                ProgressView().controlSize(.small).scaleEffect(0.8)
-                Text("Found your session in \(browser).").font(.system(size: 12))
-            case .verifying:
-                ProgressView().controlSize(.small).scaleEffect(0.8)
-                Text("Checking your usage…").font(.system(size: 12))
-            case .done:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text("Connected.").font(.system(size: 12, weight: .medium))
-            case .failed(let message):
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(message)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: Tokens.Space.medium) {
+            if flow.isBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.8)
+            } else if let symbol = flow.symbol {
+                Image(systemName: symbol)
+                    .foregroundStyle(flow.tone.ink)
+            }
+            VStack(alignment: .leading, spacing: Tokens.Space.tight) {
+                Text(flow.headline)
+                    .font(.system(size: Tokens.Ramp.body))
                     .fixedSize(horizontal: false, vertical: true)
+                if let detail = flow.detail {
+                    Text(detail)
+                        .font(.system(size: Tokens.Ramp.label))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
         }
     }
 
+    /// Rows shown before the list starts scrolling, and the height that many
+    /// occupy. Six Chrome profiles is an ordinary number, and this window sizes
+    /// itself to its content — an unbounded list grows it past the bottom of the
+    /// screen and takes its own buttons with it.
+    private static let visiblePicks = 5
+    private static let pickRowHeight: CGFloat = 36
+    private static var pickerHeight: CGFloat {
+        CGFloat(visiblePicks) * pickRowHeight + CGFloat(visiblePicks - 1) * Tokens.Space.small
+    }
+
+    /// The accounts found, one row each. This is the whole point of the rework:
+    /// two Chrome profiles signed into one service is two accounts, and which of
+    /// them aibars watches is not a decision the app gets to make quietly.
     @ViewBuilder
-    private func limitationBanner(_ limitation: DefaultBrowser.Limitation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "lock.shield")
-                    .foregroundStyle(.orange)
-                Text(limitation.explanation)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private var picker: some View {
+        if flow.picks.count > Self.visiblePicks {
+            // An explicit height, because a `ScrollView` has no intrinsic one
+            // and the window is measured from its content.
+            ScrollView { pickRows }
+                .frame(height: Self.pickerHeight)
+        } else {
+            pickRows
+        }
+    }
+
+    private var pickRows: some View {
+        VStack(spacing: Tokens.Space.small) {
+            ForEach(flow.picks) { candidate in
+                HStack(spacing: Tokens.Space.medium) {
+                    Image(systemName: "person.crop.circle")
+                        .foregroundStyle(.secondary)
+                    Text(candidate.label)
+                        .font(.system(size: Tokens.Ramp.body, weight: Tokens.Ramp.emphasisWeight))
+                        // A Chromium profile is named by its owner, so this is a
+                        // sentence as often as it is a word. Unconstrained it
+                        // wraps, and a wrapped row pushes its own Connect button
+                        // out of the column the rows above it kept.
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: Tokens.Space.medium)
+                    Button(ConnectionFlow.Action.connectTo(candidate).label) {
+                        flow.perform(.connectTo(candidate))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+                .padding(.horizontal, Tokens.Space.large)
+                .frame(height: Self.pickRowHeight)
+                .background(Tokens.surface(Tokens.Radius.row).fill(Tokens.quiet(Tokens.Fill.card)))
             }
-            if limitation == .needsFullDiskAccess {
-                HStack(spacing: 10) {
-                    Button("Open Full Disk Access…") {
-                        WebLoginEnvironment.openFullDiskAccessSettings()
-                    }
-                    .controlSize(.small)
-                    Button("Try anyway") {
-                        Task { await coordinator.checkOnce() }
-                    }
-                    .controlSize(.small)
+        }
+    }
+
+    private var tokenEntry: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.small) {
+            if flow.needsEndpoint {
+                Text("Usage endpoint")
+                    .font(.system(size: Tokens.Ramp.label))
+                    .foregroundStyle(.secondary)
+                TextField("https://api.example.com/usage", text: $flow.endpoint)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Text(tokenFieldLabel)
+                .font(.system(size: Tokens.Ramp.label))
+                .foregroundStyle(.secondary)
+            HStack(spacing: Tokens.Space.medium) {
+                SecureField("Token…", text: $flow.pastedToken)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { submit() }
+                Button("Save") { submit() }
+                    .buttonStyle(.borderedProminent)
+                    // Also off while a save is in flight: Return and a click on
+                    // Save are two submissions of the same field, and the second
+                    // one saves and verifies a token the first already cleared.
+                    .disabled(flow.isBusy
+                              || flow.pastedToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var tokenFieldLabel: String {
+        guard flow.method.isDiscoverable else { return "Paste the token" }
+        // Naming the cookie is the difference between a field a user can fill and
+        // one they guess at, for the case where automatic capture failed.
+        return flow.provider.webLogin?.expectedCookieName
+            .map { "Or paste “\($0)” manually" } ?? "Paste the token"
+    }
+
+    /// Two rows, not one.
+    ///
+    /// At its widest — Safari's banner, which carries Full Disk Access, Check
+    /// now, Open page again and the manual-entry toggle — a single row of these
+    /// wants about 500pt inside a 428pt dialog, and an overflowing `HStack`
+    /// squeezes its buttons to ellipses rather than wrapping. The escape-hatch
+    /// links sit above the buttons instead, and only when there are any.
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.medium) {
+            linkRow
+            HStack(spacing: Tokens.Space.medium) {
+                Spacer(minLength: 0)
+                Button(flow.dismissLabel) {
+                    flow.cancel()
+                    onFinish(flow.didConnect)
+                }
+                .keyboardShortcut(.cancelAction)
+                ForEach(Array(prominentActions.enumerated()), id: \.element.id) { index, action in
+                    // Two buttons rather than one with a computed style:
+                    // buttonStyle takes a type, so it cannot be picked at runtime
+                    // without erasing it, and erasing a button style is a lot of
+                    // machinery for one emphasis change.
+                    actionButton(action, isPrimary: index == 0)
                 }
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.orange.opacity(0.10))
-        )
+    }
+
+    private var prominentActions: [ConnectionFlow.Action] {
+        flow.actions.filter(\.isProminent)
+    }
+
+    private var linkActions: [ConnectionFlow.Action] {
+        flow.actions.filter { !$0.isProminent }
+    }
+
+    @ViewBuilder
+    private var linkRow: some View {
+        if !linkActions.isEmpty || flow.offersTokenField {
+            HStack(spacing: Tokens.Space.large) {
+                ForEach(linkActions) { action in
+                    Button(action.label) { flow.perform(action) }
+                        .buttonStyle(.link)
+                }
+                if flow.offersTokenField {
+                    Button(flow.showsTokenField ? "Hide manual entry" : "Paste a token instead") {
+                        flow.toggleTokenField()
+                    }
+                    .buttonStyle(.link)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: ConnectionFlow.Action, isPrimary: Bool) -> some View {
+        if isPrimary {
+            Button(action.label) { flow.perform(action) }
+                .buttonStyle(.borderedProminent)
+        } else {
+            Button(action.label) { flow.perform(action) }
+        }
+    }
+
+    /// The same headline and detail as `statusRow`, on a wash, because a browser
+    /// whose cookies cannot be read is the one state the user has to deal with
+    /// before anything else on screen will work.
+    ///
+    /// Its glyph and its colour come off the flow like every other stage's. Named
+    /// here as `lock.shield` in `Tokens.Ink.attention` they were a second opinion
+    /// about a state the flow already has an answer for.
+    private var limitationBanner: some View {
+        HStack(alignment: .top, spacing: Tokens.Space.medium) {
+            Image(systemName: flow.symbol ?? "lock.shield")
+                .foregroundStyle(flow.tone.ink)
+            VStack(alignment: .leading, spacing: Tokens.Space.tight) {
+                Text(flow.headline)
+                    .font(.system(size: Tokens.Ramp.body, weight: Tokens.Ramp.emphasisWeight))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = flow.detail {
+                    Text(detail)
+                        .font(.system(size: Tokens.Ramp.label))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Tokens.Space.large)
+        .background(Tokens.surface(Tokens.Radius.panel).fill(Tokens.Ink.attentionWash))
+    }
+
+    private func submit() {
+        // Return bypasses the Save button's disabled state, so the guard has to
+        // be here too.
+        guard !flow.isBusy else { return }
+        Task { await flow.submitToken() }
     }
 }
 
@@ -303,55 +373,98 @@ private struct StepRow: View {
     let text: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.medium) {
             Text("\(number)")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(.system(size: Tokens.Ramp.caption, weight: .bold, design: Tokens.Ramp.figureDesign))
                 .foregroundStyle(.secondary)
                 .frame(width: 17, height: 17)
-                .background(Circle().fill(Color.primary.opacity(0.08)))
+                .background(Circle().fill(Tokens.quiet(Tokens.Fill.controlHover)))
             Text(text)
-                .font(.system(size: 12))
+                .font(.system(size: Tokens.Ramp.body))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
     }
 }
 
-/// Presents `BrowserLoginView` in its own small window — the menu bar dropdown
-/// has no window of its own to hang a sheet from.
+/// Presents `ConnectDialog` in its own small window — the menu bar dropdown has
+/// no window of its own to hang a sheet from.
+///
+/// One window per provider id, so a second account gets its own flow rather than
+/// re-entering the first one's.
 @MainActor
 public enum LoginWindowController {
     private static var windows: [String: NSWindow] = [:]
+    /// Where the next window goes. `center()` puts every one of these at the
+    /// same point, so a user connecting three services at once gets three
+    /// windows that look like one.
+    private static var cascade: NSPoint = .zero
 
+    /// Opens the connect flow for any provider, including the ones with no login
+    /// page: the pasted-key case is the same window with the field already open,
+    /// which is why the settings sheet that used to own it is gone.
     public static func show(provider: AnyUsageProvider, onFinish: @escaping (Bool) -> Void = { _ in }) {
-        guard let config = provider.webLogin else { return }
-
-        if let existing = windows[provider.id] {
+        if let existing = windows[provider.id], existing.isVisible {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
+        // The title bar's close button does not route through `close(_:)`, so the
+        // table can hold a window that is already gone. Reopening that one hands
+        // the user the last attempt's finished flow, poll already cancelled, and
+        // nothing on screen ever changes again.
+        windows[provider.id]?.close()
+        windows[provider.id] = nil
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: Tokens.Control.dialogWidth, height: 340),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Sign in to \(provider.displayName)"
+        window.title = provider.webLogin == nil
+            ? "Connect \(provider.displayName)"
+            : "Sign in to \(provider.displayName)"
         window.isReleasedWhenClosed = false
 
-        let view = BrowserLoginView(provider: provider, config: config) { success in
-            close(provider.id)
-            onFinish(success)
-        }
+        // The Done button and the auto-dismiss that follows a successful connect
+        // report the same outcome, and whoever asked for this window answers a
+        // report by refreshing every provider. Once is enough.
+        var reported = false
+        let view = ConnectDialog(
+            provider: provider,
+            onFinish: { success in
+                guard !reported else { return }
+                reported = true
+                close(provider.id)
+                onFinish(success)
+            },
+            // Reached through the window rather than by capturing the hosting
+            // view: the view owns the closure, so capturing it here would be a
+            // cycle that outlives the window.
+            onContentResize: { [weak window] in
+                guard let window, let hosting = window.contentView else { return }
+                // The fitting size only settles once SwiftUI has laid the new
+                // content out, which has not happened yet inside the change
+                // handler that reported it. A `Task` on the main actor rather
+                // than `DispatchQueue.main.async`, whose closure is `@Sendable`
+                // and so inherits no isolation — `fit` is main-actor work.
+                Task { @MainActor in
+                    hosting.layoutSubtreeIfNeeded()
+                    fit(window, to: hosting.fittingSize)
+                }
+            }
+        )
         let hosting = NSHostingView(rootView: view)
         window.contentView = hosting
-        // The banner and the manual entry field both change the content's
-        // height, so let it size itself — and stay resizable, since a clipped
-        // sign-in window would be unrecoverable.
-        window.setContentSize(hosting.fittingSize)
+        // The banner, the account picker and the manual entry field all change
+        // the content's height, so let it size itself — and stay resizable, since
+        // a clipped sign-in window would be unrecoverable.
+        var initial = hosting.fittingSize
+        initial.height = min(initial.height, ceiling(for: nil))
+        window.setContentSize(initial)
         window.center()
+        cascade = window.cascadeTopLeft(from: cascade)
         windows[provider.id] = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -360,5 +473,30 @@ public enum LoginWindowController {
     public static func close(_ providerID: String) {
         windows[providerID]?.close()
         windows[providerID] = nil
+        // Back to the middle of the screen once none of them are up, or the
+        // cascade walks off the corner over a session's worth of sign-ins.
+        if windows.isEmpty { cascade = .zero }
+    }
+
+    /// Resizes downward from the title bar rather than up from the bottom edge,
+    /// so the headline stays where the user's eye already is.
+    private static func fit(_ window: NSWindow, to size: NSSize) {
+        var target = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+        target.size.height = min(target.height, ceiling(for: window))
+        guard abs(target.height - window.frame.height) > 0.5 else { return }
+        var frame = window.frame
+        frame.origin.y += frame.height - target.height
+        frame.size.height = target.height
+        window.setFrame(frame, display: true, animate: false)
+    }
+
+    /// The tallest this window may become. A self-sizing window has no reason of
+    /// its own to stop, and one taller than the screen puts its own buttons below
+    /// the bottom edge, where a resizable frame cannot get them back.
+    ///
+    /// The picker is the only part with no bound of its own, and it scrolls past
+    /// five rows — so this is a backstop rather than the mechanism.
+    private static func ceiling(for window: NSWindow?) -> CGFloat {
+        (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? .greatestFiniteMagnitude
     }
 }
