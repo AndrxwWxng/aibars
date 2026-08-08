@@ -370,7 +370,7 @@ public final class AppearanceSettings: ObservableObject {
         let thickness = CGFloat(meterThickness)
         return Metrics(
             rowVerticalPadding: step.padding,
-            rowHorizontalPadding: 12,
+            rowHorizontalPadding: Tokens.Space.gutter,
             // Compact's zero gap was written for a list of bare rows. With a
             // background on every row it stacks nine cards edge to edge, which
             // reads as one card with nine services in it — and the hover state
@@ -409,7 +409,7 @@ public final class AppearanceSettings: ObservableObject {
     /// dot; the subtraction above is only in credit while `logoSize` and
     /// `panelWidth` stay inside their own ranges.
     private var ringBudget: CGFloat {
-        let leadingLogo = logoStyle == .hidden ? 0 : CGFloat(logoSize) + 7
+        let leadingLogo = logoStyle == .hidden ? 0 : CGFloat(logoSize) + Tokens.Space.leadingItems
         return max(16, CGFloat(panelWidth) * 0.25 - leadingLogo)
     }
 

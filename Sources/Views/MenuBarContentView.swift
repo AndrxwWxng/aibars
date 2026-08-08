@@ -28,12 +28,18 @@ public struct MenuBarContentView: View {
     /// connected" disclosure's state to whatever block takes its place.
     @State private var expandedSections: Set<String> = []
 
+    /// Room the panel leaves the screen: the menu bar above it, its own header,
+    /// and a margin at the bottom so the last row isn't flush with the dock.
+    private static let screenReserve: CGFloat = 160
+    /// The list never asks for less than this even on a short display — below
+    /// it the panel stops being a list and becomes a slot.
+    private static let minimumListHeight: CGFloat = 320
+
     /// As much of the screen as the panel can reasonably take, rather than a
-    /// fixed 560pt that clipped the list on every display. Leaves room for the
-    /// menu bar, the header, and a margin at the bottom.
+    /// fixed 560pt that clipped the list on every display.
     private var maximumListHeight: CGFloat {
         let screen = NSScreen.main?.visibleFrame.height ?? 800
-        return max(320, screen - 160)
+        return max(Self.minimumListHeight, screen - Self.screenReserve)
     }
 
     public var body: some View {
@@ -43,7 +49,7 @@ public struct MenuBarContentView: View {
         let sections = appearance.sections(from: state.rankedProviders, snapshots: state.snapshots)
         return VStack(spacing: 0) {
             header
-            Divider().opacity(0.5)
+            Divider().opacity(Tokens.Fill.divider)
 
             if sections.isEmpty {
                 emptyState
@@ -67,7 +73,7 @@ public struct MenuBarContentView: View {
                     )
                 }
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, Tokens.Space.listMargin)
         }
         // The cap has to sit *under* `fixedSize`, not over it. `fixedSize`
         // measures its child against no proposal and then lays it out at that
@@ -117,10 +123,13 @@ public struct MenuBarContentView: View {
                         // carries. Grouping by usage band under the default
                         // disconnected policy puts both kinds in one list, and
                         // two title indents in one list reads as damage.
-                        .padding(.leading, 12 + DisclosureHeader.chevronColumn(at: sectionFontSize))
+                        .padding(.leading, Tokens.Space.gutter
+                                 + DisclosureHeader.chevronColumn(at: sectionFontSize))
                 }
             }
-            .padding(.top, isFirst ? 2 : 8)
+            // A group that opens the list needs no air above it; one that
+            // follows a block of rows is a break between two things.
+            .padding(.top, isFirst ? Tokens.Space.tight : Tokens.Space.medium)
         }
 
         if !section.isCollapsible || isOnly || expandedSections.contains(section.id) {
@@ -130,14 +139,8 @@ public struct MenuBarContentView: View {
         }
     }
 
-    /// Section headers stay at their own deliberate 9pt — they are a divider
-    /// with a word on it, not content — but still follow the text scale.
-    ///
-    /// Upward only. The smallest text scale would take this to 7.6pt, and an
-    /// uppercased, letter-spaced label at that size is a grey smear with a
-    /// chevron-shaped smudge next to it.
     private var sectionFontSize: CGFloat {
-        max(9, 9 * CGFloat(appearance.textScale))
+        Tokens.sectionSize(textScale: appearance.textScale)
     }
 
     private func expansion(of id: String) -> Binding<Bool> {
@@ -167,35 +170,21 @@ public struct MenuBarContentView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
-            UsageMeterGlyph(
-                levels: state.usageLevels,
-                alertColor: appearance.menuBarTint(for: state.topUsagePercent),
-                alertThreshold: appearance.warningThreshold,
-                height: 16
-            )
-            .padding(.leading, 2)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("AI Usage")
-                    .font(.system(size: appearance.metrics.titleSize, weight: .semibold))
-                if appearance.showsHeaderSummary {
-                    Text(state.headlineSummary)
-                        .font(.system(size: appearance.metrics.captionSize))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 6)
-
+        PanelHeader(
+            appearance: appearance,
+            levels: state.usageLevels,
+            topPercent: state.topUsagePercent,
+            summary: state.headlineSummary
+        ) {
             // Refresh, settings and quit are never hideable: they are the only
             // way out of an app with no Dock icon and no window.
             if state.isRefreshing {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.8)
-                    .frame(width: 24, height: 24)
+                    // The button's own footprint, so the cluster doesn't shuffle
+                    // sideways for the length of a refresh.
+                    .frame(width: Tokens.Control.iconButton, height: Tokens.Control.iconButton)
             } else {
                 HoverIconButton(systemName: "arrow.clockwise", help: "Refresh all · \(updatedText) (⌘R)") {
                     Task { await state.refreshAll(userInitiated: true) }
@@ -213,9 +202,6 @@ public struct MenuBarContentView: View {
             }
             .keyboardShortcut("q")
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 11)
-        .padding(.bottom, 9)
     }
 
     private var updatedText: String {
@@ -227,13 +213,18 @@ public struct MenuBarContentView: View {
         return "updated \(elapsed / 3600)h ago"
     }
 
+    /// A mark for the empty panel. Larger than any control and smaller than a
+    /// logo, which is why it takes no size from `Tokens.Control` — nothing else
+    /// in the app draws one.
+    private static let emptyMarkSize: CGFloat = 22
+
     private var emptyState: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: Tokens.Space.small) {
             Image(systemName: "square.dashed")
-                .font(.system(size: 22))
+                .font(.system(size: Self.emptyMarkSize))
                 .foregroundStyle(.tertiary)
             Text(hasEnabledServices ? "Nothing to show" : "No services enabled")
-                .font(.system(size: appearance.metrics.titleSize, weight: .medium))
+                .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.emphasisWeight))
             // An empty panel with services enabled means the appearance filters
             // ate them — say so, or the user goes looking in Services for a row
             // that is switched on and hidden.
@@ -248,8 +239,8 @@ public struct MenuBarContentView: View {
         // The longer message wraps once the panel is narrow or the text scale
         // is up, and a wrapped line with no inset runs edge to edge into the
         // window's rounded corners.
-        .padding(.horizontal, 24)
-        .padding(.vertical, 28)
+        .padding(.horizontal, Tokens.Space.huge)
+        .padding(.vertical, Tokens.Space.huge)
     }
 
     private var hasEnabledServices: Bool {
@@ -259,14 +250,11 @@ public struct MenuBarContentView: View {
     // MARK: - Actions
 
     private func signIn(_ provider: AnyUsageProvider) {
-        // Providers with a login page hand off to the browser; the rest still
-        // need the token form in Settings.
-        if provider.webLogin != nil {
-            LoginWindowController.show(provider: provider) { success in
-                if success { Task { await state.refresh(provider.id) } }
-            }
-        } else {
-            showSettings = true
+        // Every connection method lives in that window now, including the
+        // pasted-key ones — a MiniMax row used to have to send the user to
+        // Settings to do something the window can do.
+        LoginWindowController.show(provider: provider) { success in
+            if success { Task { await state.refresh(provider.id) } }
         }
     }
 
@@ -276,12 +264,93 @@ public struct MenuBarContentView: View {
     }
 }
 
+/// The panel's header: the status-item mark, the app's name and its one-line
+/// summary, and whatever the caller puts on the right.
+///
+/// Written to be shared with the Appearance pane's preview, which draws the same
+/// header with plain images where the panel has buttons. It existed in both files
+/// literal for literal with nothing linking the copies, and the copy in the pane
+/// whose job is to show what the panel looks like was the one that went stale.
+/// The pane still holds that copy and should take this one.
+public struct PanelHeader<Trailing: View>: View {
+    @ObservedObject private var appearance: AppearanceSettings
+    /// Per-service usage for the mark's bars — `AppState.usageLevels`.
+    public let levels: [Double]
+    /// The highest of them, which is what decides whether the mark goes to its
+    /// alert colour.
+    public let topPercent: Double
+    /// The line under the title, drawn only while `showsHeaderSummary` is on.
+    public let summary: String?
+
+    private let trailing: Trailing
+
+    public init(
+        appearance: AppearanceSettings,
+        levels: [Double],
+        topPercent: Double,
+        summary: String?,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self._appearance = ObservedObject(wrappedValue: appearance)
+        self.levels = levels
+        self.topPercent = topPercent
+        self.summary = summary
+        self.trailing = trailing()
+    }
+
+    public var body: some View {
+        HStack(spacing: Tokens.Space.medium) {
+            // `Tokens.Control.headerGlyph`, not `menuBarGlyphHeight`: that
+            // setting exists because the menu bar's row height is the system's
+            // and the mark has to be tuned into it. A header sets its own
+            // height, so the setting does not apply here — and the mark sits at
+            // the gutter with no nudge of its own, which puts it on the same
+            // left edge as every logo in the list below.
+            UsageMeterGlyph(
+                levels: levels,
+                alertColor: appearance.menuBarTint(for: topPercent),
+                alertThreshold: appearance.warningThreshold,
+                height: Tokens.Control.headerGlyph
+            )
+
+            VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
+                Text("AI Usage")
+                    .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.titleWeight))
+                    // A wrapped title grows the header, which pushes the divider
+                    // and every row below it down and makes the window resize to
+                    // follow. The summary under it already holds one line; the
+                    // title is the half of this pair that had no such promise.
+                    .lineLimit(1)
+                if appearance.showsHeaderSummary, let summary {
+                    Text(summary)
+                        .font(.system(size: appearance.metrics.captionSize))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: Tokens.Space.small)
+
+            // One cluster, tight enough to read as a set of three rather than
+            // three unrelated controls scattered along the edge.
+            HStack(spacing: Tokens.Space.tight) {
+                trailing
+            }
+        }
+        .padding(.horizontal, Tokens.Space.gutter)
+        // Asymmetric: the divider beneath reads as part of the bottom edge, so
+        // the gap to it is smaller than the gap above the title.
+        .padding(.top, Tokens.Space.headerTop)
+        .padding(.bottom, Tokens.Space.headerBottom)
+    }
+}
+
 /// A quiet group divider that folds the rows beneath it away.
 struct DisclosureHeader: View {
     let title: String
     let count: Int
     @Binding var isExpanded: Bool
-    var fontSize: CGFloat = 9
+    var fontSize: CGFloat = Tokens.Ramp.section
 
     @State private var isHovered = false
 
@@ -292,7 +361,7 @@ struct DisclosureHeader: View {
         fontSize + labelSpacing
     }
 
-    private static let labelSpacing: CGFloat = 6
+    private static let labelSpacing: CGFloat = Tokens.Space.small
 
     var body: some View {
         Button {
@@ -312,13 +381,15 @@ struct DisclosureHeader: View {
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 SectionLabel(title: title, count: count, fontSize: fontSize)
             }
-            .padding(.vertical, 2)
-            .padding(.leading, 12)
+            .padding(.vertical, Tokens.Space.tight)
+            .padding(.leading, Tokens.Space.gutter)
             .contentShape(Rectangle())
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(isHovered ? 0.05 : 0))
-                    .padding(.horizontal, 6)
+                Tokens.surface(Tokens.Radius.chip)
+                    .fill(Tokens.quiet(isHovered ? Tokens.Fill.controlHover : 0))
+                    // Held inside the gutter exactly as a row card is, so the
+                    // plate and the cards below it share one edge.
+                    .padding(.horizontal, Tokens.Space.cardInset)
             )
         }
         .buttonStyle(.plain)
@@ -331,26 +402,26 @@ struct DisclosureHeader: View {
 struct SectionLabel: View {
     let title: String
     let count: Int
-    var fontSize: CGFloat = 9
+    var fontSize: CGFloat = Tokens.Ramp.section
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Tokens.Space.small) {
             Text(title.uppercased())
-                .font(.system(size: fontSize, weight: .semibold))
+                .font(.system(size: fontSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundStyle(.tertiary)
-                .tracking(0.5)
+                .tracking(Tokens.sectionTracking)
             Text("\(count)")
-                .font(.system(size: fontSize, weight: .medium))
+                .font(.system(size: fontSize, weight: Tokens.Ramp.emphasisWeight))
                 .foregroundStyle(.tertiary)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 0.5)
-                .background(Capsule().fill(Color.primary.opacity(0.07)))
+                .padding(.horizontal, Tokens.Space.snug)
+                .padding(.vertical, Tokens.Space.hairline)
+                .background(Capsule().fill(Tokens.quiet(Tokens.Fill.pill)))
             Rectangle()
-                .fill(Color.primary.opacity(0.07))
-                .frame(height: 1)
+                .fill(Tokens.quiet(Tokens.Fill.rule))
+                .frame(height: Tokens.Control.hairline)
         }
-        .padding(.trailing, 12)
-        .padding(.bottom, 2)
+        .padding(.trailing, Tokens.Space.gutter)
+        .padding(.bottom, Tokens.Space.tight)
     }
 }
 
@@ -359,6 +430,14 @@ struct SectionLabel: View {
 struct HoverIconButton: View {
     let systemName: String
     let help: String
+    /// The whole button, hover plate included — not a frame wrapped around a
+    /// larger one. A header button stands alone and takes the default; a button
+    /// inside a row's title line shares that line with type and asks for
+    /// `Tokens.Control.rowIconButton`. Wrapping the default in a 20x18 frame is
+    /// what the rows used to do, and an inner fixed frame ignores the
+    /// proposal — so two 24pt plates overlapped on a 20pt pitch and the refresh
+    /// plate ran under the trailing percentage.
+    var size: CGFloat = Tokens.Control.iconButton
     let action: () -> Void
 
     @State private var isHovered = false
@@ -366,12 +445,12 @@ struct HoverIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: Tokens.Control.iconGlyph, weight: Tokens.Ramp.emphasisWeight))
                 .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
+                .frame(width: size, height: size)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.primary.opacity(isHovered ? 0.09 : 0))
+                    Tokens.surface(Tokens.Radius.control)
+                        .fill(Tokens.quiet(isHovered ? Tokens.Fill.controlHover : 0))
                 )
         }
         .buttonStyle(.plain)

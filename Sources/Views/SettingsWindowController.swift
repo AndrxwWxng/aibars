@@ -26,8 +26,11 @@ public enum SettingsWindowController {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
 
-        // Resizable, and with a floor that keeps both columns whole.
-        window.minSize = NSSize(width: 980, height: 560)
+        // Derived, not restated. A literal here drifted from the view's own
+        // minimum and let the window be dragged narrower than SwiftUI could
+        // honour, which squeezed the Appearance form — the bug the derivation
+        // exists to prevent.
+        window.minSize = SettingsView.minimumContentSize
         window.contentView = NSHostingView(
             rootView: SettingsView()
                 .environmentObject(state)

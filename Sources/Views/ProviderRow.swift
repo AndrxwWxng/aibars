@@ -41,21 +41,13 @@ public struct ProviderRow: View {
 
     private var metrics: AppearanceSettings.Metrics { appearance.metrics }
 
-    // Both gaps in the leading column are named rather than written where they
-    // are used, because `chipLimit` has to subtract them to know what width the
-    // text column was left with.
-
-    /// Logo-and-dial column to the text beside it.
-    private static let textGap: CGFloat = 11
-    /// Logo to dial, inside that column.
-    private static let leadingSpacing: CGFloat = 7
-
     public var body: some View {
         // Top alignment lines a 40pt logo up with the name rather than with the
         // middle of a stack of bars — but a row with nothing under its title is
         // one 13pt line beside that logo, and top alignment leaves it hanging
         // from the ceiling of a 40pt row.
-        HStack(alignment: drawsDetail ? .top : .center, spacing: hasLeading ? Self.textGap : 0) {
+        HStack(alignment: drawsDetail ? .top : .center,
+               spacing: hasLeading ? Tokens.Space.leadingColumn : 0) {
             leading
 
             VStack(alignment: .leading, spacing: metrics.contentSpacing) {
@@ -66,9 +58,11 @@ public struct ProviderRow: View {
         .padding(.horizontal, metrics.rowHorizontalPadding)
         .padding(.vertical, metrics.rowVerticalPadding)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(backgroundOpacity))
-                .padding(.horizontal, 6)
+            Tokens.surface(Tokens.Radius.row)
+                .fill(Tokens.quiet(Tokens.rowBackground(appearance.rowBackground, isHovered: isHovered)))
+                // Held inside the gutter so a hovered card floats rather than
+                // touching the window edge.
+                .padding(.horizontal, Tokens.Space.cardInset)
         )
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
@@ -78,16 +72,6 @@ public struct ProviderRow: View {
         .help(provider.isAuthenticated
               ? (provider.dashboardURL != nil ? "Open \(provider.displayName) usage page" : "")
               : "Sign in to \(provider.displayName)")
-    }
-
-    private var backgroundOpacity: Double {
-        switch appearance.rowBackground {
-        case .plain:  return 0
-        case .hover:  return isHovered ? 0.06 : 0
-        // The resting card still has to lift under the pointer, or the row
-        // stops answering "is this the one I'm about to click".
-        case .always: return isHovered ? 0.09 : 0.05
-        }
     }
 
     // MARK: - Leading column
@@ -105,8 +89,8 @@ public struct ProviderRow: View {
         guard hasLeading else { return 0 }
         let logo = appearance.logoStyle == .hidden ? 0 : CGFloat(appearance.logoSize)
         let ring = appearance.meterStyle == .ring ? metrics.ringDiameter : 0
-        let inner = (logo > 0 && ring > 0) ? Self.leadingSpacing : 0
-        return logo + ring + inner + Self.textGap
+        let inner = (logo > 0 && ring > 0) ? Tokens.Space.leadingItems : 0
+        return logo + ring + inner + Tokens.Space.leadingColumn
     }
 
     private var textColumnWidth: CGFloat {
@@ -116,7 +100,7 @@ public struct ProviderRow: View {
     @ViewBuilder
     private var leading: some View {
         if hasLeading {
-            HStack(spacing: Self.leadingSpacing) {
+            HStack(spacing: Tokens.Space.leadingItems) {
                 if appearance.logoStyle != .hidden {
                     ProviderLogo(
                         providerID: provider.serviceID,
@@ -125,7 +109,7 @@ public struct ProviderRow: View {
                         size: appearance.logoSize,
                         showsTile: appearance.logoStyle == .tile
                     )
-                    .opacity(provider.isAuthenticated ? 1 : 0.55)
+                    .opacity(provider.isAuthenticated ? 1 : Tokens.Dim.disconnected)
                 }
 
                 if appearance.meterStyle == .ring {
@@ -139,16 +123,16 @@ public struct ProviderRow: View {
                     )
                 }
             }
-            .padding(.top, 1)
+            .padding(.top, Tokens.Space.hairline)
         }
     }
 
     // MARK: - Title
 
     private var titleLine: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Tokens.Space.small) {
             Text(provider.displayName)
-                .font(.system(size: metrics.titleSize, weight: .semibold))
+                .font(.system(size: metrics.titleSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 // The name is the one thing the row cannot be read without, so
@@ -168,52 +152,32 @@ public struct ProviderRow: View {
 
             if showsPlan, let plan = planName {
                 Text(plan)
-                    .font(.system(size: metrics.captionSize, weight: .medium))
+                    .font(.system(size: metrics.captionSize, weight: Tokens.Ramp.emphasisWeight))
+                    // A pill that wraps to a second line stops being a pill.
                     .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
-                    .background(Capsule().fill(Color.primary.opacity(0.09)))
+                    .padding(.horizontal, Tokens.Space.small)
+                    .padding(.vertical, Tokens.Space.hairline)
+                    .background(Capsule().fill(Tokens.quiet(Tokens.Fill.pill)))
                     .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: Tokens.Space.snug)
 
-            // Reserved, not inserted. Adding the buttons on hover changed the
-            // row's height, so every row grew as the pointer crossed it and the
-            // panel resized under the cursor. They occupy their space always and
-            // only their opacity changes.
-            if reservesActionSpace {
-                HStack(spacing: 0) {
-                    HoverIconButton(systemName: "arrow.clockwise", help: "Refresh \(provider.displayName)", action: onRefresh)
-                        .frame(width: 20, height: 18)
-                    if provider.dashboardURL != nil {
-                        HoverIconButton(systemName: "arrow.up.right", help: "Open usage page", action: onOpenDashboard)
-                            .frame(width: 20, height: 18)
-                    }
-                }
-                .opacity(showsActions ? 1 : 0)
-                // Invisible buttons must not be clickable.
-                .allowsHitTesting(showsActions)
+            // Only an authenticated row has anything to refresh or open, so a
+            // disconnected one reclaims the space rather than reserving it for
+            // buttons it will never draw.
+            if provider.isAuthenticated {
+                RowActions(
+                    visibility: appearance.rowActions,
+                    isHovered: isHovered,
+                    hasDashboard: provider.dashboardURL != nil,
+                    refreshHelp: "Refresh \(provider.displayName)",
+                    onRefresh: onRefresh,
+                    onOpenDashboard: onOpenDashboard
+                )
             }
 
             trailingValue
-        }
-    }
-
-    /// Hover reveals the per-row actions in place of the plan pill's whitespace,
-    /// so the resting state stays uncluttered — unless the user has asked for
-    /// them to be permanent, or gone.
-    /// Whether to hold the space at all. `.never` reclaims it; the other modes
-    /// keep it so the row is the same height hovered or not.
-    private var reservesActionSpace: Bool {
-        provider.isAuthenticated && appearance.rowActions != .never
-    }
-
-    private var showsActions: Bool {
-        switch appearance.rowActions {
-        case .onHover: return isHovered
-        case .always:  return true
-        case .never:   return false
         }
     }
 
@@ -222,7 +186,7 @@ public struct ProviderRow: View {
         if !provider.isAuthenticated {
             Button(action: onSignIn) {
                 Text("Sign in")
-                    .font(.system(size: metrics.detailSize, weight: .medium))
+                    .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.emphasisWeight))
                     // The one control on a disconnected row, so it is the last
                     // thing that should give: a crowded title line otherwise
                     // squeezes it to "Si…".
@@ -231,8 +195,12 @@ public struct ProviderRow: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
         } else if appearance.showsUsageNumber, case .success(let data) = result, data.primary.limit > 0 {
+            // Trailing, so the figure lands on the same x on every row — the
+            // same column the secondary percentages under it stop at.
             Text("\(Int((data.primary.percent * 100).rounded()))%")
-                .font(.system(size: metrics.titleSize, weight: .semibold, design: .rounded))
+                .font(.system(size: metrics.titleSize,
+                              weight: Tokens.Ramp.titleWeight,
+                              design: Tokens.Ramp.figureDesign))
                 .monospacedDigit()
                 .foregroundStyle(tint(for: data.primary.percent))
                 // Unconstrained, a Text under a title line too narrow for it
@@ -241,6 +209,12 @@ public struct ProviderRow: View {
                 // pill: under `numberOnly` it is the entire reading.
                 .lineLimit(1)
                 .layoutPriority(1)
+                // And it never gives width either. Sharing priority 1 with the
+                // service name means both shrink together on the narrowest panel
+                // behind the widest logo and dial, and "10…" is not a smaller
+                // reading of 100% — it is a different one. A truncated name is
+                // still a name, so the name is what gives.
+                .fixedSize()
         }
     }
 
@@ -265,33 +239,56 @@ public struct ProviderRow: View {
             Text(signInPrompt)
                 .font(.system(size: metrics.detailSize))
                 .foregroundStyle(.secondary)
+                // "Not connected — add a token in Settings" is wider than the
+                // text column of a 300pt row at any density, and a Text that is
+                // not allowed to grow downward truncates instead of wrapping —
+                // which would cut the half that says what to do. Same two-line
+                // ceiling the error line takes, for the same reason.
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
         } else if let result {
             switch result {
             case .success(let data):
                 primaryMetric(data.primary)
                 secondaryWindows(data.secondary)
             case .failure(let error):
-                HStack(alignment: .top, spacing: 5) {
+                HStack(alignment: .top, spacing: Tokens.Space.small) {
                     Image(systemName: error.isAuth
                           ? "person.crop.circle.badge.exclamationmark"
                           : "exclamationmark.triangle.fill")
                         .font(.system(size: metrics.captionSize))
-                        .foregroundStyle(error.isAuth ? .orange : .red)
+                        // A credential the user has to go and fix is the same
+                        // state a locked session is, and the same amber; a
+                        // service that answered badly is the only red.
+                        .foregroundStyle(error.isAuth ? Tokens.Ink.attention : Tokens.Ink.failure)
                     Text(error.errorDescription ?? "Error")
                         .font(.system(size: metrics.detailSize))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
             }
         } else {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini).scaleEffect(0.7)
+            HStack(spacing: Tokens.Space.small) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.7)
+                    // `scaleEffect` shrinks what is drawn, never what is
+                    // reserved: a mini spinner still asks for its full square,
+                    // which is taller than the caption that replaces it when the
+                    // fetch lands. Held to the line box the rest of this row is
+                    // floored at, or the spinner sets the height instead and every
+                    // row shrinks as its first refresh comes back — nine of them
+                    // resizing the window under the pointer.
+                    .frame(width: Tokens.lineBox(metrics.detailSize),
+                           height: Tokens.lineBox(metrics.detailSize))
                 Text("Loading…")
                     .font(.system(size: metrics.detailSize))
                     .foregroundStyle(.secondary)
             }
-            .frame(height: metrics.detailSize + 3)
+            .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
         }
     }
 
@@ -322,23 +319,44 @@ public struct ProviderRow: View {
                 // Each further window gets its own meter. A weekly cap you are
                 // 80% through matters as much as the 5-hour one, and a chip
                 // reading "7d 80%" buries that.
+                //
+                // On the enclosing VStack's own spacing, with nothing added on
+                // top: the pitch from the primary meter to the first secondary
+                // one is then the same as the pitch between two secondaries, so
+                // the third window of one service sits on the same line as the
+                // third of the next.
                 VStack(alignment: .leading, spacing: metrics.contentSpacing) {
-                    ForEach(windows.prefix(appearance.secondaryWindowLimit), id: \.label) { metric in
-                        secondaryWindow(metric)
+                    ForEach(numbered(windows, limit: appearance.secondaryWindowLimit)) { window in
+                        secondaryWindow(window.metric)
                     }
                 }
-                .padding(.top, max(0, metrics.contentSpacing - 2))
             case .chips:
-                HStack(spacing: 5) {
-                    ForEach(windows.prefix(chipLimit), id: \.label) { metric in
-                        SecondaryChip(metric: metric, accent: provider.accentColor, appearance: appearance)
+                HStack(spacing: Tokens.Space.snug) {
+                    ForEach(numbered(windows, limit: chipLimit)) { window in
+                        SecondaryChip(metric: window.metric, accent: provider.accentColor, appearance: appearance)
                     }
                 }
-                .padding(.top, 1)
             case .hidden:
                 EmptyView()
             }
         }
+    }
+
+    /// A window and where it sits in the row, which is the only id it has that
+    /// cannot repeat.
+    ///
+    /// A service can report two windows under one name: Claude's per-model weekly
+    /// caps all come back as "Weekly · per-model" whenever the payload names no
+    /// model, and Gemini's unrecognised buckets as "Window 2". Keyed on `label`,
+    /// a repeated `ForEach` id draws one of them and drops the rest, so a service
+    /// with four windows would quietly show three.
+    private struct NumberedMetric: Identifiable {
+        let id: Int
+        let metric: UsageMetric
+    }
+
+    private func numbered(_ windows: [UsageMetric], limit: Int) -> [NumberedMetric] {
+        windows.prefix(limit).enumerated().map { NumberedMetric(id: $0.offset, metric: $0.element) }
     }
 
     /// Chips are a single unwrapped line, so their ceiling is width rather than
@@ -353,8 +371,15 @@ public struct ProviderRow: View {
     /// resolve before the row could report a height, and MenuBarExtra sizes its
     /// window to the height the rows report.
     private var chipLimit: Int {
-        // A dot, the capsule's padding, and about nine characters of "7d 12/100".
-        let chipWidth = 26 + metrics.captionSize * 5
+        // The chip's own furniture — dot, gap, both paddings — read off the
+        // chip, then the gap to the next chip, then about nine characters of
+        // "7d 12/100". The gap has to be in here: read off the chip alone this
+        // is the exact width of one chip with nothing left over, so the estimate
+        // promises a chip more than the line holds and the last one arrives as
+        // an ellipsis. Erring generous is the wrong direction — one chip that
+        // can be read says more than four that cannot.
+        let furniture = Tokens.Control.chipDot + Tokens.Space.snug + 2 * Tokens.Space.small
+        let chipWidth = furniture + Tokens.Space.snug + metrics.captionSize * 5
         return max(1, min(appearance.secondaryWindowLimit, Int(textColumnWidth / chipWidth)))
     }
 
@@ -365,7 +390,11 @@ public struct ProviderRow: View {
             case .bar:
                 UsageBar(metric: metric, isSecondary: true, accent: provider.accentColor, appearance: appearance)
             case .ring:
-                HStack(spacing: 6) {
+                // Indented by its own dial, the way the row's content is
+                // indented by the primary one: a dial always precedes the thing
+                // it measures. The caption still ends at the text column's
+                // trailing edge, so the percentages stay in one column.
+                HStack(spacing: Tokens.Space.small) {
                     UsageRing(
                         percent: metric.percent,
                         diameter: metrics.ringDiameter * 0.55,
@@ -438,6 +467,79 @@ private extension AppearanceSettings {
     }
 }
 
+/// The per-row refresh and dashboard buttons.
+///
+/// Reserved, never inserted. Adding the buttons on hover changed the row's
+/// height, so every row grew as the pointer crossed it and the panel resized
+/// under the cursor — `MenuBarExtra` sizes its window to the content. They
+/// occupy their space whenever the user has not switched them off, and only
+/// their opacity changes. `.never` is the one case that reclaims the space,
+/// because then no state of the row ever draws them.
+///
+/// Written to be shared with the Appearance pane's sample row, which is the one
+/// place in the app whose job is to show what the panel will look like. That row
+/// still reimplements the rule as `if showsActions` and so still inserts the
+/// buttons on hover — the preview demonstrates exactly the behaviour the panel is
+/// forbidden from having. It should call this instead.
+public struct RowActions: View {
+    public let visibility: AppearanceSettings.RowActionVisibility
+    public let isHovered: Bool
+    /// A service with no usage page gets one button. The sample row passes true
+    /// because the row it is drawing is a stand-in for any service.
+    public let hasDashboard: Bool
+    public let refreshHelp: String
+    public let onRefresh: () -> Void
+    public let onOpenDashboard: () -> Void
+
+    public init(
+        visibility: AppearanceSettings.RowActionVisibility,
+        isHovered: Bool,
+        hasDashboard: Bool,
+        refreshHelp: String = "Refresh",
+        onRefresh: @escaping () -> Void = {},
+        onOpenDashboard: @escaping () -> Void = {}
+    ) {
+        self.visibility = visibility
+        self.isHovered = isHovered
+        self.hasDashboard = hasDashboard
+        self.refreshHelp = refreshHelp
+        self.onRefresh = onRefresh
+        self.onOpenDashboard = onOpenDashboard
+    }
+
+    private var isShown: Bool {
+        switch visibility {
+        case .onHover: return isHovered
+        case .always:  return true
+        case .never:   return false
+        }
+    }
+
+    public var body: some View {
+        if visibility != .never {
+            HStack(spacing: 0) {
+                HoverIconButton(
+                    systemName: "arrow.clockwise",
+                    help: refreshHelp,
+                    size: Tokens.Control.rowIconButton,
+                    action: onRefresh
+                )
+                if hasDashboard {
+                    HoverIconButton(
+                        systemName: "arrow.up.right",
+                        help: "Open usage page",
+                        size: Tokens.Control.rowIconButton,
+                        action: onOpenDashboard
+                    )
+                }
+            }
+            .opacity(isShown ? 1 : Tokens.Dim.reserved)
+            // Invisible buttons must not be clickable.
+            .allowsHitTesting(isShown)
+        }
+    }
+}
+
 /// The primary usage bar: a thin track, a tinted fill, and one line of
 /// context underneath.
 public struct UsageBar: View {
@@ -467,12 +569,20 @@ public struct UsageBar: View {
         MetricCaption(metric: metric, isSecondary: isSecondary, accent: accent, appearance: appearance)
     }
 
+    /// A caption belongs to the bar above it, so it sits at half the pitch that
+    /// separates one meter from the next. One rule for both kinds of bar: the
+    /// headline window used to sit 1pt off the content spacing and a secondary
+    /// one 2pt off it, which made a stack of meters an uneven ladder.
+    private var captionGap: CGFloat {
+        max(Tokens.Space.tight, (metrics.contentSpacing / 2).rounded())
+    }
+
     public var body: some View {
-        VStack(alignment: .leading, spacing: max(2, metrics.contentSpacing - (isSecondary ? 2 : 1))) {
+        VStack(alignment: .leading, spacing: captionGap) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
-                        .fill(Color.primary.opacity(0.12))
+                        .fill(Tokens.quiet(Tokens.Fill.track))
                     Capsule(style: .continuous)
                         .fill(fill)
                         // A nonzero value never rounds away to nothing, but the
@@ -496,7 +606,7 @@ public struct UsageBar: View {
         guard appearance.usesGradientFill else { return AnyShapeStyle(tint) }
         return AnyShapeStyle(
             LinearGradient(
-                colors: [tint.opacity(0.75), tint],
+                colors: [tint.opacity(Tokens.Fill.gradientFloor), tint],
                 startPoint: .leading,
                 endPoint: .trailing
             )
@@ -527,7 +637,7 @@ public struct UsageRing: View {
     public var body: some View {
         ZStack {
             Circle()
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: stroke)
+                .strokeBorder(Tokens.quiet(Tokens.Fill.track), lineWidth: stroke)
             if percent > 0 {
                 Circle()
                     // `strokeBorder` insets for us; a trimmed path has to be
@@ -545,6 +655,11 @@ public struct UsageRing: View {
 /// The line of context under a meter: what the window is called, how much of it
 /// is gone, and when it comes back. Every part of it is optional, so it also
 /// answers whether it would draw anything at all.
+///
+/// Two columns, not one run of text. What the window is and how much of it is
+/// gone read from the left; when it renews and how full it is are pushed to the
+/// trailing edge, so those two land on the same x on every line of every row
+/// instead of wherever the amounts before them happened to stop.
 public struct MetricCaption: View {
     @ObservedObject private var appearance: AppearanceSettings
     public let metric: UsageMetric
@@ -577,13 +692,13 @@ public struct MetricCaption: View {
     }
 
     public var body: some View {
-        // A caption is one line of context under a meter. Left unconstrained, a
-        // Text narrower than its content wraps rather than truncates, so at
-        // 300pt these would quietly become three lines and shove the row apart.
-        HStack(spacing: 4) {
+        // Left unconstrained, a Text narrower than its content wraps rather than
+        // truncates, so at 300pt these would quietly become three lines and
+        // shove the row apart.
+        HStack(spacing: Tokens.Space.snug) {
             if isSecondary {
                 Text(metric.label)
-                    .font(.system(size: size, weight: .medium))
+                    .font(.system(size: size, weight: Tokens.Ramp.emphasisWeight))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     // Which window this is outranks how much of it is gone: the
@@ -593,7 +708,7 @@ public struct MetricCaption: View {
                 if appearance.showsAmounts, !secondaryAmount.isEmpty {
                     Text(secondaryAmount)
                         .font(.system(size: size))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .lineLimit(1)
                 }
@@ -605,35 +720,46 @@ public struct MetricCaption: View {
                     .lineLimit(1)
             }
 
+            Spacer(minLength: Tokens.Space.snug)
+
             if appearance.showsCountdowns, let reset = resetText {
-                if showsSeparator {
-                    Text("·").font(.system(size: size)).foregroundStyle(.tertiary)
-                }
                 Text(reset)
                     .font(.system(size: size))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 0)
-
-            if isSecondary, appearance.showsUsageNumber {
-                Text("\(Int((metric.percent * 100).rounded()))%")
-                    .font(.system(size: size, weight: .medium))
+            if appearance.showsUsageNumber {
+                // Held on the primary line as well, where the figure itself is
+                // up on the title line: without the empty column the countdown
+                // beside a bar would stop one percentage further right than the
+                // countdown on the secondary line under it.
+                Text(isSecondary ? percentText : "")
+                    .font(.system(size: size,
+                                  weight: Tokens.Ramp.emphasisWeight,
+                                  design: Tokens.Ramp.figureDesign))
                     .monospacedDigit()
                     .foregroundStyle(appearance.tint(for: metric.percent, providerAccent: accent))
                     .lineLimit(1)
                     .layoutPriority(1)
+                    .frame(minWidth: figureColumn, alignment: .trailing)
             }
         }
+        .frame(minHeight: Tokens.lineBox(size))
     }
 
-    /// The interpunct joins two things. A secondary line always has its label
-    /// in front of the countdown; the primary line has only the amounts, and
-    /// with those switched off a leading "·" is just a mark on the panel.
-    private var showsSeparator: Bool {
-        if isSecondary { return true }
-        return appearance.showsAmounts && !amountText.isEmpty
+    /// Width held for the trailing percentage. A rounded monospaced figure runs
+    /// about 0.6em to the digit, so "100%" needs roughly 2.5em — 2.8 leaves the
+    /// column a hair of slack rather than letting a third digit shove the
+    /// countdown left on one line and not the next.
+    ///
+    /// Off `detailSize` and not `size`: a secondary line sets its figures in
+    /// caption type, and a column two points narrower on the third line of a row
+    /// than on the first is the misalignment this exists to remove.
+    private var figureColumn: CGFloat { (appearance.metrics.detailSize * 2.8).rounded() }
+
+    private var percentText: String {
+        "\(Int((metric.percent * 100).rounded()))%"
     }
 
     /// The secondary line already carries its own label and percentage, so this
@@ -685,26 +811,32 @@ public struct StatusLine: View {
     private var size: CGFloat { appearance.metrics.detailSize }
 
     public var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: Tokens.Space.small) {
             Circle()
-                .fill(metric.used > 0 ? appearance.tint(for: 0, providerAccent: accent) : Color.secondary)
-                .frame(width: 6, height: 6)
+                .fill(metric.used > 0
+                      ? appearance.tint(for: 0, providerAccent: accent)
+                      : Tokens.Ink.idle)
+                .frame(width: Tokens.Control.dot, height: Tokens.Control.dot)
             Text(text)
                 .font(.system(size: size))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+
+            Spacer(minLength: Tokens.Space.snug)
+
+            // Trailing, like every other countdown in the panel, so a quotaless
+            // row's renewal date sits in the same column as the reset date on
+            // the metered row above it.
             if appearance.showsCountdowns,
                let reset = metric.resetDate,
                let countdown = Countdown.short(until: reset) {
-                Text("·").font(.system(size: size)).foregroundStyle(.tertiary)
                 Text("renews in \(countdown)")
                     .font(.system(size: size))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
         }
-        .frame(height: size + 3)
+        .frame(minHeight: Tokens.lineBox(size))
     }
 
     /// A unit is the provider saying "this is a count", so lead with the
@@ -730,9 +862,9 @@ public struct SecondaryValue: View {
     private var size: CGFloat { appearance.metrics.captionSize }
 
     public var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Tokens.Space.snug) {
             Text(metric.label)
-                .font(.system(size: size, weight: .medium))
+                .font(.system(size: size, weight: Tokens.Ramp.emphasisWeight))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             // Governed by showsAmounts like every other raw count, but the
@@ -742,11 +874,12 @@ public struct SecondaryValue: View {
                 Text(value)
                     .font(.system(size: size))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
+        .frame(minHeight: Tokens.lineBox(size))
     }
 
     private var value: String {
@@ -755,6 +888,7 @@ public struct SecondaryValue: View {
     }
 }
 
+/// A further window folded down to one pill, for `secondaryWindows == .chips`.
 public struct SecondaryChip: View {
     @ObservedObject private var appearance: AppearanceSettings
     public let metric: UsageMetric
@@ -771,10 +905,10 @@ public struct SecondaryChip: View {
     }
 
     public var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Tokens.Space.snug) {
             Circle()
                 .fill(appearance.tint(for: metric.percent, providerAccent: accent))
-                .frame(width: 5, height: 5)
+                .frame(width: Tokens.Control.chipDot, height: Tokens.Control.chipDot)
             Text(label)
                 .font(.system(size: appearance.metrics.captionSize))
                 .monospacedDigit()
@@ -785,9 +919,9 @@ public struct SecondaryChip: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .padding(.horizontal, Tokens.Space.small)
+        .padding(.vertical, Tokens.Space.tight)
+        .background(Capsule().fill(Tokens.quiet(Tokens.Fill.pill)))
     }
 
     private var label: String {
