@@ -58,8 +58,17 @@ private struct PaneFooter: View {
 public struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var pane: Pane = .services
-    @State private var isAdopting = false
-    @State private var adoptionStatus: String?
+    /// What each browser holds, refreshed by a silent sweep. Empty until the
+    /// first one lands.
+    @State private var sources: [CookieExtractors.BrowserSource] = []
+    /// The browser whose Keychain dialog is on screen, if any. One at a time by
+    /// construction: unlocking is per browser now.
+    @State private var unlockingSource: String?
+    @State private var isScanning = false
+    /// The outcome of the last action on a browser, kept per browser. A shared
+    /// line would put Chrome's answer under Firefox's name.
+    @State private var sourceNotes: [String: String] = [:]
+    @State private var scanNote: String?
 
     public init() {}
 
@@ -196,20 +205,46 @@ public struct SettingsView: View {
 
     // MARK: - Services
 
+    /// Sessions a Keychain approval would actually unlock. An unreadable cookie
+    /// in a browser that has no key to ask for is not one of them, and counting
+    /// it here would promise something no Unlock button can deliver.
     private var lockedTotal: Int {
-        state.lockedAccounts.values.reduce(0, +)
+        sources
+            .filter { $0.requirement == .keychainKey }
+            .reduce(0) { $0 + $1.locked }
     }
 
     private var providersTab: some View {
         Form {
             Section {
-                browserRow
-            } footer: {
-                if lockedTotal > 0 {
-                    // These are found, not missing. Saying so is the difference
-                    // between an actionable prompt and the app looking broken.
-                    PaneFooter(text: "\(lockedTotal) more account\(lockedTotal == 1 ? " is" : "s are") signed in elsewhere — reading them needs one Keychain approval, which only happens when you ask.")
+                if sources.isEmpty {
+                    Text(isScanning
+                         ? "Looking through your browsers…"
+                         : "No browser on this Mac keeps its cookies somewhere aibars can read.")
+                        .font(.paneCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(sources) { source in
+                        BrowserSourceRow(
+                            source: source,
+                            note: sourceNotes[source.id],
+                            isBusy: unlockingSource == source.id,
+                            // A Keychain dialog is modal to the user, not to the
+                            // app. A second Unlock pressed while the first is
+                            // waiting puts two dialogs on screen, neither of which
+                            // says which browser it is for — the exact thing this
+                            // pane exists to stop.
+                            isBlocked: unlockingSource != nil && unlockingSource != source.id,
+                            onUnlock: { Task { await unlock(source) } },
+                            onGrantAccess: { WebLoginEnvironment.openFullDiskAccessSettings() }
+                        )
+                    }
                 }
+            } header: {
+                sourcesHeader
+            } footer: {
+                PaneFooter(text: scanNote ?? sourcesFooter)
             }
 
             // One section for all of them, one line each. A section per service
@@ -237,86 +272,129 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // Silent, so opening Settings cannot raise a Keychain dialog on its own.
+        .task { await scan() }
     }
 
-    private var browserRow: some View {
-        HStack(spacing: Tokens.Space.gutter) {
-            Image(systemName: "person.badge.key")
-                .foregroundStyle(.secondary)
-                // The same column a service logo occupies, so both rows in this
-                // pane start their text at one x instead of two.
-                .frame(width: Tokens.Control.settingsLogo)
-
-            VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
-                Text("Use sessions from \(DefaultBrowser.current().name)")
-                    .font(.paneTitle)
-                Text(adoptionStatus ?? "Connects anything you're already logged into.")
-                    .font(.paneCaption)
-                    .foregroundStyle(.secondary)
-                    // Nine services adopted at once names all nine. It wraps
-                    // rather than truncates: the tail of that list is the part
-                    // that answers "did it find the account I care about".
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
+    private var sourcesHeader: some View {
+        HStack(spacing: Tokens.Space.medium) {
+            Text("Where sessions come from")
             Spacer(minLength: Tokens.Space.gutter)
-
-            adoptionControl
-                .controlSize(.small)
-                // A floor rather than a fixed width: this shares the column with
-                // the service buttons and should line up with them, but "Unlock
-                // 12 more" is longer than the column and truncating the count is
-                // worse than a button that reaches past it.
-                .frame(minWidth: Tokens.Control.actionColumn, alignment: .trailing)
-        }
-        .padding(.vertical, Tokens.Space.tight)
-    }
-
-    @ViewBuilder
-    private var adoptionControl: some View {
-        if isAdopting {
-            ProgressView()
-        } else if lockedTotal > 0 {
-            // Two buttons rather than one with a computed style: buttonStyle
-            // takes a type, so it cannot be chosen at runtime without erasing
-            // it, and erasing a button style is a lot of machinery for one
-            // emphasis change.
-            Button("Unlock \(lockedTotal) more") { Task { await adopt() } }
-                .buttonStyle(.borderedProminent)
-        } else {
-            Button("Check now") { Task { await adopt() } }
+            if isScanning {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                // One button for the whole list, because looking is free and
+                // asks nothing: only the per-browser Unlock touches a Keychain.
+                // Off while one is waiting, though — re-reading a browser mid
+                // dialog is how a second dialog gets on screen.
+                Button("Check again") { Task { await recheck() } }
+                    .controlSize(.small)
+                    .disabled(unlockingSource != nil)
+            }
         }
     }
 
-    private func adopt() async {
-        isAdopting = true
+    /// One line for the section, not one per row: the Keychain rule is the same
+    /// for every browser in the list and repeating it nine times is noise.
+    private var sourcesFooter: String {
+        guard lockedTotal > 0 else {
+            return "Every browser is listed separately. aibars reads sessions you're already logged into; it never signs you out of one."
+        }
+        return "\(lockedTotal) session\(lockedTotal == 1 ? " is" : "s are") sitting behind a browser's own Keychain key. Unlocking one asks about that browser only, and only when you press it."
+    }
+
+    /// Reads what each browser holds without asking for anything. Off the main
+    /// thread: this copies every browser's cookie database.
+    private func scan() async {
+        let sweep = queries
+        isScanning = true
+        defer { isScanning = false }
+        sources = await Task.detached(priority: .utility) {
+            CookieExtractors.sessionSources(sweep)
+        }.value
+    }
+
+    /// The user logged into something and wants aibars to look again. Nothing
+    /// here allows a prompt, so it cannot put a dialog on screen — the browsers
+    /// whose keys are already in hand are simply re-read.
+    private func recheck() async {
+        scanNote = nil
+        sourceNotes.removeAll()
+        await scan()
+        let adopted = await state.adoptBrowserSessions()
+        scanNote = adopted.isEmpty ? "No new sessions found." : connected(adopted)
+        if !adopted.isEmpty { await state.refreshAll() }
+    }
+
+    /// One browser's Keychain key, one dialog, and nothing asked of the others.
+    private func unlock(_ source: CookieExtractors.BrowserSource) async {
+        let sweep = queries
+        let id = source.id
         // The previous run's answer is not this run's answer, and leaving it
         // beside the spinner reads as a result that has already arrived.
-        adoptionStatus = nil
-        defer { isAdopting = false }
-        // Retry refusals only. Rebuilding every extractor re-asked for the
-        // browsers already approved, which is why pressing this repeatedly
-        // produced a dialog per browser per press.
-        CookieExtractors.retryLockedKeys()
-        // The user clicked the button, so a keychain prompt is expected here.
-        let adopted = await state.adoptBrowserSessions(allowingKeychainPrompt: true)
-        if adopted.isEmpty {
-            adoptionStatus = lockedTotal > 0
-                ? "Keychain access was refused, so those accounts stay locked."
-                : "No new sessions found in your browsers."
-        } else {
-            // Unlocking accounts and then not listing them is the same as not
-            // unlocking them. Asking for more accounts is asking to see them.
-            let extra = adopted.filter { state.provider(for: $0)?.accountID != nil }
-            if !extra.isEmpty {
-                AppearanceSettings.shared.showsAllAccounts = true
-            }
-            let names = adopted.compactMap { state.provider(for: $0)?.displayName }
-            let unique = Array(Set(names)).sorted()
-            adoptionStatus = extra.isEmpty
-                ? "Connected \(unique.joined(separator: ", "))."
-                : "Connected \(adopted.count) account\(adopted.count == 1 ? "" : "s") — \(unique.joined(separator: ", ")). Now showing every account."
-            await state.refreshAll()
+        sourceNotes[id] = nil
+        scanNote = nil
+        unlockingSource = id
+        defer { unlockingSource = nil }
+
+        let readable = await Task.detached(priority: .utility) {
+            CookieExtractors.unlock(id, for: sweep)
+        }.value
+        guard readable > 0 else {
+            await scan()
+            // A row that still asks for the key is a browser that has no key:
+            // refused. One whose ask has gone while its sessions have not is a key
+            // that worked on a lock it doesn't fit — Chrome's app-bound cookies do
+            // exactly this — and calling that a refusal sends the user hunting for
+            // a dialog they already answered.
+            let refused = sources.first { $0.id == id }?.requirement == .keychainKey
+            sourceNotes[id] = refused
+                ? "Keychain access was refused, so \(source.name) stays locked."
+                : "\(source.name)'s cookies need more than its Keychain key. aibars still can't read them."
+            return
+        }
+        // The key is cached now, so the sweep that picks the sessions up needs no
+        // prompt of its own — which is what keeps the other browsers silent.
+        let adopted = await state.adoptBrowserSessions()
+        await scan()
+        sourceNotes[id] = adopted.isEmpty
+            ? "Unlocked \(source.name). Every session in it was already connected."
+            : connected(adopted)
+        if !adopted.isEmpty { await state.refreshAll() }
+    }
+
+    /// What was connected, named. Unlocking accounts and then not listing them is
+    /// the same as not unlocking them, and asking for more accounts is asking to
+    /// see them — which is why this also lifts the single-account filter.
+    private func connected(_ adopted: [String]) -> String {
+        let extra = adopted.filter { state.provider(for: $0)?.accountID != nil }
+        if !extra.isEmpty {
+            AppearanceSettings.shared.showsAllAccounts = true
+        }
+        let names = adopted.compactMap { state.provider(for: $0)?.displayName }
+        let unique = Array(Set(names)).sorted()
+        return extra.isEmpty
+            ? "Connected \(unique.joined(separator: ", "))."
+            : "Connected \(adopted.count) account\(adopted.count == 1 ? "" : "s") — \(unique.joined(separator: ", ")). Now showing every account."
+    }
+
+    /// The same queries `AppState.adoptBrowserSessions` sweeps with: one per
+    /// service, from whichever provider of it knows its cookie names. Several
+    /// accounts of one service share a name and a domain, so asking twice would
+    /// only copy each cookie database twice.
+    private var queries: [CookieExtractors.Query] {
+        var seen: Set<String> = []
+        return state.providers.compactMap { provider -> CookieExtractors.Query? in
+            guard let config = provider.webLogin,
+                  let domain = config.cookieDomain,
+                  seen.insert(provider.serviceID).inserted
+            else { return nil }
+            return CookieExtractors.Query(
+                key: provider.serviceID,
+                names: config.candidateCookieNames,
+                domain: domain
+            )
         }
     }
 
@@ -360,6 +438,165 @@ public struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Tokens.Space.paneMargin)
+    }
+}
+
+/// One browser in the Services pane: what it holds, and the one thing the user
+/// can do about it.
+///
+/// A row per browser rather than one row naming the default browser. The sweep
+/// reads every browser installed, each Chromium browser has its own Keychain key
+/// and its own profiles, Safari needs Full Disk Access and Firefox needs nothing
+/// — so "Use sessions from Firefox" with an "Unlock 4 more" button beside it was
+/// naming one browser and prompting for all of them.
+private struct BrowserSourceRow: View {
+    let source: CookieExtractors.BrowserSource
+    /// The result of the last action on this browser, which replaces the summary
+    /// while it is worth reading.
+    let note: String?
+    let isBusy: Bool
+    /// True while another browser's Keychain dialog is waiting for an answer.
+    let isBlocked: Bool
+    let onUnlock: () -> Void
+    let onGrantAccess: () -> Void
+
+    var body: some View {
+        HStack(spacing: Tokens.Space.gutter) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                // The same column a service logo occupies, so every row in this
+                // pane starts its text at one x instead of two.
+                .frame(width: Tokens.Control.settingsLogo)
+
+            VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
+                Text(source.name)
+                    .font(.paneTitle)
+                Text(note ?? summary)
+                    .font(.paneCaption)
+                    .foregroundStyle(detailColor)
+                    // A note names every service it just connected. It wraps
+                    // rather than truncates: the tail of that list is the part
+                    // that answers "did it find the account I care about".
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !profileLines.isEmpty {
+                    VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
+                        ForEach(profileLines, id: \.self) { line in
+                            Text(line)
+                        }
+                    }
+                    .font(.paneCaption)
+                    .foregroundStyle(.tertiary)
+                    // Wraps like the line above it. A profile's name is the whole
+                    // point of the line, and a truncated one names nothing.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, Tokens.Space.tight)
+                }
+            }
+
+            Spacer(minLength: Tokens.Space.gutter)
+
+            action
+                .controlSize(.small)
+                .disabled(isBlocked)
+                // A floor rather than a fixed width: this shares the column with
+                // the service buttons and should line up with them, but "Grant
+                // Access…" is longer than the column and truncating it is worse
+                // than a button that reaches past it.
+                .frame(minWidth: Tokens.Control.actionColumn, alignment: .trailing)
+        }
+        .padding(.vertical, Tokens.Space.tight)
+    }
+
+    /// Safari has a symbol of its own; nothing else here does, and a wrong logo
+    /// is worse than a generic one.
+    private var symbol: String {
+        source.browser == .safari ? "safari" : "globe"
+    }
+
+    /// What this browser holds, in the fewest words that stay true.
+    private var summary: String {
+        if source.requirement == .fullDiskAccess {
+            return "Needs Full Disk Access — macOS keeps Safari's cookies in a folder aibars can't open without it."
+        }
+        guard source.total > 0 else {
+            return "Nothing signed in here that aibars can use."
+        }
+        var parts: [String] = []
+        if source.readable > 0 {
+            parts.append("\(source.readable) session\(source.readable == 1 ? "" : "s") ready")
+        }
+        if source.locked > 0 {
+            // A key nobody has asked for is the only kind of locked a button can
+            // fix. A cookie the browser wrote empty — or one Chrome sealed with
+            // more than its Safe Storage key — is simply unreadable, and blaming
+            // the Keychain for it points the user at a dialog that would not help.
+            parts.append(source.requirement == .keychainKey
+                         ? "\(source.locked) locked behind \(source.name)'s own Keychain key"
+                         : "\(source.locked) aibars can't read")
+        }
+        return parts.joined(separator: " · ") + "."
+    }
+
+    /// How many profiles get a line of their own. Someone with twelve Chrome
+    /// profiles would otherwise get a twelve-line row that pushes every service
+    /// in the pane below the fold to say one thing twelve times.
+    private static let namedProfileLimit = 4
+
+    /// Which profile holds what, named only when there is more than one holding
+    /// anything. "Profile 2 — 1 locked" is the question the Keychain dialog can't
+    /// answer for you, and with a single profile it says nothing the line above
+    /// hasn't. Past the limit the tail becomes one line, which still accounts for
+    /// every session in it.
+    private var profileLines: [String] {
+        let holding = source.profiles.filter { $0.readable + $0.locked > 0 }
+        guard holding.count > 1 else { return [] }
+        guard holding.count > Self.namedProfileLimit else { return holding.map(Self.line(for:)) }
+        let named = holding.prefix(Self.namedProfileLimit - 1)
+        let rest = holding.dropFirst(named.count)
+        let counts = Self.phrase(
+            readable: rest.reduce(0) { $0 + $1.readable },
+            locked: rest.reduce(0) { $0 + $1.locked }
+        )
+        return named.map(Self.line(for:)) + ["\(rest.count) more profiles — \(counts)"]
+    }
+
+    private static func line(for profile: CookieExtractors.BrowserSource.Profile) -> String {
+        "\(profile.name) — \(phrase(readable: profile.readable, locked: profile.locked))"
+    }
+
+    /// "2 ready, 1 locked", leaving out whichever is zero — a profile line that
+    /// reads "0 locked" invites a click on a button that isn't for it.
+    private static func phrase(readable: Int, locked: Int) -> String {
+        var parts: [String] = []
+        if readable > 0 { parts.append("\(readable) ready") }
+        if locked > 0 { parts.append("\(locked) locked") }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Orange for the rows that want the user and no others. Colouring every row
+    /// makes the one that needs attention indistinguishable, and a note is an
+    /// answer rather than a state.
+    private var detailColor: Color {
+        guard note == nil else { return Tokens.Ink.idle }
+        return source.requirement == nil ? Tokens.Ink.idle : Tokens.Ink.attention
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        if isBusy {
+            ProgressView()
+        } else if source.requirement == .keychainKey {
+            Button("Unlock \(source.locked)", action: onUnlock)
+                .buttonStyle(.borderedProminent)
+                .help("Asks the Keychain for \(source.name)'s cookie key. No other browser is touched.")
+        } else if source.requirement == .fullDiskAccess {
+            Button("Grant Access…", action: onGrantAccess)
+                .help("Opens Privacy & Security → Full Disk Access.")
+        }
+        // A browser with nothing locked has nothing to ask for: its sessions are
+        // already connected, and a button that would do nothing is worse than an
+        // empty column.
     }
 }
 
