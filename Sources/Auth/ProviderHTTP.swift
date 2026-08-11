@@ -5,15 +5,44 @@ public struct ProviderHTTP {
     public let session: URLSession
     public var defaultHeaders: [String: String]
 
-    public init(headers: [String: String] = [:], timeout: TimeInterval = 15) {
+    /// Read from the framework's own bundle rather than `Bundle.main`, which
+    /// under `make test` is the xctest runner and not the app.
+    private static let version = Bundle(for: BundleToken.self)
+        .infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+
+    private static let userAgent = "aibars/\(version) (https://github.com/AndrxwWxng/aibars)"
+
+    /// Cookies stay off: providers hand-build their own `Cookie` header, and a
+    /// stored `Set-Cookie` from a previous poll would silently override it.
+    private static func makeSession(timeout: TimeInterval) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.httpCookieStorage = nil
+        config.urlCache = nil
         config.httpAdditionalHeaders = [
-            "User-Agent": "aibars/0.1 (https://github.com/aibars/aibars)",
+            "User-Agent": userAgent,
             "Accept": "application/json"
         ]
-        self.session = URLSession(configuration: config)
+        return URLSession(configuration: config)
+    }
+
+    // One session per timeout, shared for the life of the process: a poll cycle
+    // fires ~18 requests, and a fresh session per request means a fresh TCP and
+    // TLS handshake per request. Keyed by timeout rather than overridden per
+    // request because request-vs-config precedence is not dependable, and
+    // Mistral's deliberate 4s best-effort calls must stay 4s.
+    private static let defaultSession = makeSession(timeout: 15)
+    private static let shortSession = makeSession(timeout: 4)
+
+    public init(headers: [String: String] = [:], timeout: TimeInterval = 15) {
+        switch timeout {
+        case 15: self.session = Self.defaultSession
+        case 4: self.session = Self.shortSession
+        default: self.session = Self.makeSession(timeout: timeout)
+        }
         self.defaultHeaders = headers
     }
 
@@ -55,7 +84,9 @@ public struct ProviderHTTP {
         }
     }
 
-    public func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    /// Decoding needs no session, so callers holding bytes already can reach
+    /// this without building a `ProviderHTTP` at all.
+    public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
@@ -63,7 +94,14 @@ public struct ProviderHTTP {
             throw ProviderError.parse("\(error.localizedDescription) — \(preview)")
         }
     }
+
+    public func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        try Self.decode(type, from: data)
+    }
 }
+
+/// Anchor for `Bundle(for:)` — resolves to the framework this file compiles into.
+private final class BundleToken {}
 
 /// Convenience for date helpers.
 public enum ProviderDate {
