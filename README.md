@@ -3,7 +3,7 @@
 A native macOS menu bar app that shows your usage across every AI subscription you pay for — Claude, ChatGPT, Cursor, GitHub Copilot, and anything else you can point it at.
 
 ```
-   ▁▃▅▇  ← the menu bar, one bar per service
+   ▁▃▅▇  ← the menu bar: your busiest services, tallest first
 ╭──────────────────────────────────────────╮
 │ ▁▃▅▇  AI Usage                        ↻  │
 │       Updated just now                   │
@@ -38,10 +38,10 @@ You probably pay for three or four AI tools and have no idea whether you're abou
 
 ## Features
 
-- **Menu bar meter** — one bar per service, tallest usage first, tinted red only when something is actually near its cap. Click for the dropdown.
-- **Nine providers out of the box**: Claude, ChatGPT, Gemini, Grok, Perplexity, DeepSeek, Cursor, GitHub Copilot, and a generic JSON provider — each with its own logo.
+- **Menu bar meter** — one bar for each of your busiest services, tallest usage first, tinted red only when something is actually near its cap. How many bars is up to you (1–6, four by default). Click for the dropdown.
+- **Eleven providers out of the box**: Claude, ChatGPT, Gemini, Grok, Perplexity, DeepSeek, Cursor, GitHub Copilot, OpenRouter, Mistral, and MiniMax — each with its own logo.
 - **Usually no sign-in at all** — if you're logged in in your browser, aibars adopts that session at launch. Otherwise one click opens the real login page in your default browser. No DevTools, no copy-paste.
-- **Generic provider** — point at any JSON endpoint and aibars will display whatever it returns.
+- **Generic provider** — MiniMax is the generic one: point it at a JSON usage endpoint and aibars reads a `used`/`limit` pair out of it. Three response shapes are understood, listed above `MiniMaxUsageParser.parse`; anything else reads as 0/0.
 - **Refresh interval, display mode, enable/disable per provider** — all configurable in Settings.
 - **Nothing to store for most services** — a session read from your browser is kept in memory and re-derived at launch, so there is no credential on disk and no Keychain dialog. Pasted API keys, which can't be re-derived, go in the Keychain.
 - **Open source, MIT licensed**.
@@ -51,7 +51,7 @@ You probably pay for three or four AI tools and have no idea whether you're abou
 Requirements: macOS 13+, Xcode 15+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 
 ```sh
-git clone https://github.com/aibars/aibars
+git clone https://github.com/AndrxwWxng/aibars
 cd aibars
 make
 open aibars.xcodeproj
@@ -76,11 +76,12 @@ aibars/
 │   ├── Models/                 UsageData, UsageProvider protocol
 │   ├── Auth/                   Keychain, cookie extractors, HTTP client, web login
 │   ├── Brand/                  SVG path parser + provider logos
-│   ├── Providers/              Claude, ChatGPT, Cursor, Copilot, MiniMax
-│   └── Views/                  SwiftUI views, login window, settings window
+│   ├── Providers/              one file per service — see the table below
+│   ├── Views/                  SwiftUI views, login window, settings window
+│   └── AppState.swift          AppState (service registry, polling) + AnyUsageProvider
 ├── SourcesApp/                 aibars app target (thin wrapper)
 │   ├── aibarsApp.swift         @main + MenuBarExtra scene
-│   └── aibars.entitlements     App sandbox + network client
+│   └── aibars.entitlements     Network client; sandbox off (reads browser cookie stores)
 └── Tests/                      XCTest for parsers
 ```
 
@@ -104,9 +105,11 @@ Sessions read from a browser are held in memory only. They cost nothing to repro
 | DeepSeek    | platform.deepseek.com → API key; paste it once                                    |
 | Cursor      | cursor.com → WorkOS login → `WorkosCursorSessionToken` captured automatically     |
 | Copilot     | GitHub login → pre-filled token form; paste the token it shows you                |
-| MiniMax     | Settings → **Configure…**: a usage endpoint URL and a bearer token                |
+| OpenRouter  | openrouter.ai/settings/keys → **Create Key**; paste the `sk-or-v1-…` value (shown once) |
+| Mistral     | auth.mistral.ai login → session cookie captured automatically; if it isn't picked up, paste admin.mistral.ai's whole cookie header, because Mistral names the cookie after your project |
+| MiniMax     | Settings → Services → **Connect…**: a usage endpoint URL and a bearer token       |
 
-Copilot and DeepSeek are the exceptions to hands-off capture: their APIs want a personal access token or API key rather than a session cookie, so aibars drops you on the right page and takes the result.
+Copilot, DeepSeek and OpenRouter are the exceptions to hands-off capture: their APIs want a personal access token or API key rather than a session cookie, so aibars drops you on the right page and takes the result.
 
 ### Which browsers this works with
 
@@ -120,13 +123,16 @@ aibars reads the session out of the browser you logged in with, so that browser 
 
 Every login window also has a **Paste a token instead** link, so no browser is a hard requirement.
 
+aibars ships unsandboxed. Reading Chromium's profile cookie databases, Safari's `~/Library/Cookies/Cookies.binarycookies` and the login keychain's Safe Storage items is not something the App Sandbox permits, so the entitlements file turns it off.
+
 Signing out clears aibars' copy of the credential only. Your browser session is left alone — clearing it would log you out of the website itself.
 
 ## Settings
 
-- **Refresh interval** — 30s, 1m, 5m, 15m, 30m
-- **Menu bar mode** — meter only · meter + highest % · meter + busiest service name, with a live preview
-- **Per-provider** — sign in / sign out, show or hide in the menu bar
+- **Refresh interval** — 30 seconds, 1, 5, 15 or 30 minutes (General)
+- **Appearance** — five presets (Comfortable, Compact, Minimal, Dashboard, Monochrome) over sections for Size, Rows, What each row shows, Usage meter, The list and Menu bar, with a live preview of the panel and a Reset that puts everything back to how it shipped
+- **Menu bar mark** — Icon only · Icon + highest % · Icon + rotating names · Percentage only (Appearance → Menu bar)
+- **Per-provider** — sign in / sign out, show or hide in the menu bar (Services)
 
 ## Adding a new provider
 
@@ -137,7 +143,10 @@ import Foundation
 import SwiftUI
 
 public final class MyProvider: ObservableObject, UsageProvider {
-    public let id = "myprovider"
+    /// Unique per account: "myprovider" for the only one, "myprovider#2" for a second.
+    public let id: String
+    public let accountID: String?
+    public var serviceID: String { "myprovider" }
     public let displayName = "My Service"
     public let iconName = "star.fill"
     public let accentColor: Color = .orange
@@ -145,10 +154,13 @@ public final class MyProvider: ObservableObject, UsageProvider {
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false
 
-    public init() {}
+    public init(accountID: String? = nil) {
+        self.accountID = accountID
+        self.id = accountID.map { "myprovider#\($0)" } ?? "myprovider"
+    }
 
     public func fetchUsage() async throws -> UsageData {
-        guard let token = SessionStore.shared.token(for: "myprovider") else {
+        guard let token = SessionStore.shared.token(for: id) else {
             throw ProviderError.notAuthenticated
         }
         let (data, _) = try await ProviderHTTP(headers: [
@@ -184,18 +196,17 @@ public final class MyProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws { /* cookie auto-detect */ }
-    public func signOut() async throws { SessionStore.shared.clear("myprovider") }
-    public func saveTokenManually(_ token: String) throws {
-        try SessionStore.shared.setToken(token, for: "myprovider", source: .manualPaste)
+    public func signOut() async throws { SessionStore.shared.clear(id) }
+    public func saveTokenManually(_ token: String, source: SessionSource = .manualPaste) throws {
+        try SessionStore.shared.setToken(token, for: id, source: source)
     }
     public func setEnabled(_ enabled: Bool) { isEnabled = enabled }
 }
 ```
 
-2. Add `AnyUsageProvider(MyProvider())` to `AppState.providers`.
-3. Add `case "myprovider": try (provider as? MyProvider)?.saveTokenManually(token)` in `AnyUsageProvider.init`.
-4. Give it a logo — either add a `BrandMark` entry in `Sources/Brand/BrandMarks.swift` (single-path SVG data, 24×24 view box) or drop an image named `logo-myprovider` into an asset catalog. Without either, the row falls back to a lettermark in `accentColor`.
-5. Add a test in `Tests/aibarsTests/ParserTests.swift`.
+2. Register it in `AppState.services`: `Service(id: "myprovider") { AnyUsageProvider(MyProvider(accountID: $0)) }`. Nothing else is needed to make token entry work — `AnyUsageProvider` dispatches `saveTokenManually` through the protocol rather than switching on the id.
+3. Give it a logo — either add a `BrandMark` entry in `Sources/Brand/BrandMarks.swift` (single-path SVG data plus its view box, 24×24 for simple-icons glyphs) or drop an image named `logo-myprovider` into an asset catalog. Without either, the row falls back to a lettermark in `accentColor`.
+4. Add a test in `Tests/aibarsTests/ParserTests.swift`.
 
 ## Contributing
 
@@ -209,16 +220,16 @@ MIT — see `LICENSE`.
 
 ## Credits
 
-Provider logos are the single-path glyphs from [simple-icons](https://github.com/simple-icons/simple-icons) (CC0), rendered at runtime by the small SVG path parser in `Sources/Brand/SVGPath.swift`. The logos themselves remain trademarks of their respective owners and are used only to identify the service each row reports on.
+Provider logos are single-path glyphs rendered at runtime by the small SVG path parser in `Sources/Brand/SVGPath.swift`. Most come from [simple-icons](https://github.com/simple-icons/simple-icons) and are used under [CC0-1.0](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md). Two exceptions: the OpenAI mark is the glyph simple-icons published under CC0 up to v14, which was removed from that set in November 2025 pending brand permission, and the Grok mark comes from xAI's own brand assets and is not CC0 — it is reproduced only to identify the service, in its own shape, recoloured where a near-black mark would otherwise be invisible on a dark background. The logos remain trademarks of their respective owners and are used only to identify the service each row reports on. aibars is unofficial and is not affiliated with, endorsed by, or sponsored by any of these companies.
 
 ## Disclaimer
 
-This is an unofficial project. The Claude, ChatGPT, Cursor, and Copilot usage endpoints are not documented public APIs and may change without notice. aibars reads only what your own browser session has access to, with your own credentials. Be a good citizen — don't hammer the endpoints.
+This is an unofficial project. Most of the usage endpoints aibars reads — Claude, ChatGPT, Gemini, Grok, Perplexity, Cursor, Copilot and Mistral — are not documented public APIs and may change or disappear without notice. Only DeepSeek's and OpenRouter's are documented. The generic provider reads whatever endpoint you point it at. aibars reads only what your own browser session has access to, with your own credentials. Be a good citizen — don't hammer the endpoints.
 
 ## Roadmap
 
-- ~~WebView-based auth (no more copy-paste)~~ — done
-- Chrome cookie decryption
+- ~~One-click auth (no more copy-paste)~~ — done, by handing off to your own browser rather than hosting a WebView
+- ~~Chrome cookie decryption~~ — done
 - Per-window cost estimates (USD)
 - Notifications when a window is about to reset
 - Today widget
