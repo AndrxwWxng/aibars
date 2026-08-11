@@ -41,6 +41,12 @@ public struct ProviderRow: View {
 
     private var metrics: AppearanceSettings.Metrics { appearance.metrics }
 
+    /// Size of the trailing percentage, a quarter above the title scale so the
+    /// reading leads the row at every density rather than at one of them.
+    /// Rounded because a font set on a half point renders a blurrier digit than
+    /// the same figure a hair smaller.
+    private var figureSize: CGFloat { (metrics.titleSize * 1.25).rounded() }
+
     public var body: some View {
         // Top alignment lines a 40pt logo up with the name rather than with the
         // middle of a stack of bars — but a row with nothing under its title is
@@ -69,9 +75,27 @@ public struct ProviderRow: View {
         .onTapGesture {
             provider.isAuthenticated ? onOpenDashboard() : onSignIn()
         }
-        .help(provider.isAuthenticated
-              ? (provider.dashboardURL != nil ? "Open \(provider.displayName) usage page" : "")
-              : "Sign in to \(provider.displayName)")
+        .help(rowHelp)
+        // The panel is the only place a row can be dismissed from. A user who
+        // subscribes to two of eleven services otherwise has to find Settings →
+        // Services and switch nine of them off one at a time, and the row the
+        // panel is shouting at them offers no way to say "not this one". Off the
+        // provider's own flag, so it survives a relaunch and comes back from the
+        // same list it would have been switched off in.
+        .contextMenu {
+            Button("Hide \(provider.displayName)") { provider.setEnabled(false) }
+        }
+    }
+
+    /// A row is a button whichever state it is in, so it says what clicking it
+    /// does — including the case where it does nothing. A connected service with
+    /// no usage page of its own hovers like every other row and used to answer
+    /// with an empty string, which reads as a tooltip that failed to load.
+    private var rowHelp: String {
+        guard provider.isAuthenticated else { return "Sign in to \(provider.displayName)" }
+        return provider.dashboardURL != nil
+            ? "Open \(provider.displayName) usage page"
+            : "\(provider.displayName) has no usage page"
     }
 
     // MARK: - Leading column
@@ -121,6 +145,15 @@ public struct ProviderRow: View {
                         thickness: metrics.barHeight,
                         tint: tint(for: primaryPercent ?? 0)
                     )
+                    // Held to the same geometry, but dimmed to the logo's own
+                    // disconnected weight when it is only a placeholder. A dial
+                    // is the one element at the same x on every row, which is
+                    // what makes the panel scannable — drawn at full strength
+                    // with an empty track it reports "nothing is being used" for
+                    // a row that is disconnected, loading, failed or has no
+                    // quota at all. Opacity rather than a shorter column: the
+                    // text beside it must not shift as a reading arrives.
+                    .opacity(primaryPercent == nil ? Tokens.Dim.disconnected : 1)
                     // A dial is a shape and says nothing on its own, so it is
                     // made an element and given its reading — but only where
                     // there is one. The placeholder above would otherwise
@@ -139,8 +172,12 @@ public struct ProviderRow: View {
 
     private var titleLine: some View {
         HStack(spacing: Tokens.Space.small) {
+            // A weight below the figure at the end of the line. The name and the
+            // percentage were set identically, so the row had two subjects — and
+            // the logo in front has already said which service this is, while
+            // nothing else on the row says how much of it is gone.
             Text(provider.displayName)
-                .font(.system(size: metrics.titleSize, weight: Tokens.Ramp.titleWeight))
+                .font(.system(size: metrics.titleSize, weight: Tokens.Ramp.emphasisWeight))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 // The name is the one thing the row cannot be read without, so
@@ -200,21 +237,31 @@ public struct ProviderRow: View {
                     // squeezes it to "Si…".
                     .fixedSize()
             }
-            .buttonStyle(.borderedProminent)
+            // Not prominent. First launch is eleven disconnected rows, and eleven
+            // saturated accent pills is a wall rather than a call to action; once
+            // a few services connect, a row at 96% is a figure sitting in a column
+            // of blue. The whole row is already a sign-in target with a tooltip
+            // saying so, and this is the second way to reach it, not the only one.
+            .buttonStyle(.bordered)
             .controlSize(.small)
         } else if appearance.showsUsageNumber, case .success(let data) = result, data.primary.limit > 0 {
             // Trailing, so the figure lands on the same x on every row — the
             // same column the secondary percentages under it stop at.
             Text("\(Int((data.primary.percent * 100).rounded()))%")
-                .font(.system(size: metrics.titleSize,
+                // The one figure this app exists to deliver, so it is the one
+                // thing on the row set larger than everything else. At the title
+                // size it was tied with the service name beside it and less than
+                // half the size of the logo — the row read as a list of brands
+                // that happened to carry numbers.
+                .font(.system(size: figureSize,
                               weight: Tokens.Ramp.titleWeight,
                               design: Tokens.Ramp.figureDesign))
                 .monospacedDigit()
                 .foregroundStyle(tint(for: data.primary.percent))
                 // Unconstrained, a Text under a title line too narrow for it
                 // wraps rather than truncates — "100%" becomes "100" over "%",
-                // and the row grows a line. It ranks with the name, not with the
-                // pill: under `numberOnly` it is the entire reading.
+                // and the row grows a line. It outranks the name, not the pill:
+                // under `numberOnly` it is the entire reading.
                 .lineLimit(1)
                 .layoutPriority(1)
                 // And it never gives width either. Sharing priority 1 with the
@@ -231,6 +278,13 @@ public struct ProviderRow: View {
     /// Whether anything at all is drawn beneath the title line. Has to agree
     /// with `detailContent` below, since the row's vertical alignment turns on
     /// it — the two are kept next to each other for that reason.
+    ///
+    /// The pace line is the one piece of detail this does not ask about, and
+    /// deliberately: answering would mean running the fit a second time per row
+    /// to choose a vertical alignment, and the alignment it would choose is the
+    /// one already chosen. Top alignment exists for a row several meters tall; a
+    /// row whose only detail is a single pace caption is two lines beside a 40pt
+    /// logo, which is exactly the case centring is here for.
     private var drawsDetail: Bool {
         // "Not connected", "Loading…" and an error are each a line of their own.
         guard provider.isAuthenticated, case .success(let data) = result else { return true }
@@ -244,28 +298,43 @@ public struct ProviderRow: View {
     @ViewBuilder
     private var detailContent: some View {
         if !provider.isAuthenticated {
-            Text(signInPrompt)
+            // One prompt for both kinds of service. The branch for a provider
+            // with no web login used to read "Not connected — add a token in
+            // Settings", which was the longest line in the panel, wrapped to two
+            // and so made one row taller than its neighbours — to say something
+            // that stopped being true when the connect window learned to take a
+            // pasted key. Every disconnected row is reached the same way now, by
+            // the button beside this line.
+            Text("Not connected")
                 .font(.system(size: metrics.detailSize))
                 .foregroundStyle(.secondary)
-                // "Not connected — add a token in Settings" is wider than the
-                // text column of a 300pt row at any density, and a Text that is
-                // not allowed to grow downward truncates instead of wrapping —
-                // which would cut the half that says what to do. Same two-line
-                // ceiling the error line takes, for the same reason.
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
                 .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
         } else if let result {
             switch result {
             case .success(let data):
                 primaryMetric(data.primary)
+                // Under the headline meter and above the further windows,
+                // because it is a reading of the headline window and of nothing
+                // else. Draws nothing at all — no reserved height — until the
+                // samples support a claim, so a row without a forecast is the
+                // row it was before this line existed.
+                ForecastLine(
+                    providerID: provider.id,
+                    resetDate: data.primary.resetDate,
+                    appearance: appearance
+                )
                 secondaryWindows(data.secondary)
             case .failure(let error):
                 HStack(alignment: .top, spacing: Tokens.Space.small) {
                     Image(systemName: error.isAuth
                           ? "person.crop.circle.badge.exclamationmark"
                           : "exclamationmark.triangle.fill")
-                        .font(.system(size: metrics.captionSize))
+                        // The mark that says the row is broken, drawn at the
+                        // size of the sentence it introduces rather than at the
+                        // caption scale under it. A glyph smaller than its own
+                        // text reads as a bullet.
+                        .font(.system(size: metrics.detailSize))
                         // A credential the user has to go and fix is the same
                         // state a locked session is, and the same amber; a
                         // service that answered badly is the only red.
@@ -339,9 +408,13 @@ public struct ProviderRow: View {
                     }
                 }
             case .chips:
+                let split = chipSplit(windows.count)
                 HStack(spacing: Tokens.Space.snug) {
-                    ForEach(numbered(windows, limit: chipLimit)) { window in
+                    ForEach(numbered(windows, limit: split.shown)) { window in
                         SecondaryChip(metric: window.metric, accent: provider.accentColor, appearance: appearance)
+                    }
+                    if split.hidden > 0 {
+                        OverflowChip(count: split.hidden, appearance: appearance)
                     }
                 }
             case .hidden:
@@ -391,6 +464,23 @@ public struct ProviderRow: View {
         return max(1, min(appearance.secondaryWindowLimit, Int(textColumnWidth / chipWidth)))
     }
 
+    /// How the windows split between chips of their own and the "+N" that stands
+    /// for the rest.
+    ///
+    /// The line silently began at the front of the list: a user who set the limit
+    /// to six and got two chips on a narrow panel could not tell a service with
+    /// two caps from one with six, which is the difference between "I am fine"
+    /// and "I have not looked at four of these". The overflow chip takes a slot
+    /// off the line rather than being added to it — pushed past the trailing edge
+    /// it would be truncated away, which is the failure it exists to report — and
+    /// one real chip is always kept, since "+6" alone names no window at all.
+    private func chipSplit(_ count: Int) -> (shown: Int, hidden: Int) {
+        let limit = chipLimit
+        guard count > limit else { return (count, 0) }
+        let shown = max(1, limit - 1)
+        return (shown, count - shown)
+    }
+
     @ViewBuilder
     private func secondaryWindow(_ metric: UsageMetric) -> some View {
         if metric.limit > 0 {
@@ -430,12 +520,6 @@ public struct ProviderRow: View {
     }
 
     private var showsPlan: Bool { showsPlanName ?? appearance.showsPlanNames }
-
-    private var signInPrompt: String {
-        provider.webLogin == nil
-            ? "Not connected — add a token in Settings"
-            : "Not connected"
-    }
 
     private var primaryPercent: Double? {
         guard case .success(let data) = result, data.primary.limit > 0 else { return nil }
@@ -964,6 +1048,42 @@ public struct SecondaryChip: View {
             return "\(metric.label) \(Int(metric.used.rounded()))%"
         }
         return "\(metric.label) \(metric.displayUsed)/\(metric.displayLimit)"
+    }
+}
+
+/// The chip that stands for the windows the line had no room for.
+///
+/// Same capsule and the same type as a `SecondaryChip`, minus the dot: it is a
+/// count of windows rather than a reading of one, and a tinted dot would claim
+/// a usage colour for a group of them. It is the row admitting what it left out,
+/// so it stays quiet — the tooltip is where the number is spelled out, since a
+/// bare "+4" is only unambiguous to someone who already knew.
+public struct OverflowChip: View {
+    @ObservedObject private var appearance: AppearanceSettings
+    public let count: Int
+
+    public init(count: Int, appearance: AppearanceSettings? = nil) {
+        self.count = count
+        self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
+    }
+
+    public var body: some View {
+        Text("+\(count)")
+            .font(.system(size: appearance.metrics.captionSize,
+                          weight: Tokens.Ramp.emphasisWeight,
+                          design: Tokens.Ramp.figureDesign))
+            .monospacedDigit()
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            // The one chip on the line that must never be truncated: an
+            // ellipsis here says nothing about how much was dropped.
+            .fixedSize()
+            .padding(.horizontal, Tokens.Space.small)
+            .padding(.vertical, Tokens.Space.tight)
+            .background(Capsule().fill(Tokens.quiet(Tokens.Fill.pill)))
+            .help(count == 1
+                  ? "1 more window this row has no room for"
+                  : "\(count) more windows this row has no room for")
     }
 }
 
