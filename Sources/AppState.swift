@@ -64,6 +64,10 @@ public final class AppState: ObservableObject {
     /// a keychain key the silent sweep will not ask for, so these exist and are
     /// simply locked — worth saying so rather than looking like nothing is there.
     @Published public var lockedAccounts: [String: Int] = [:]
+    /// True while the launch sweep is still reading the browsers. There was no
+    /// state for "we have not looked yet", so the panel stated its final answer
+    /// — that nothing is connected — during the seconds it was still deciding.
+    @Published public private(set) var isAdopting = false
     @Published public var lastRefresh: Date?
     @Published public var refreshIntervalSeconds: Int {
         didSet { userDefaults.set(refreshIntervalSeconds, forKey: intervalKey) }
@@ -139,7 +143,9 @@ public final class AppState: ObservableObject {
             // Adopt sessions the user already has before the first fetch, so a
             // browser they're logged into shows usage without them being asked
             // to "sign in" to something they're signed into.
+            self?.isAdopting = true
             await self?.adoptBrowserSessions()
+            self?.isAdopting = false
             while !Task.isCancelled {
                 await self?.refreshAll()
                 let interval = self?.refreshIntervalSeconds ?? 60
@@ -193,6 +199,7 @@ public final class AppState: ObservableObject {
                 snapshots[id] = clarify(result)
                 fetchedAt[id] = Date()
                 noteOutcome(id, result)
+                await note(id, result)
                 await discardRejectedCredential(id, result)
                 // A key kept through a 403 had its row flag dropped; an answer
                 // means it works after all, so let the row say so again.
@@ -201,6 +208,39 @@ public final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Hands a reading to the two things that watch usage over time rather than
+    /// at an instant: the sample ring the pace line is fitted to, and the
+    /// threshold policy.
+    ///
+    /// It hangs off the one place results land, so a single-row refresh feeds
+    /// them exactly as a sweep does — otherwise a user watching one service and
+    /// refreshing it by hand would contribute no samples at all, and could cross
+    /// a level without aibars ever seeing it happen.
+    ///
+    /// Nothing here can fail the poll: the store only writes to UserDefaults and
+    /// the alert centre swallows every delivery failure by design.
+    private func note(_ providerID: String, _ result: Result<UsageData, ProviderError>) async {
+        guard case .success(let data) = result,
+              let provider = provider(for: providerID) else { return }
+        UsageTrendStore.shared.record(data, for: providerID)
+        await AlertCenter.shared.consider(
+            data, providerID: providerID, displayName: provider.displayName
+        )
+    }
+
+    /// Drops what the time-series features remember about an account.
+    ///
+    /// Slot numbers are reused: sign out of "claude#2" and the next session
+    /// discovered for that service takes the same id. Without this it would
+    /// inherit the previous account's samples — projecting a pace across two
+    /// people's usage — and its armed levels, so a fresh account at 40% could
+    /// fire nothing until it passed a line the old one had already crossed.
+    @MainActor
+    public static func forgetHistory(_ providerID: String) {
+        UsageTrendStore.shared.forget(providerID)
+        AlertCenter.shared.forget(providerID)
     }
 
     /// The age the panel should report: that of the stalest snapshot it is
@@ -285,6 +325,7 @@ public final class AppState: ObservableObject {
             return
         }
         SessionStore.shared.clear(providerID)
+        Self.forgetHistory(providerID)
         await provider.syncAuthState()
         provider.isAuthenticated = false
         pruneEmptyAccounts()
@@ -338,10 +379,16 @@ public final class AppState: ObservableObject {
         let sessions = await Task.detached(priority: .utility) {
             CookieExtractors.searchAll(queries, allowingKeychainPrompt: allowingKeychainPrompt)
         }.value
-        let locked = await Task.detached(priority: .utility) {
-            CookieExtractors.lockedSessionCounts(queries)
-        }.value
-        lockedAccounts = locked
+        // Deliberately not awaited. The census is a second full copy of every
+        // browser's cookie database and nothing between here and the first fetch
+        // reads it, so waiting on it delayed the first number every user sees —
+        // including the ones with no locked sessions to be told about.
+        Task { [weak self] in
+            let locked = await Task.detached(priority: .utility) {
+                CookieExtractors.lockedSessionCounts(queries)
+            }.value
+            self?.lockedAccounts = locked
+        }
 
         var adopted: [String] = []
         for service in Self.services {
@@ -461,9 +508,16 @@ public final class AppState: ObservableObject {
     /// Drops extra accounts that no longer have a session, so signing out of a
     /// browser profile removes its row rather than leaving a dead one.
     private func pruneEmptyAccounts() {
-        providers.removeAll { provider in
+        let dropped = providers.filter { provider in
             provider.accountID != nil && SessionStore.shared.token(for: provider.id) == nil
         }
+        guard !dropped.isEmpty else { return }
+        let ids = Set(dropped.map(\.id))
+        providers.removeAll { ids.contains($0.id) }
+        // The row is gone, so the samples and armed levels behind it belong to
+        // nobody — and the id is about to be handed to whichever session turns
+        // up next.
+        for id in ids { Self.forgetHistory(id) }
     }
 
     /// Refreshes a single provider, for the per-row refresh button and for the
@@ -479,7 +533,9 @@ public final class AppState: ObservableObject {
             SessionStore.shared.invalidateCache()
         }
         do {
-            snapshots[providerID] = .success(try await provider.fetchUsage())
+            let result = Result<UsageData, ProviderError>.success(try await provider.fetchUsage())
+            snapshots[providerID] = result
+            await note(providerID, result)
         } catch let error as ProviderError {
             snapshots[providerID] = clarify(.failure(error))
         } catch {
@@ -564,7 +620,22 @@ public final class AppState: ObservableObject {
     public var headlineSummary: String {
         let enabled = providers.filter(\.isEnabled)
         let connected = enabled.filter(\.isAuthenticated)
-        guard !connected.isEmpty else { return "No services connected yet" }
+
+        // Said while the launch sweep is still reading the browsers, because
+        // every line below it is a verdict and there is nothing to have a
+        // verdict about yet.
+        if isAdopting { return "Looking for sessions in your browsers…" }
+
+        guard !connected.isEmpty else {
+            // A Chromium session aibars can see but not read is the difference
+            // between an app that found nothing and an app that needs one
+            // keychain prompt. Saying "No services connected yet" over a
+            // browser full of sessions reads as an app that does not work.
+            let locked = lockedAccounts.values.reduce(0, +)
+            guard locked > 0 else { return "No services connected yet" }
+            let noun = locked == 1 ? "session" : "sessions"
+            return "\(locked) \(noun) found but locked — unlock a browser in Settings"
+        }
 
         if SessionStore.shared.isAccessDenied {
             return "Keychain access denied — click to retry"
@@ -578,9 +649,14 @@ public final class AppState: ObservableObject {
 
         if let name = topProviderName, let top = usageLevels.max() {
             let percent = Int((top * 100).rounded())
-            let lead = top >= 0.85
+            var lead = top >= 0.85
                 ? "\(name) is nearly capped — \(percent)%"
                 : "\(name) highest at \(percent)%"
+            // The percentage says where the busiest service is; the pace says
+            // whether that matters. This is the header's only prose slot, so the
+            // short form goes here and the line stays one line when the samples
+            // cannot support one.
+            if let pace = topProviderPace { lead += ", \(pace)" }
             return failures > 0 ? "\(lead) · \(failures) failing" : lead
         }
 
@@ -595,16 +671,40 @@ public final class AppState: ObservableObject {
 
     /// Display name of the provider currently closest to its cap.
     public var topProviderName: String? {
-        let ranked = providers
+        topProvider?.displayName
+    }
+
+    /// Where that provider's pace is heading, in the header's short form —
+    /// "caps in 40m". Nil whenever the samples cannot support a claim, which is
+    /// most of the time and is the point: an absent forecast leaves the headline
+    /// exactly as it was.
+    public var topProviderPace: String? {
+        // The same switch that hides the pace line on the rows. It reads as a
+        // setting about the pace, not about one place the pace is drawn, and a
+        // user who turned it off should not still be hearing it from the header
+        // or from VoiceOver reading the header out.
+        guard UsageTrendStore.shared.showsPaceInPanel else { return nil }
+        guard let provider = topProvider,
+              let projection = UsageTrendStore.shared.projection(for: provider.id)
+        else { return nil }
+        return UsageForecast.shortPhrase(for: projection, now: Date())
+    }
+
+    /// The enabled provider currently closest to its cap. Kept whole rather than
+    /// reduced to a name, because the forecast is keyed by account id and two
+    /// accounts of one service share a display name.
+    private var topProvider: AnyUsageProvider? {
+        providers
             .filter(\.isEnabled)
-            .compactMap { provider -> (String, Double)? in
+            .compactMap { provider -> (provider: AnyUsageProvider, percent: Double)? in
                 guard let snapshot = snapshots[provider.id],
                       let data = try? snapshot.get(),
                       data.primary.limit > 0 else { return nil }
-                return (provider.displayName, data.primary.percent)
+                return (provider, data.primary.percent)
             }
-            .sorted { $0.1 > $1.1 }
-        return ranked.first?.0
+            .sorted { $0.percent > $1.percent }
+            .first?
+            .provider
     }
 }
 
@@ -690,6 +790,10 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
         AppState.markSignedOut(id)
         try await _signOut()
         await syncAuthState()
+        // The account is gone even though the row may not be: a sign-in later
+        // starts from no samples and no armed levels rather than picking up
+        // whatever this one left behind.
+        await AppState.forgetHistory(id)
     }
 
     public func setEnabled(_ enabled: Bool) {
