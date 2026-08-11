@@ -118,6 +118,15 @@ public final class CursorProvider: ObservableObject, UsageProvider {
 }
 
 public enum CursorUsageParser {
+    /// Cursor bills on Gregorian months in UTC, so the cycle arithmetic is done
+    /// there rather than in the user's region calendar — adding a month in a
+    /// lunar calendar would end the cycle a day early, every cycle.
+    private static let billingCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        if let utc = TimeZone(identifier: "UTC") { calendar.timeZone = utc }
+        return calendar
+    }()
+
     /// `/api/usage` answers with one entry per model plus `startOfMonth`:
     ///
     ///     { "gpt-4": { "numRequests": 12, "maxRequestUsage": 500, … },
@@ -135,7 +144,7 @@ public enum CursorUsageParser {
         let cycleStart = (usage["startOfMonth"] as? String).flatMap { ProviderDate.parse($0) }
             ?? (raw["startOfMonth"] as? String).flatMap { ProviderDate.parse($0) }
         let resetDate = cycleStart.flatMap {
-            Calendar.current.date(byAdding: .month, value: 1, to: $0)
+            billingCalendar.date(byAdding: .month, value: 1, to: $0)
         } ?? (raw["cycleEnd"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
 
         var buckets: [(label: String, used: Double, limit: Double)] = []

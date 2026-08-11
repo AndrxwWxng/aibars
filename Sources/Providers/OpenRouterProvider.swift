@@ -57,9 +57,10 @@ public final class OpenRouterProvider: ObservableObject, UsageProvider {
 
         let http = ProviderHTTP(headers: [
             "Authorization": "Bearer \(token)",
-            // Courtesy headers OpenRouter accepts on every route; they are what
-            // names aibars in the account's own activity log.
-            "HTTP-Referer": "https://github.com/aibars/aibars",
+            // Courtesy headers OpenRouter accepts on every route; on the
+            // inference routes they are what names an app in the account's own
+            // activity log, and the two routes below take them harmlessly.
+            "HTTP-Referer": "https://github.com/AndrxwWxng/aibars",
             "X-Title": "aibars"
         ])
 
@@ -341,9 +342,9 @@ public enum OpenRouterUsageParser {
         return label.lowercased().hasPrefix("sk-or") ? nil : label
     }
 
-    /// Kept for the debug pane. `data(withJSONObject:)` raises an Objective-C
-    /// exception rather than throwing for a value that is not JSON, and `parse`
-    /// is public, so the payload is checked before it is encoded.
+    /// `data(withJSONObject:)` raises an Objective-C exception rather than
+    /// throwing for a value that is not JSON, and `parse` is public, so the
+    /// payload is checked before it is encoded.
     private static func rawJSON(credits: [String: Any], key: [String: Any]?) -> String? {
         let payload: [String: Any] = ["credits": credits, "key": key ?? [:]]
         guard JSONSerialization.isValidJSONObject(payload) else { return nil }
