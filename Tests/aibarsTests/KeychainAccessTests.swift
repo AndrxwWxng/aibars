@@ -25,27 +25,39 @@ final class KeychainAccessTests: XCTestCase {
     /// Storage under XCTest must stay in memory: no dialogs, and no chance of a
     /// test overwriting the credentials a real install depends on.
     func testTestRunsNeverTouchTheRealKeychain() throws {
+        // Keychain dates are held to the second, so a write a fraction of a
+        // second from now can be stamped a fraction of a second before it. The
+        // second of slack is what stops that reading as "untouched".
+        let before = Date().addingTimeInterval(-1)
         try SessionStore.shared.setToken("must-not-persist", for: probeID)
 
-        var query: [String: Any] = [
+        // Attributes, never the secret. Asking for the data is the one thing
+        // this check must not do: on a machine where the app has genuinely
+        // stored a key, that item carries an ACL naming the app and not the
+        // runner, and reading it puts "xctest wants to use your confidential
+        // information" on screen and blocks until somebody answers — which under
+        // `make test` is nobody, so the check would hang for ever committing the
+        // offence it exists to forbid. Attributes are not behind the ACL and
+        // carry the same evidence: an item this run had written to would be
+        // stamped as modified by this run.
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "dev.aibars.app",
             kSecAttrAccount as String: "aibars.tokens",
-            kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess, let data = item as? Data,
-           let contents = String(data: data, encoding: .utf8) {
-            XCTAssertFalse(
-                contents.contains("must-not-persist"),
-                "a test wrote into the real login keychain"
-            )
-        }
-        query[kSecReturnData as String] = nil
-        // Whatever the outcome, this test must not have created the item.
-        XCTAssertNotEqual(status, errSecAuthFailed, "a test triggered a keychain dialog")
+        // No item at all is the ordinary result and the strongest one: nothing
+        // was written because there is nothing there.
+        guard status == errSecSuccess, let attributes = item as? [String: Any] else { return }
+
+        let touched = attributes[kSecAttrModificationDate as String] as? Date ?? .distantPast
+        XCTAssertLessThan(
+            touched, before,
+            "a test wrote into the real login keychain"
+        )
     }
 
     /// A browser-derived session must never be written anywhere that needs
