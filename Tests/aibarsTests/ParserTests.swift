@@ -19,6 +19,86 @@ final class UsageMetricTests: XCTestCase {
         XCTAssertEqual(UsageMetric(label: "x", used: 7, limit: 0).displayUsed, "7")
         XCTAssertEqual(UsageMetric(label: "x", used: 7.4, limit: 0).displayUsed, "7.4")
     }
+
+    /// A window the provider said nothing about the length of reports no
+    /// duration, never a zero-length one. The meter draws its pace notch from
+    /// this, and zero would pin the mark hard against the left edge of every
+    /// track it touched — a made-up denominator drawn as a real one.
+    func testWindowFieldsAreAbsentRatherThanZero() {
+        let metric = UsageMetric(label: "5h session", used: 5, limit: 100)
+        XCTAssertNil(metric.windowDuration)
+        XCTAssertNil(metric.windowKey)
+    }
+}
+
+final class UsageModelCodingTests: XCTestCase {
+    func testWindowFieldsRoundTrip() throws {
+        let metric = UsageMetric(
+            label: "5h session",
+            used: 5,
+            limit: 100,
+            resetDate: Date(timeIntervalSince1970: 1_770_000_000),
+            windowLabel: "5h",
+            windowDuration: 5 * 3_600,
+            windowKey: "five_hour"
+        )
+        let decoded = try JSONDecoder().decode(
+            UsageMetric.self, from: JSONEncoder().encode(metric)
+        )
+        XCTAssertEqual(decoded, metric)
+        XCTAssertEqual(decoded.windowDuration, 5 * 3_600)
+        XCTAssertEqual(decoded.windowKey, "five_hour")
+    }
+
+    func testSpendRoundTrips() throws {
+        let report = SpendReport(
+            amountMinor: 3_284,
+            currency: "usd",
+            limitMinor: 10_000,
+            period: .month,
+            confidence: .measured
+        )
+        let data = UsageData(
+            providerID: "openrouter",
+            primary: UsageMetric(label: "credits", used: 32.84, limit: 100),
+            spend: report
+        )
+        let decoded = try JSONDecoder().decode(UsageData.self, from: JSONEncoder().encode(data))
+        XCTAssertEqual(decoded.spend, report)
+    }
+
+    /// The snapshot store keeps every provider's last reading in one file, so a
+    /// payload written before these keys existed has to decode rather than
+    /// throw: a throw here costs the user every row, not one field.
+    func testSnapshotWrittenBeforeTheseFieldsStillDecodes() throws {
+        let json = Data("""
+        {"providerID":"claude","fetchedAt":0,"planName":"Max",
+         "primary":{"label":"5h session","used":42,"limit":100},"secondary":[]}
+        """.utf8)
+        let data = try JSONDecoder().decode(UsageData.self, from: json)
+        XCTAssertNil(data.spend, "an old snapshot must not invent a spend figure")
+        XCTAssertNil(data.primary.windowDuration)
+        XCTAssertNil(data.primary.windowKey)
+        XCTAssertEqual(data.primary.used, 42, accuracy: 0.001)
+        XCTAssertEqual(data.planName, "Max")
+    }
+}
+
+final class ProviderErrorTests: XCTestCase {
+    /// `blocked` earns its place only by being told apart from a dead session:
+    /// the refresh loop discards a credential on `isAuth`, and a Cloudflare
+    /// challenge must not cost the user a browser cookie that still works.
+    func testBlockedIsNotAnAuthFailure() {
+        XCTAssertFalse(ProviderError.blocked("cloudflare challenge").isAuth)
+        XCTAssertTrue(ProviderError.sessionExpired.isAuth)
+        XCTAssertTrue(ProviderError.notAuthenticated.isAuth)
+    }
+
+    func testBlockedSaysWhatHappenedAndThatItWillRetry() throws {
+        let message = try XCTUnwrap(ProviderError.blocked("cloudflare challenge").errorDescription)
+        XCTAssertTrue(message.contains("cloudflare challenge"))
+        XCTAssertTrue(message.lowercased().contains("retry"))
+    }
 }
 
 final class ClaudeUsageParserTests: XCTestCase {
@@ -185,6 +265,173 @@ final class CursorUsageParserTests: XCTestCase {
     func testEmptyResponseDoesNotCrash() {
         let data = CursorUsageParser.parse([:])
         XCTAssertEqual(data.primary.limit, 0)
+    }
+
+    /// The window is the billing month's own length, so the pace notch is drawn
+    /// against 31 days in July and 28 in February rather than a flat 30.
+    func testWindowDurationIsTheBillingMonthsOwnLength() throws {
+        let july = CursorUsageParser.parse([
+            "gpt-4": ["numRequests": 10, "maxRequestUsage": 500],
+            "startOfMonth": "2026-07-21T00:00:00.000Z"
+        ])
+        XCTAssertEqual(july.primary.windowDuration, 31 * 24 * 3_600)
+
+        let february = CursorUsageParser.parse([
+            "gpt-4": ["numRequests": 10, "maxRequestUsage": 500],
+            "startOfMonth": "2026-02-01T00:00:00.000Z"
+        ])
+        XCTAssertEqual(february.primary.windowDuration, 28 * 24 * 3_600)
+    }
+
+    /// A cycle with one edge named has no length. Half a cycle is not a cycle,
+    /// and a notch drawn on the difference would be drawn on nothing.
+    func testWindowDurationIsNilWhenOnlyTheEndIsKnown() {
+        let data = CursorUsageParser.parse([
+            "gpt-4": ["numRequests": 10, "maxRequestUsage": 500],
+            "cycleEnd": 1_785_000_000_000
+        ])
+        XCTAssertNotNil(data.primary.resetDate)
+        XCTAssertNil(data.primary.windowDuration)
+    }
+}
+
+/// `/api/usage-summary`, the second payload — the money, in cents, and the
+/// billing cycle's own bounds.
+final class CursorSpendParserTests: XCTestCase {
+    private let requests: [String: Any] = [
+        "gpt-4": ["numRequests": 320, "numRequestsTotal": 320, "maxRequestUsage": 500],
+        "startOfMonth": "2026-07-01T00:00:00.000Z"
+    ]
+
+    /// The shape a live individual account returns: on-demand spend against a
+    /// stated ceiling, both in cents.
+    func testCentsBecomeDollarsAgainstTheStatedCeiling() throws {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "billingCycleStart": "2026-07-01T00:00:00.000Z",
+            "billingCycleEnd": "2026-08-01T00:00:00.000Z",
+            "individualUsage": [
+                "onDemand": ["enabled": true, "used": 3_284, "limit": 25_000, "remaining": 21_716]
+            ]
+        ])
+        let spend = try XCTUnwrap(data.spend)
+        XCTAssertEqual(spend.amountMinor, 3_284)
+        XCTAssertEqual(spend.amount, Decimal(string: "32.84"))
+        XCTAssertEqual(spend.limitMinor, 25_000)
+        XCTAssertEqual(spend.currency, "USD")
+        XCTAssertEqual(spend.confidence, .measured)
+        XCTAssertEqual(spend.period, .month)
+        XCTAssertEqual(spend.resetDate, ProviderDate.parse("2026-08-01T00:00:00.000Z"))
+    }
+
+    /// `enabled: false` is a placeholder Cursor sends beside a live bucket on
+    /// team accounts. Reading it as a spend of zero would report $0.00 for an
+    /// organisation that has spent hundreds.
+    func testDisabledBucketIsSkippedEntirely() throws {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "individualUsage": [
+                "onDemand": ["enabled": false, "used": 0, "limit": 0]
+            ],
+            "teamUsage": [
+                "onDemand": ["enabled": true, "used": 75_000, "limit": 600_000, "remaining": 525_000]
+            ]
+        ])
+        let spend = try XCTUnwrap(data.spend)
+        XCTAssertEqual(spend.amountMinor, 75_000)
+        XCTAssertEqual(spend.limitMinor, 600_000)
+    }
+
+    /// Some shapes only move the remaining balance and leave `used` at zero, so
+    /// a positive difference wins over a reported zero.
+    func testZeroUsedFallsBackToTheRemainingDifference() throws {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "individualUsage": [
+                "onDemand": ["enabled": true, "used": 0, "limit": 100_000, "remaining": 75_000]
+            ]
+        ])
+        let spend = try XCTUnwrap(data.spend)
+        XCTAssertEqual(spend.amountMinor, 25_000)
+        XCTAssertEqual(spend.limitMinor, 100_000)
+    }
+
+    /// The individual bucket is the signed-in account's own spend and the team
+    /// one is the organisation's aggregate. Both present is the ordinary case on
+    /// a team seat, and the personal figure is the one the row is about.
+    func testIndividualWinsOverTheTeamAggregate() throws {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "individualUsage": [
+                "onDemand": ["enabled": true, "used": 2_500, "limit": 25_000, "remaining": 22_500]
+            ],
+            "teamUsage": [
+                "onDemand": ["enabled": true, "used": 75_000, "limit": 600_000],
+                "pooled": ["enabled": true, "used": 125_000, "limit": 4_000_000]
+            ]
+        ])
+        XCTAssertEqual(try XCTUnwrap(data.spend).amountMinor, 2_500)
+    }
+
+    /// An individual bucket carrying no figures at all is not a reading of zero.
+    /// Reporting it would hide the pooled bucket that does have figures.
+    func testEmptyIndividualBucketFallsThroughToPooled() throws {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "individualUsage": ["onDemand": ["enabled": true]],
+            "teamUsage": [
+                "pooled": ["enabled": true, "used": 125_000, "limit": 4_000_000, "remaining": 3_875_000]
+            ]
+        ])
+        XCTAssertEqual(try XCTUnwrap(data.spend).amountMinor, 125_000)
+    }
+
+    /// Cursor writes 0 for a bucket with no hard limit. That is genuinely
+    /// uncapped, and not a ceiling the spend has already blown through.
+    func testZeroLimitIsUncappedRatherThanFull() throws {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "individualUsage": [
+                "onDemand": ["enabled": true, "used": 4_200, "limit": 0]
+            ]
+        ])
+        let spend = try XCTUnwrap(data.spend)
+        XCTAssertEqual(spend.amountMinor, 4_200)
+        XCTAssertNil(spend.limitMinor)
+        XCTAssertNil(spend.percent)
+    }
+
+    /// A ceiling that is there and cannot be read poisons the whole report:
+    /// showing it as uncapped would invent headroom the account may not have.
+    func testUnreadableCeilingReportsNoSpendAtAll() {
+        let data = CursorUsageParser.parse(requests, summary: [
+            "individualUsage": [
+                "onDemand": ["enabled": true, "used": 4_200, "limit": ["amount": 25_000]]
+            ]
+        ])
+        XCTAssertNil(data.spend)
+    }
+
+    /// The summary is a best-effort second request. When it does not arrive the
+    /// row still has the thing it is actually for.
+    func testMissingSummaryLeavesTheQuotaCardIntact() {
+        let data = CursorUsageParser.parse(requests)
+        XCTAssertNil(data.spend)
+        XCTAssertEqual(data.primary.used, 320)
+        XCTAssertEqual(data.primary.limit, 500)
+        XCTAssertEqual(data.primary.windowDuration, 31 * 24 * 3_600)
+    }
+
+    /// Enterprise responses can omit `startOfMonth` altogether, and the summary
+    /// states both bounds outright. Taking them is reading the cycle Cursor
+    /// published, not assuming one.
+    func testSummaryBoundsSupplyTheCycleWhenUsageOmitsIt() throws {
+        let data = CursorUsageParser.parse([
+            "gpt-4": ["numRequests": 37, "maxRequestUsage": 750]
+        ], summary: [
+            "billingCycleStart": "2026-07-01T00:00:00.000Z",
+            "billingCycleEnd": "2026-08-01T00:00:00.000Z",
+            "individualUsage": [
+                "onDemand": ["enabled": true, "used": 0, "limit": 25_000, "remaining": 25_000]
+            ]
+        ])
+        XCTAssertEqual(data.primary.windowDuration, 31 * 24 * 3_600)
+        XCTAssertEqual(data.primary.resetDate, ProviderDate.parse("2026-08-01T00:00:00.000Z"))
+        XCTAssertEqual(try XCTUnwrap(data.spend).amountMinor, 0)
     }
 }
 

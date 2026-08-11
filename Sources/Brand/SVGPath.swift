@@ -9,6 +9,11 @@ import SwiftUI
 /// the compressed forms optimisers emit (implicit line-tos after a
 /// move-to, omitted separators before a minus sign, and arc flags packed
 /// against the next number).
+///
+/// It terminates on any input. Malformed data draws the prefix it could parse
+/// and stops, rather than throwing or spinning: the caller is a `Shape` in a
+/// menu bar panel with nowhere to put an error, and a mark that comes out half
+/// drawn is a bug someone can see and report.
 public enum SVGPath {
 
     /// Parses `d` attribute data into a `CGPath` in the path's own
@@ -23,6 +28,16 @@ public enum SVGPath {
         var lastCubicControl: CGPoint?
         var lastQuadControl: CGPoint?
         var previousCommand: Character?
+
+        // Where the scanner stood before the command letter, so the loop can
+        // tell whether an iteration made any progress. `nextCommand` returns an
+        // implicit repeat without consuming anything, and a command whose
+        // coordinates fail to scan consumes nothing either, so data the parser
+        // cannot advance through — a `Z` followed by coordinates, a character
+        // that is neither a command nor a number, a trailing lone `-` — would
+        // otherwise spin here forever. Path data is artwork, and artwork is
+        // data: this parser has to terminate on all of it, well formed or not.
+        var cursor = scanner.offset
 
         while let command = scanner.nextCommand(after: previousCommand) {
             let isRelative = command.isLowercase
@@ -116,6 +131,13 @@ public enum SVGPath {
                 break
             }
             previousCommand = command
+
+            // Stalled: the whole iteration consumed nothing, so the next one
+            // would read the same character and reach the same command again.
+            // Stop and keep the prefix that did parse — a partial mark is a
+            // visible bug someone can report, a hung launch is not.
+            guard scanner.offset > cursor else { break }
+            cursor = scanner.offset
         }
 
         return path
@@ -124,6 +146,22 @@ public enum SVGPath {
     /// Parses `d` and scales it to fill `rect` while preserving aspect ratio,
     /// flipping to SwiftUI's y-down-from-top layout (which already matches SVG,
     /// so this is a pure scale + centre).
+    ///
+    /// No inset, deliberately, and this is the one place someone would add one.
+    /// The rect handed in is already the mark's entire allowance — the strip's
+    /// glyph box is one menu bar tall — so padding taken here would come out as
+    /// transparent margin on both flanks of every mark and widen the status item
+    /// by points that carry no ink. Breathing room is the artwork's to declare,
+    /// in its own view box where it can be seen: some marks sit well inside
+    /// theirs and the tightest ones bleed to the edge, and this fit honours
+    /// either without an opinion of its own.
+    ///
+    /// Measured through `ImageRenderer`, because that is how the strip is drawn
+    /// and not how a live view is: the fit lands on its rect to within a
+    /// thousandth at every size the app draws a mark at, fractional heights
+    /// included, and every bundled mark still inks a fifth of its box at 10pt.
+    /// A shape that comes out a point short in a bitmap is a gap nothing
+    /// downstream can recover.
     public static func path(from data: String, viewBox: CGSize, in rect: CGRect) -> Path {
         let raw = cgPath(from: data)
         let scale = min(rect.width / viewBox.width, rect.height / viewBox.height)
@@ -245,9 +283,22 @@ public enum SVGPath {
             self.chars = Array(string)
         }
 
+        /// How far the scanner has advanced. Read only by the stall guard in
+        /// `cgPath(from:)`; the tokenizer never seeks.
+        var offset: Int { index }
+
+        /// SVG separates numbers with whitespace or a comma.
+        ///
+        /// `isWhitespace` rather than a list of the four characters the spec
+        /// names, because Swift's `Character` is a grapheme cluster and CRLF is
+        /// *one* of them: `"\r\n"` equals neither `"\r"` nor `"\n"`, so data
+        /// saved with Windows line endings — a `d` attribute pasted out of an
+        /// SVG file, or a path literal in a source file that picked up CRLF —
+        /// stopped the scanner dead on the first line break. That is not a
+        /// mis-rendered mark, it is a hang; see the stall guard for the other
+        /// half of the same fix.
         private mutating func skipSeparators() {
-            while index < chars.count, chars[index] == " " || chars[index] == ","
-                    || chars[index] == "\n" || chars[index] == "\t" || chars[index] == "\r" {
+            while index < chars.count, chars[index].isWhitespace || chars[index] == "," {
                 index += 1
             }
         }

@@ -136,6 +136,99 @@ final class PerplexityUsageParserTests: XCTestCase {
         XCTAssertEqual(data.primary.percent, 0)
     }
 
+    func testPeriodLengthComesFromBothEdgesWhenStated() throws {
+        // A 31-day period, deliberately not the 30 days a house guess would use:
+        // the pace notch is drawn against this, so the length has to be the
+        // period's own.
+        let grants: [[String: Any]] = [
+            ["type": "recurring", "amount_cents": 10_000],
+            ["type": "promotional", "amount_cents": 2_000, "expires_at_ts": 1_750_000_000],
+            ["type": "purchased", "amount_cents": 1_000]
+        ]
+        let raw: [String: Any] = [
+            "total_usage_cents": 2_000,
+            "currentPeriodStartTs": 1_740_321_600,
+            "renewal_date_ts": 1_743_000_000,
+            "credit_grants": grants
+        ]
+
+        let data = try PerplexityUsageParser.parse(raw, now: now)
+
+        XCTAssertEqual(data.primary.windowDuration ?? 0, 31 * 24 * 3600, accuracy: 0.5)
+        // The other two pools never reset, so a length on them would be a notch
+        // measured against nothing.
+        XCTAssertEqual(data.secondary.map(\.windowDuration), [nil, nil])
+    }
+
+    func testNoPeriodLengthWithoutBothEdges() throws {
+        let grants: [[String: Any]] = [["type": "recurring", "amount_cents": 10_000]]
+
+        // The renewal names the far edge and nothing names the near one.
+        let openEnded = try PerplexityUsageParser.parse(
+            ["total_usage_cents": 2_000, "renewal_date_ts": 1_743_000_000, "credit_grants": grants],
+            now: now
+        )
+        XCTAssertNil(openEnded.primary.windowDuration)
+        XCTAssertEqual(openEnded.primary.resetDate, Date(timeIntervalSince1970: 1_743_000_000))
+
+        // A start on the far side of the renewal is a pair of dates that cannot
+        // be divided by, not a period running backwards.
+        let inverted = try PerplexityUsageParser.parse(
+            [
+                "total_usage_cents": 2_000,
+                "current_period_start_ts": 1_744_000_000,
+                "renewal_date_ts": 1_743_000_000,
+                "credit_grants": grants
+            ],
+            now: now
+        )
+        XCTAssertNil(inverted.primary.windowDuration)
+
+        // No renewal at all: nothing to measure a length against either.
+        let noRenewal = try PerplexityUsageParser.parse(
+            ["total_usage_cents": 2_000, "current_period_start_ts": 1_740_321_600, "credit_grants": grants],
+            now: now
+        )
+        XCTAssertNil(noRenewal.primary.windowDuration)
+    }
+
+    func testWindowKeysFollowThePoolNotTheSlot() throws {
+        let subscribed = try PerplexityUsageParser.parse(
+            [
+                "total_usage_cents": 500,
+                "credit_grants": [
+                    ["type": "recurring", "amount_cents": 10_000],
+                    ["type": "promotional", "amount_cents": 2_000, "expires_at_ts": 1_750_000_000]
+                ] as [[String: Any]]
+            ],
+            now: now
+        )
+        XCTAssertEqual(subscribed.primary.windowKey, "recurring_credits")
+        XCTAssertEqual(subscribed.secondary.map(\.windowKey), ["promotional_credits"])
+
+        // The bonus pool leads on a promo-only account. Its key must not move
+        // with it, or the series forks the day the user subscribes.
+        let promoOnly = try PerplexityUsageParser.parse(
+            [
+                "total_usage_cents": 500,
+                "credit_grants": [
+                    ["type": "promotional", "amount_cents": 2_000, "expires_at_ts": 1_750_000_000]
+                ] as [[String: Any]]
+            ],
+            now: now
+        )
+        XCTAssertEqual(promoOnly.primary.label, "Bonus")
+        XCTAssertEqual(promoOnly.primary.windowKey, "promotional_credits")
+
+        // The free-account placeholder is not one of Perplexity's pools, so it
+        // gets no series of its own.
+        let free = try PerplexityUsageParser.parse(
+            ["balance_cents": 0, "total_usage_cents": 0, "credit_grants": [[String: Any]]()],
+            now: now
+        )
+        XCTAssertNil(free.primary.windowKey)
+    }
+
     func testGarbageResponseThrows() {
         assertParseError([:])
         // What a signed-out request answers with, minus the 401.

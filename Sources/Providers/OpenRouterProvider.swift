@@ -10,7 +10,13 @@ import SwiftUI
 ///
 /// OpenRouter sells no subscription: billing is prepaid credits, so the headline
 /// figure is a balance with no ceiling, reported status-only. A per-key spend cap
-/// is the one real used/limit pair the API offers, and only when the user set one.
+/// is the one real used/limit pair the API offers, and only when the user set one,
+/// which is why it leads the row list when it exists and nothing does otherwise.
+///
+/// The dollar figures are also the account's own ledger, so they ride out as
+/// `SpendReport`s at `.measured` confidence — see `OpenRouterUsageParser.spendReports`.
+/// Both routes are served from a cache that lags the activity page by up to a
+/// minute; `stalenessNote` is that fact, written down once.
 public final class OpenRouterProvider: ObservableObject, UsageProvider {
     public let id: String
     /// The account this instance follows, when a service is signed into more
@@ -209,8 +215,16 @@ public enum OpenRouterUsageParser {
             balance = dollars(purchased - spent)
         }
 
-        // Two lanes can carry a bar; the spend figures below never can.
+        // Only the per-key cap can carry a bar; every figure below it is money
+        // with no ceiling. It leads the list when the user set one because
+        // `primary` is what the panel's meter and the menu bar strip read, and
+        // a prepaid balance promoted into a bar would need a denominator nobody
+        // published.
         var rows: [UsageMetric] = []
+
+        if let cap = keyInfo.flatMap(keyCap) {
+            rows.append(capMetric(cap, now: now))
+        }
 
         if let balance {
             // Prepaid credit has no ceiling, so limit stays 0: that marks the
@@ -221,61 +235,52 @@ public enum OpenRouterUsageParser {
                 label: exhausted ? "Balance (exhausted)" : "Balance",
                 used: balance,
                 limit: 0,
-                unit: "USD"
+                unit: "USD",
+                // One key under both labels: running out changes what the row
+                // says, not which series it belongs to, and a key derived from
+                // the label would fork the history on the day it happened.
+                windowKey: "credit_balance"
             ))
         } else if let purchased {
             // Credits bought, with no spend figure to subtract from them.
             // Calling that a balance would assert nothing has been spent, which
             // the response did not say.
-            rows.append(UsageMetric(label: "Credits purchased", used: purchased, limit: 0, unit: "USD"))
-        }
-
-        if let keyInfo, let cap = number(keyInfo, "limit", "credit_limit", "creditLimit"), cap > 0 {
-            let remaining = number(keyInfo, "limit_remaining", "limitRemaining")
-            // Spend against the cap is the cap minus what's left; the key's
-            // lifetime usage only matches when the cap never resets, so it is
-            // the fallback rather than the source. With neither, the cap is
-            // known and the spend is not, and a bar drawn at zero would be an
-            // invention.
-            let used = remaining.map { max(cap - $0, 0) } ?? number(keyInfo, "usage", "usage_total")
-            if let used {
-                let window = resetWindow(keyInfo)
-                rows.append(UsageMetric(
-                    label: "Key limit",
-                    // Not clamped to the cap: a key that went over reads
-                    // "12 / 10 USD", and `percent` already tops out at 1.
-                    used: dollars(used),
-                    limit: dollars(cap),
-                    unit: "USD",
-                    resetDate: nextReset(window, now: now),
-                    windowLabel: window?.label
-                ))
-            }
+            rows.append(UsageMetric(
+                label: "Credits purchased", used: purchased, limit: 0, unit: "USD", windowKey: "total_credits"
+            ))
         }
 
         if let spent {
-            rows.append(UsageMetric(label: "Spent all time", used: dollars(spent), limit: 0, unit: "USD"))
+            rows.append(UsageMetric(
+                label: "Spent all time", used: dollars(spent), limit: 0, unit: "USD", windowKey: "total_usage"
+            ))
         } else if let keyInfo, let keySpend = number(keyInfo, "usage", "usage_total") {
             // Account-wide spend needs the credits route. Without it the key's
             // own lifetime figure is the only spend there is, and it is labelled
-            // as the key's because it counts one key rather than the account.
-            rows.append(UsageMetric(label: "Key spend", used: dollars(keySpend), limit: 0, unit: "USD"))
+            // as the key's because it counts one key rather than the account —
+            // and keyed as the key's, so the two never join one series.
+            rows.append(UsageMetric(
+                label: "Key spend", used: dollars(keySpend), limit: 0, unit: "USD", windowKey: "key_usage"
+            ))
         }
 
         if let keyInfo {
-            let periods: [(String, [String])] = [
-                ("Today", ["usage_daily", "usageDaily"]),
-                ("This week", ["usage_weekly", "usageWeekly"]),
-                ("This month", ["usage_monthly", "usageMonthly"])
-            ]
-            for (label, keys) in periods {
-                guard let value = number(keyInfo, keys) else { continue }
-                rows.append(UsageMetric(label: label, used: dollars(value), limit: 0, unit: "USD"))
+            for field in periodFields {
+                guard let value = number(keyInfo, field.keys) else { continue }
+                rows.append(UsageMetric(
+                    label: field.label,
+                    used: dollars(value),
+                    limit: 0,
+                    unit: "USD",
+                    windowKey: field.windowKey
+                ))
             }
             // BYOK is billed separately and is zero for nearly everyone, so it
             // only earns a row once there is something in it.
             if let byok = number(keyInfo, "byok_usage", "byokUsage"), byok > 0 {
-                rows.append(UsageMetric(label: "BYOK", used: dollars(byok), limit: 0, unit: "USD"))
+                rows.append(UsageMetric(
+                    label: "BYOK", used: dollars(byok), limit: 0, unit: "USD", windowKey: "byok_usage"
+                ))
             }
         }
 
@@ -288,6 +293,15 @@ public enum OpenRouterUsageParser {
             )
         }
 
+        // One report can ride in `UsageData.spend`, and it is the month's: a
+        // budget is a monthly question, and a lifetime total measured against a
+        // monthly budget goes over on the first refresh and never comes back
+        // under. A monthly key cap wins the match on `spendReports`' own
+        // ordering, which is right — it is the same month with a ceiling on it.
+        // Everything else this account spent stays available from
+        // `spendReports` directly.
+        let monthly = spendReports(credits, key: key, now: now).first { $0.period == .month }
+
         return UsageData(
             providerID: "openrouter",
             planName: planName(freeTier: keyInfo.flatMap { boolean($0, "is_free_tier", "isFreeTier", "free_tier") },
@@ -297,11 +311,152 @@ public enum OpenRouterUsageParser {
             // The key's own label is all the API names, and with two keys pasted
             // it is the only thing telling the rows apart.
             accountLabel: keyInfo.flatMap(accountLabel),
-            rawJSON: rawJSON(credits: credits, key: key)
+            rawJSON: rawJSON(credits: credits, key: key),
+            spend: monthly
         )
     }
 
+    /// Both endpoints are served from a cache that can lag the account's own
+    /// activity page by roughly a minute, so a figure disagreeing with the
+    /// website for that long is the API answering, not aibars losing a number.
+    /// Public because the row that has to say so is not this file.
+    public static let stalenessNote =
+        "OpenRouter's figures are cached and can lag the activity page by up to a minute."
+
+    // MARK: - Spend
+
+    /// What this account has spent, as money rather than as meter rows.
+    ///
+    /// Kept apart from `parse` because a `UsageMetric` and a `SpendReport` are
+    /// different claims — one is what the panel draws, the other is what a
+    /// budget is measured against — and read from the payloads rather than off
+    /// the rows, whose figures have already been rounded to cents for display.
+    ///
+    /// Every figure here is `.measured`: OpenRouter's own ledger, not tokens
+    /// priced against a published list. Ordered cap first, because it is the
+    /// only one that can carry a ceiling, then the three periods, then the
+    /// lifetime total.
+    public static func spendReports(
+        _ credits: [String: Any],
+        key: [String: Any]? = nil,
+        now: Date = Date()
+    ) -> [SpendReport] {
+        // A rejected route reports nothing rather than an empty ledger: an error
+        // envelope carries no figures, and a spend of zero is a statement.
+        let credit = errorMessage(in: credits) == nil ? unwrap(credits) : [:]
+        let keyInfo = key.flatMap { errorMessage(in: $0) == nil ? unwrap($0) : nil }
+
+        var reports: [SpendReport] = []
+
+        if let keyInfo {
+            if let cap = keyCap(keyInfo), let capReport = capSpend(cap, now: now) {
+                reports.append(capReport)
+            }
+            for field in periodFields {
+                guard let value = number(keyInfo, field.keys), let minor = minorUnits(value) else { continue }
+                reports.append(SpendReport(
+                    amountMinor: minor,
+                    currency: currency,
+                    exponent: spendExponent,
+                    // The cap is reported once, above. Hanging it on a period
+                    // figure as well would let one ceiling be counted twice.
+                    limitMinor: nil,
+                    period: field.window.period,
+                    confidence: .measured,
+                    resetDate: nextReset(field.window, now: now)
+                ))
+            }
+        }
+
+        if let spent = number(credit, "total_usage", "totalUsage", "total_spent", "usage"),
+           let minor = minorUnits(spent),
+           // Lifetime spend is bounded by lifetime credits bought, which is a
+           // real ceiling — but only above zero. A free-tier account has bought
+           // nothing, and a meter against zero is not a reading.
+           let lifetime = SpendReport(
+               amountMinor: minor,
+               currency: currency,
+               exponent: spendExponent,
+               ceiling: ceiling(credit, "total_credits", "totalCredits", "credits", "total_granted"),
+               period: .lifetime,
+               confidence: .measured
+           ) {
+            reports.append(lifetime)
+        }
+
+        return reports
+    }
+
+    /// The per-key cap as money. Its period is the cap's own cadence, and
+    /// `.lifetime` when the key never resets: calling a permanent ceiling
+    /// `.month` would file it under a monthly budget it has nothing to do with.
+    private static func capSpend(
+        _ cap: (used: Double, limit: Double, window: ResetWindow?),
+        now: Date
+    ) -> SpendReport? {
+        guard let amount = minorUnits(cap.used), let ceiling = minorUnits(cap.limit) else { return nil }
+        return SpendReport(
+            amountMinor: amount,
+            currency: currency,
+            exponent: spendExponent,
+            limitMinor: ceiling,
+            period: cap.window?.period ?? .lifetime,
+            confidence: .measured,
+            resetDate: nextReset(cap.window, now: now)
+        )
+    }
+
+    /// OpenRouter prices, sells credits and reports usage in dollars, and
+    /// neither payload names a currency. Written down once, here, rather than
+    /// assumed at four call sites.
+    private static let currency = "USD"
+
+    /// Micro-dollars, not cents. This API bills per token, so a key can spend
+    /// $0.0043 in a day, and a report at two places would render that as $0.00 —
+    /// a lie about zero. `SpendReport.display` already keeps sub-unit precision
+    /// only where it changes the reading.
+    private static let spendExponent = 6
+
+    /// A dollar figure in `spendExponent` minor units, or nothing.
+    private static func minorUnits(_ value: Double) -> Int? {
+        guard value.isFinite else { return nil }
+        let scaled = (value * 1_000_000).rounded()
+        // `Int(_:)` traps outside its range, and the only thing that could put a
+        // figure there is a corrupt payload. That is not a bill, so it reports
+        // nothing rather than a number or a crash.
+        guard scaled.magnitude < 9e15 else { return nil }
+        return Int(scaled)
+    }
+
+    /// What a payload said about a ceiling, in the three states `SpendReport`
+    /// tells apart. Absent and `null` are both "no cap" — `null` is how this API
+    /// spells an uncapped key — while a present value that is not a finite,
+    /// non-negative number is unreadable, and poisons its report rather than
+    /// passing for uncapped. Zero is a ceiling nothing can be measured against,
+    /// so it reads as uncapped too.
+    private static func ceiling(_ dict: [String: Any], _ keys: String...) -> SpendReport.Ceiling {
+        for key in keys {
+            guard let raw = dict[key], !(raw is NSNull) else { continue }
+            guard let value = amount(raw), value >= 0, let minor = minorUnits(value) else { return .unreadable }
+            return value > 0 ? .limit(minor) : .uncapped
+        }
+        return .uncapped
+    }
+
     // MARK: - Internals
+
+    /// The three period figures the key route publishes, in one table so that a
+    /// row's label, its history key, the report's period and the reset instant
+    /// cannot drift apart.
+    ///
+    /// `windowKey` is the payload's own field name, which is the most stable
+    /// identifier there is for these: "Today" is prose and can be reworded, and
+    /// a series keyed on prose forks the day it is.
+    private static let periodFields: [(label: String, windowKey: String, keys: [String], window: ResetWindow)] = [
+        ("Today", "usage_daily", ["usage_daily", "usageDaily"], .daily),
+        ("This week", "usage_weekly", ["usage_weekly", "usageWeekly"], .weekly),
+        ("This month", "usage_monthly", ["usage_monthly", "usageMonthly"], .monthly)
+    ]
 
     /// The credit cap's reset cadence. Documented as midnight UTC, weeks Monday
     /// to Sunday.
@@ -309,6 +464,58 @@ public enum OpenRouterUsageParser {
         case daily, weekly, monthly
 
         var label: String { rawValue.capitalized }
+
+        /// The same cadence in the money model.
+        var period: SpendReport.Period {
+            switch self {
+            case .daily:   return .day
+            case .weekly:  return .week
+            case .monthly: return .month
+            }
+        }
+    }
+
+    /// The one real used/limit pair either route offers, in dollars, and only
+    /// when the user set a spend cap on the key.
+    ///
+    /// Spend against the cap is the cap minus what is left; the key's lifetime
+    /// usage only matches when the cap never resets, so it is the fallback
+    /// rather than the source. With neither, the cap is known and the spend is
+    /// not, and a bar drawn at zero would be an invention.
+    private static func keyCap(_ keyInfo: [String: Any]) -> (used: Double, limit: Double, window: ResetWindow?)? {
+        guard let cap = number(keyInfo, "limit", "credit_limit", "creditLimit"), cap > 0 else { return nil }
+        let remaining = number(keyInfo, "limit_remaining", "limitRemaining")
+        guard let used = remaining.map({ max(cap - $0, 0) }) ?? number(keyInfo, "usage", "usage_total") else {
+            return nil
+        }
+        return (used, cap, resetWindow(keyInfo))
+    }
+
+    /// The cap as the panel's row.
+    ///
+    /// No `windowDuration`, so the meter draws a plain track and no pace notch.
+    /// The cadence is stated but the cap's own cycle start is not: a key created
+    /// mid-month has spent against a ceiling that has yet to roll, and a notch
+    /// would measure that spend against a window it did not run for.
+    ///
+    /// One `windowKey` across every cadence. A user switching their key from a
+    /// daily cap to a monthly one is still capping the same key, and the reading
+    /// history has of it should not restart because the label above it changed.
+    private static func capMetric(
+        _ cap: (used: Double, limit: Double, window: ResetWindow?),
+        now: Date
+    ) -> UsageMetric {
+        UsageMetric(
+            label: "Key limit",
+            // Not clamped to the cap: a key that went over reads "12 / 10 USD",
+            // and `percent` already tops out at 1.
+            used: dollars(cap.used),
+            limit: dollars(cap.limit),
+            unit: "USD",
+            resetDate: nextReset(cap.window, now: now),
+            windowLabel: cap.window?.label,
+            windowKey: "key_limit"
+        )
     }
 
     /// Both routes wrap their payload in `data`. An unwrapped body is accepted
@@ -346,7 +553,14 @@ public enum OpenRouterUsageParser {
     /// throwing for a value that is not JSON, and `parse` is public, so the
     /// payload is checked before it is encoded.
     private static func rawJSON(credits: [String: Any], key: [String: Any]?) -> String? {
-        let payload: [String: Any] = ["credits": credits, "key": key ?? [:]]
+        let payload: [String: Any] = [
+            "credits": credits,
+            "key": key ?? [:],
+            // Carried with the payload it applies to, because that is the one
+            // place in this file a caveat can be put: the row's tooltip is
+            // assembled from the provider's identity, not from what it returned.
+            "note": stalenessNote
+        ]
         guard JSONSerialization.isValidJSONObject(payload) else { return nil }
         return try? JSONSerialization.data(withJSONObject: payload).base64EncodedString()
     }

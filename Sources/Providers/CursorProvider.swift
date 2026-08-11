@@ -54,14 +54,14 @@ public final class CursorProvider: ObservableObject, UsageProvider {
         // `/api/dashboard/usage` returns 404 — it moved. `/api/usage` is what the
         // dashboard calls now, verified against a live Pro session.
         let url = URL(string: "https://cursor.com/api/usage")!
-        let (data, _) = try await ProviderHTTP(headers: [
-            "Cookie": "\(cookieName)=\(token)",
-            "Origin": "https://www.cursor.com",
-            "Referer": "https://www.cursor.com/dashboard"
-        ]).get(url)
+        let (data, _) = try await ProviderHTTP(headers: headers(cookie: token)).get(url)
 
         let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        var usage = CursorUsageParser.parse(raw)
+        // Best-effort, exactly as the account lookup below is: the quota card
+        // from `/api/usage` is the thing the row is actually for, and a spend
+        // figure that failed to arrive must not take the whole refresh down.
+        let summary = await usageSummary(cookie: token)
+        var usage = CursorUsageParser.parse(raw, summary: summary)
 
         if discoveredAccount == nil {
             discoveredAccount = try? await accountEmail(cookie: token)
@@ -74,10 +74,39 @@ public final class CursorProvider: ObservableObject, UsageProvider {
                 primary: usage.primary,
                 secondary: usage.secondary,
                 accountLabel: account,
-                rawJSON: usage.rawJSON
+                // Carried through by hand: this rebuild exists only to hang a
+                // label on the reading, and a field left out here is a field
+                // the row silently loses the moment an account gets named.
+                rawJSON: usage.rawJSON,
+                spend: usage.spend
             )
         }
         return usage
+    }
+
+    /// The session cookie, plus the Origin and Referer the dashboard sends. Both
+    /// endpoints are the dashboard's own, and both refuse a cookie that arrives
+    /// without them.
+    private func headers(cookie token: String) -> [String: String] {
+        [
+            "Cookie": "\(cookieName)=\(token)",
+            "Origin": "https://www.cursor.com",
+            "Referer": "https://www.cursor.com/dashboard",
+            "Accept": "application/json"
+        ]
+    }
+
+    /// `/api/usage-summary` is where the money is: on-demand and overall spend
+    /// in cents, and the billing cycle's own bounds.
+    ///
+    /// Four seconds rather than the usual fifteen, and the failure is swallowed
+    /// rather than thrown: this is a second card on a row whose answer has
+    /// already arrived, and a slow ledger must not hold up a quota.
+    private func usageSummary(cookie token: String) async -> [String: Any]? {
+        let url = URL(string: "https://cursor.com/api/usage-summary")!
+        let http = ProviderHTTP(headers: headers(cookie: token), timeout: 4)
+        guard let payload = (try? await http.get(url))?.0 else { return nil }
+        return (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
     }
 
     /// `/api/auth/me` answers with the account behind the session. Failure is not
@@ -85,10 +114,7 @@ public final class CursorProvider: ObservableObject, UsageProvider {
     /// smaller problem than a row that errors over a label.
     private func accountEmail(cookie token: String) async throws -> String? {
         let url = URL(string: "https://cursor.com/api/auth/me")!
-        let (data, _) = try await ProviderHTTP(headers: [
-            "Cookie": "\(cookieName)=\(token)",
-            "Accept": "application/json"
-        ]).get(url)
+        let (data, _) = try await ProviderHTTP(headers: headers(cookie: token)).get(url)
         let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let email = raw?["email"] as? String
         return (email?.isEmpty ?? true) ? nil : email
@@ -136,18 +162,18 @@ public enum CursorUsageParser {
     /// `maxRequestUsage` is null on plans that no longer meter requests — the
     /// usage-based tiers bill instead of capping — so a null ceiling is reported
     /// as a status rather than invented as a percentage.
-    public static func parse(_ raw: [String: Any]) -> UsageData {
+    ///
+    /// `summary` is the optional second payload, `/api/usage-summary`, which
+    /// carries the money and the exact cycle bounds. It is a separate request
+    /// and a separate failure, so it arrives as an optional rather than as a
+    /// reason the quota card cannot be built.
+    public static func parse(_ raw: [String: Any], summary: [String: Any]? = nil) -> UsageData {
         let plan = (raw["plan"] as? String) ?? (raw["membershipType"] as? String) ?? "Pro"
         let usage = (raw["usage"] as? [String: Any]) ?? raw
 
-        // The cycle rolls a month after it started.
-        let cycleStart = (usage["startOfMonth"] as? String).flatMap { ProviderDate.parse($0) }
-            ?? (raw["startOfMonth"] as? String).flatMap { ProviderDate.parse($0) }
-        let resetDate = cycleStart.flatMap {
-            billingCalendar.date(byAdding: .month, value: 1, to: $0)
-        } ?? (raw["cycleEnd"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+        let cycle = billingCycle(usage: usage, raw: raw, summary: summary)
 
-        var buckets: [(label: String, used: Double, limit: Double)] = []
+        var buckets: [(key: String, label: String, used: Double, limit: Double)] = []
         for (key, value) in usage {
             guard let bucket = value as? [String: Any] else { continue }
             let used = ProviderNumber.coerce(bucket["numRequests"])
@@ -158,7 +184,7 @@ public enum CursorUsageParser {
             let limit = ProviderNumber.coerce(bucket["maxRequestUsage"])
                 ?? ProviderNumber.coerce(bucket["limit"])
                 ?? 0
-            buckets.append((label(for: key), used, limit))
+            buckets.append((key, label(for: key), used, limit))
         }
 
         // The metered bucket is the interesting one; ties break on usage so the
@@ -176,8 +202,15 @@ public enum CursorUsageParser {
             // A unit even when uncapped: it marks the figure as a count, so the
             // row reads "0 reqs this cycle" rather than a bare label.
             unit: "reqs",
-            resetDate: resetDate,
-            windowLabel: "Monthly"
+            resetDate: cycle.end,
+            windowLabel: "Monthly",
+            windowDuration: cycle.duration,
+            // Pinned, because the label above is the one thing on this row that
+            // moves: the same account reads "Requests" while its plan meters
+            // them and "this cycle" the month it stops, and a key derived from
+            // the label would file the second as a new series with none of the
+            // first one's readings behind it.
+            windowKey: "monthly_requests"
         )
 
         let secondary = sorted.dropFirst()
@@ -189,8 +222,13 @@ public enum CursorUsageParser {
                     used: $0.used,
                     limit: $0.limit,
                     unit: "reqs",
-                    resetDate: resetDate,
-                    windowLabel: "Monthly"
+                    resetDate: cycle.end,
+                    windowLabel: "Monthly",
+                    windowDuration: cycle.duration,
+                    // Cursor's own key for the bucket, not the display name
+                    // `label(for:)` gives it — that mapping is this file's
+                    // wording and can be reworded, while "gpt-4" is the payload.
+                    windowKey: "model_\($0.key)"
                 )
             }
 
@@ -199,7 +237,8 @@ public enum CursorUsageParser {
             planName: plan,
             primary: primary,
             secondary: Array(secondary),
-            rawJSON: try? JSONSerialization.data(withJSONObject: raw).base64EncodedString()
+            rawJSON: rawJSON(usage: raw, summary: summary),
+            spend: spend(summary, cycle: cycle)
         )
     }
 
@@ -210,5 +249,163 @@ public enum CursorUsageParser {
         case "gpt-4-turbo": return "GPT-4 Turbo"
         default: return key
         }
+    }
+
+    // MARK: - The billing cycle
+
+    /// The month being billed, as far as the two payloads state it.
+    private struct BillingCycle {
+        let start: Date?
+        let end: Date?
+
+        /// How long this window is, and only when both edges are known.
+        ///
+        /// The meter draws its pace notch against this, so the length has to be
+        /// the month's own — 28 to 31 days — rather than a flat 30. A cycle with
+        /// one edge named has no length, and nil is the honest answer: a notch
+        /// on an assumed duration is an assumption drawn as an instrument.
+        var duration: TimeInterval? {
+            guard let start, let end else { return nil }
+            let length = end.timeIntervalSince(start)
+            return length > 0 ? length : nil
+        }
+    }
+
+    private static func billingCycle(
+        usage: [String: Any],
+        raw: [String: Any],
+        summary: [String: Any]?
+    ) -> BillingCycle {
+        // `/api/usage` names the start and the cycle rolls a month later.
+        if let start = date(usage["startOfMonth"]) ?? date(raw["startOfMonth"]) {
+            return BillingCycle(start: start, end: billingCalendar.date(byAdding: .month, value: 1, to: start))
+        }
+        // Enterprise and team responses can omit it, and usage-summary states
+        // both bounds outright, so the second payload answers when the first
+        // does not. Both edges or neither: half a cycle is not a cycle.
+        if let start = date(summary?["billingCycleStart"]), let end = date(summary?["billingCycleEnd"]) {
+            return BillingCycle(start: start, end: end)
+        }
+        // Older payloads carried the far edge only.
+        return BillingCycle(start: nil, end: date(raw["cycleEnd"]))
+    }
+
+    /// A cycle bound as either an ISO 8601 string or epoch milliseconds, which
+    /// is what the two endpoints send respectively.
+    private static func date(_ value: Any?) -> Date? {
+        if let text = value as? String { return ProviderDate.parse(text) }
+        guard let millis = ProviderNumber.coerce(value), millis > 0 else { return nil }
+        return Date(timeIntervalSince1970: millis / 1000)
+    }
+
+    // MARK: - The money
+
+    /// The on-demand spend, from `/api/usage-summary`.
+    ///
+    /// Every figure in that payload is already in cents, which is exactly the
+    /// shape `SpendReport` wants: the money never becomes a `Double` on the way
+    /// in and never has to be rounded back.
+    ///
+    /// Four buckets can carry it and only one of them is this row's reading. The
+    /// individual buckets are the signed-in account's own spend; the team ones
+    /// are the organisation's aggregate, and an org's bill on a personal row is
+    /// the wrong number rather than a rounder one. Individual first therefore,
+    /// and the team aggregate only when Cursor sent no individual bucket at all
+    /// or marked the ones it sent off.
+    private static func spend(_ summary: [String: Any]?, cycle: BillingCycle) -> SpendReport? {
+        guard let summary else { return nil }
+        let individual = summary["individualUsage"] as? [String: Any]
+        let team = summary["teamUsage"] as? [String: Any]
+        let candidates: [Any?] = [
+            individual?["onDemand"],
+            individual?["overall"],
+            team?["onDemand"],
+            team?["pooled"]
+        ]
+        guard let bucket = candidates.compactMap({ Self.bucket($0) }).first else { return nil }
+
+        return SpendReport(
+            amountMinor: bucket.usedMinor,
+            // Cursor states no currency anywhere in this payload and prices its
+            // plans, its on-demand rates and this endpoint in dollars. It is the
+            // one fact the response leaves out, rather than one this guesses at.
+            currency: "USD",
+            exponent: 2,
+            ceiling: bucket.ceiling,
+            period: .month,
+            // Cursor's own accounting, to the cent. Nothing local priced it.
+            confidence: .measured,
+            resetDate: cycle.end
+        )
+    }
+
+    private struct SpendBucket {
+        let usedMinor: Int
+        let ceiling: SpendReport.Ceiling
+    }
+
+    /// One `{ enabled, limit, used, remaining }` bucket, all four in cents.
+    ///
+    /// `enabled: false` is a placeholder Cursor sends beside a live bucket on
+    /// team accounts, so it is skipped rather than read as a spend of zero.
+    ///
+    /// `used` leads, but it comes back as zero on shapes where only the
+    /// remaining balance moved, so a positive `limit - remaining` wins over a
+    /// reported zero. The two only ever disagree in that direction.
+    ///
+    /// A bucket carrying none of the three numbers is not a reading at all and
+    /// falls through to the next candidate — otherwise an empty individual
+    /// placeholder would report $0.00 and hide a team bucket that has figures.
+    private static func bucket(_ value: Any?) -> SpendBucket? {
+        guard let entry = value as? [String: Any] else { return nil }
+        if let enabled = entry["enabled"] as? Bool, !enabled { return nil }
+
+        let stated = ProviderNumber.coerce(entry["used"])
+        let limit = ProviderNumber.coerce(entry["limit"])
+        let remaining = ProviderNumber.coerce(entry["remaining"])
+        guard stated != nil || limit != nil || remaining != nil else { return nil }
+
+        var inferred: Double = 0
+        if let limit, let remaining { inferred = max(limit - remaining, 0) }
+        let reported = stated ?? 0
+        let used = reported > 0 ? reported : inferred
+
+        guard let usedMinor = minor(used) else { return nil }
+        return SpendBucket(usedMinor: usedMinor, ceiling: ceiling(entry["limit"]))
+    }
+
+    /// What the payload said about the ceiling, in the three states a
+    /// `SpendReport` tells apart.
+    ///
+    /// Cursor writes `0` for a bucket with no hard limit, which is genuinely
+    /// uncapped and not a ceiling of nothing. A `limit` that is present and
+    /// cannot be read is neither: it poisons the report, because showing an
+    /// unread ceiling as uncapped invents headroom.
+    private static func ceiling(_ stated: Any?) -> SpendReport.Ceiling {
+        guard let stated, !(stated is NSNull) else { return .uncapped }
+        guard let limit = ProviderNumber.coerce(stated) else { return .unreadable }
+        guard limit > 0 else { return .uncapped }
+        guard let value = minor(limit) else { return .unreadable }
+        return .limit(value)
+    }
+
+    /// Cents as an `Int`, or nothing. `Int(_:)` traps outside its range and the
+    /// only thing that could put a figure there is a corrupt payload, which is
+    /// not a bill — so it reports nothing rather than a number or a crash.
+    private static func minor(_ cents: Double) -> Int? {
+        let rounded = cents.rounded()
+        guard rounded.isFinite, rounded.magnitude < 9e15 else { return nil }
+        return Int(rounded)
+    }
+
+    // MARK: - Raw payload
+
+    /// Both payloads, under the names they were fetched by. Wrapped even when
+    /// only one arrived, so what the raw-JSON inspector shows has one shape
+    /// rather than two that depend on whether a best-effort call answered.
+    private static func rawJSON(usage: [String: Any], summary: [String: Any]?) -> String? {
+        let payload: [String: Any] = ["usage": usage, "summary": summary ?? [:]]
+        guard JSONSerialization.isValidJSONObject(payload) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: payload).base64EncodedString()
     }
 }

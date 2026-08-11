@@ -9,13 +9,35 @@ public struct UsageMetric: Codable, Hashable {
     public let resetDate: Date?
     public let windowLabel: String?
 
+    /// How long this window is, when the provider says.
+    ///
+    /// Never inferred. The meter draws a pace notch at how far through the
+    /// window we are, which is `resetDate` and this together; with a guessed
+    /// duration the notch lands in a guessed place, and an instrument that is
+    /// confidently wrong is worse than one that shows no mark at all. A metric
+    /// without this gets a uniform track and no notch.
+    public let windowDuration: TimeInterval?
+
+    /// The stable series key for this window in the history store.
+    ///
+    /// The provider's own identifier ("five_hour", "weekly_scoped"); a
+    /// normalised label is the fallback only where the provider gives none.
+    /// It exists because keying the series on the displayed label is a
+    /// data-loss bug: AIQuotaBar slugifies its label into the key, so the day a
+    /// provider renames a window the series silently forks and every reading
+    /// behind it is orphaned, with no key registry and no migration to put the
+    /// two halves back together.
+    public let windowKey: String?
+
     public init(
         label: String,
         used: Double,
         limit: Double,
         unit: String? = nil,
         resetDate: Date? = nil,
-        windowLabel: String? = nil
+        windowLabel: String? = nil,
+        windowDuration: TimeInterval? = nil,
+        windowKey: String? = nil
     ) {
         self.label = label
         self.used = used
@@ -23,6 +45,27 @@ public struct UsageMetric: Codable, Hashable {
         self.unit = unit
         self.resetDate = resetDate
         self.windowLabel = windowLabel
+        self.windowDuration = windowDuration
+        self.windowKey = windowKey
+    }
+
+    /// Decoding is written out rather than synthesised so the additive fields
+    /// are pinned to `decodeIfPresent` and stay that way. The snapshot store
+    /// holds every provider's last reading in one file: a metric written before
+    /// these keys existed has to decode, because a throw here costs the user
+    /// every row rather than one field.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            label: try container.decode(String.self, forKey: .label),
+            used: try container.decode(Double.self, forKey: .used),
+            limit: try container.decode(Double.self, forKey: .limit),
+            unit: try container.decodeIfPresent(String.self, forKey: .unit),
+            resetDate: try container.decodeIfPresent(Date.self, forKey: .resetDate),
+            windowLabel: try container.decodeIfPresent(String.self, forKey: .windowLabel),
+            windowDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .windowDuration),
+            windowKey: try container.decodeIfPresent(String.self, forKey: .windowKey)
+        )
     }
 
     public var percent: Double {
@@ -46,6 +89,17 @@ public struct UsageMetric: Codable, Hashable {
             return String(format: "%.1f", value)
         }
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case label
+        case used
+        case limit
+        case unit
+        case resetDate
+        case windowLabel
+        case windowDuration
+        case windowKey
+    }
 }
 
 public struct UsageData: Codable, Hashable {
@@ -60,6 +114,14 @@ public struct UsageData: Codable, Hashable {
     public let accountLabel: String?
     public let rawJSON: String?
 
+    /// What this account has spent, when the service reports money at all.
+    ///
+    /// Kept out of the metrics because a bill is not a quota: it carries a
+    /// currency, a period and a confidence, and a figure aibars priced locally
+    /// off a published rate card must not be able to sit in the same field as
+    /// one the provider itself accounted for.
+    public let spend: SpendReport?
+
     public init(
         providerID: String,
         fetchedAt: Date = Date(),
@@ -67,7 +129,8 @@ public struct UsageData: Codable, Hashable {
         primary: UsageMetric,
         secondary: [UsageMetric] = [],
         accountLabel: String? = nil,
-        rawJSON: String? = nil
+        rawJSON: String? = nil,
+        spend: SpendReport? = nil
     ) {
         self.providerID = providerID
         self.fetchedAt = fetchedAt
@@ -76,6 +139,37 @@ public struct UsageData: Codable, Hashable {
         self.secondary = secondary
         self.accountLabel = accountLabel
         self.rawJSON = rawJSON
+        self.spend = spend
+    }
+
+    /// Written out for the same reason as `UsageMetric`'s: `spend` arrived after
+    /// the snapshot file did, and a stored reading that predates it must decode
+    /// with no spend rather than fail and take the rest of the file with it.
+    /// `secondary` is read the same way for the same reason: a reading with no
+    /// extra windows is a reading, not a corrupt record.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            providerID: try container.decode(String.self, forKey: .providerID),
+            fetchedAt: try container.decode(Date.self, forKey: .fetchedAt),
+            planName: try container.decodeIfPresent(String.self, forKey: .planName),
+            primary: try container.decode(UsageMetric.self, forKey: .primary),
+            secondary: try container.decodeIfPresent([UsageMetric].self, forKey: .secondary) ?? [],
+            accountLabel: try container.decodeIfPresent(String.self, forKey: .accountLabel),
+            rawJSON: try container.decodeIfPresent(String.self, forKey: .rawJSON),
+            spend: try container.decodeIfPresent(SpendReport.self, forKey: .spend)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerID
+        case fetchedAt
+        case planName
+        case primary
+        case secondary
+        case accountLabel
+        case rawJSON
+        case spend
     }
 }
 
@@ -119,6 +213,16 @@ public enum PlanName {
 public enum ProviderError: LocalizedError {
     case notAuthenticated
     case sessionExpired
+    /// A challenge, not a dead session: a Cloudflare interstitial, a captcha, a
+    /// captive portal answering on the site's behalf.
+    ///
+    /// It exists because 401 and 403 were folded into `sessionExpired`, and the
+    /// refresh loop answers an auth failure by discarding the credential — so a
+    /// hotel wifi splash page cost the user a browser session that was
+    /// perfectly good. claude.ai draws the line itself: a genuinely invalid
+    /// session carries `account_session_invalid` in the body of its 403, and a
+    /// bot-protection challenge does not.
+    case blocked(String)
     case rateLimited
     case network(String)
     case parse(String)
@@ -129,6 +233,7 @@ public enum ProviderError: LocalizedError {
         switch self {
         case .notAuthenticated: return "Not signed in. Open Settings to authenticate."
         case .sessionExpired:   return "Session expired. Please re-authenticate."
+        case .blocked(let msg): return "Refused by the site's bot protection (\(msg)). Will retry."
         case .rateLimited:      return "Rate limited by the provider. Will retry."
         case .network(let msg): return "Network error: \(msg)"
         case .parse(let msg):   return "Could not parse response: \(msg)"
@@ -137,6 +242,9 @@ public enum ProviderError: LocalizedError {
         }
     }
 
+    /// Whether the credential itself is the problem. Callers discard a rejected
+    /// credential on the strength of this, so `blocked` must stay out of it:
+    /// the session may well be fine and the site simply is not answering us.
     public var isAuth: Bool {
         switch self {
         case .notAuthenticated, .sessionExpired: return true

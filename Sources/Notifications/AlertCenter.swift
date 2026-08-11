@@ -31,8 +31,14 @@ public enum AlertPermission: Equatable, Sendable {
     }
 }
 
-/// Delivery, permission and persistence for threshold alerts. The only place in
-/// the app that touches UserNotifications.
+// `BudgetAlertState` lives in ThresholdPolicy.swift beside the usage arming it
+// parallels. This file had grown a private copy of it that carried only the
+// fraction, which would have silently dropped the budget amount and the
+// escalation stamp the real one keeps.
+
+
+/// Delivery, permission and persistence for threshold and budget alerts. The
+/// only place in the app that touches UserNotifications.
 ///
 /// This app is ad-hoc signed and un-notarised, so `UNUserNotificationCenter`
 /// refusing to serve it is the ordinary case, not the edge case. Three defences,
@@ -51,8 +57,15 @@ public enum AlertPermission: Equatable, Sendable {
 ///    delivered. When macOS silently drops a banner the feature still has a
 ///    visible surface, and the user can see for themselves that it is working.
 ///
-/// Nothing here throws. `consider` is called from the refresh loop, and a
-/// notification that failed to post is not a reason to fail a poll.
+/// Two policies feed one log. `ThresholdPolicy` watches a window against its
+/// own cap and keeps its state opaque; budgets are watched here, against
+/// `BudgetPolicy`, because that policy is stateless and somebody has to hold the
+/// one number it needs. Both go through the same delivery, the same log and the
+/// same enabling switch, so a user who turned alerts off is not still being
+/// told about money.
+///
+/// Nothing here throws. Both `consider` overloads are called from the refresh
+/// loop, and a notification that failed to post is not a reason to fail a poll.
 @MainActor
 public final class AlertCenter: ObservableObject {
     /// Shared because the refresh loop and the settings pane have to agree
@@ -79,11 +92,24 @@ public final class AlertCenter: ObservableObject {
 
     // MARK: - Lifecycle
 
-    public init(store: UserDefaults = .standard, now: @escaping () -> Date = Date.init) {
+    /// `budgets` defaults to the shared store, which is what the refresh loop
+    /// gets. It is a parameter rather than a direct reach for `BudgetStore.shared`
+    /// for the same reason `store` is: a test that armed a budget against the
+    /// shared instance would write an amount into the developer's own defaults
+    /// and leave it there. Resolved in the body rather than in the default
+    /// expression, because a default argument is evaluated in the caller's
+    /// isolation and `BudgetStore.shared` is main-actor bound.
+    public init(
+        store: UserDefaults = .standard,
+        budgets: BudgetStore? = nil,
+        now: @escaping () -> Date = Date.init
+    ) {
         self.store = store
+        self.budgets = budgets ?? .shared
         self.now = now
         self.rules = Self.decode(ThresholdRules.self, from: store, .rules) ?? .default
         self.state = Self.decode(ThresholdState.self, from: store, .state) ?? ThresholdState()
+        self.budgetState = Self.decode(BudgetAlertState.self, from: store, .budgets) ?? BudgetAlertState()
         self.permission = Self.isHostedInApp ? .unknown : .unavailable
     }
 
@@ -175,6 +201,36 @@ public final class AlertCenter: ObservableObject {
         if outcome.state != state {
             state = outcome.state
             persist(state, .state)
+        }
+
+        for alert in outcome.alerts {
+            let delivered = await post(alert)
+            record(alert, delivered: delivered)
+        }
+    }
+
+    /// The same, for what a service says it has cost.
+    ///
+    /// Keyed by service rather than by account, because that is how a budget is
+    /// kept: two subscriptions to one service are one bill to the person paying
+    /// them, and an alert naming the account slot would be reporting an internal
+    /// id at somebody who never chose it.
+    public func consider(spend: SpendReport, serviceID: String, displayName: String) async {
+        await refreshPermissionIfStale()
+
+        let outcome = BudgetAlertPolicy.evaluate(
+            spend: spend,
+            serviceID: serviceID,
+            displayName: displayName,
+            budget: budgets.budget(for: serviceID),
+            rules: rules,
+            state: budgetState,
+            now: now()
+        )
+
+        if outcome.state != budgetState {
+            budgetState = outcome.state
+            persist(budgetState, .budgets)
         }
 
         for alert in outcome.alerts {
@@ -289,15 +345,24 @@ public final class AlertCenter: ObservableObject {
     private enum Key: String {
         case rules = "aibars.alerts.rules"
         case state = "aibars.alerts.state"
+        case budgets = "aibars.alerts.budgets"
         case didAsk = "aibars.alerts.didAsk"
     }
 
     private let store: UserDefaults
     private let now: () -> Date
 
+    /// The budgets a spend crossing is measured against. Held rather than read
+    /// from `.shared` at each call so a test can hand in its own.
+    private let budgets: BudgetStore
+
     /// The policy's memory. Opaque here by design — this class persists it and
     /// hands it back, and reads nothing out of it.
     private var state: ThresholdState
+
+    /// The budget policy's memory, kept beside the usage policy's and equally
+    /// opaque here: this class persists it and hands it back.
+    private var budgetState: BudgetAlertState
 
     /// Delivery marks for the rows in `recent`, keyed by `logID`. Separate from
     /// the log itself so `recent` stays exactly what the policy produced.

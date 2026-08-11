@@ -244,25 +244,35 @@ public enum PerplexityUsageParser {
 
         let recurring = metric(
             label: "Credits",
+            pool: .recurring,
             usedCents: recurringUsed,
             totalCents: recurringTotal,
             resetDate: renewal,
-            windowLabel: nil
+            windowLabel: nil,
+            windowDuration: periodDuration(root, renewal: renewal)
         )
         let promo = metric(
             label: "Bonus",
+            pool: .promotional,
             usedCents: promoUsed,
             totalCents: promoTotal,
             resetDate: nil,
-            windowLabel: promoExpiry.map { "exp. \(shortDate.string(from: $0))" }
+            windowLabel: promoExpiry.map { "exp. \(shortDate.string(from: $0))" },
+            // A promo grant runs out, it does not come back, so there is no
+            // reset for a pace notch to be measured against even when the
+            // response dates both ends of it.
+            windowDuration: nil
         )
-        // Purchased credits don't expire and don't reset, so no window.
+        // Purchased credits don't expire and don't reset, so no window — and
+        // therefore no length either.
         let purchased = metric(
             label: "Purchased",
+            pool: .purchased,
             usedCents: purchasedUsed,
             totalCents: purchasedTotal,
             resetDate: nil,
-            windowLabel: nil
+            windowLabel: nil,
+            windowDuration: nil
         )
 
         // A promo-only or purchase-only account must not lead with a 0/0
@@ -275,7 +285,10 @@ public enum PerplexityUsageParser {
 
         // Free accounts have no pools at all; limit 0 keeps that status-only
         // rather than showing as fully consumed. The label carries the whole
-        // message, because a status row renders nothing else.
+        // message, because a status row renders nothing else. No window key: it
+        // is not one of Perplexity's pools, so there is no series for it to be
+        // filed under, and the day the account starts a subscription its
+        // readings belong to the recurring pool rather than behind this.
         let primary = lanes.first ?? UsageMetric(label: "No credit pool", used: 0, limit: 0)
 
         return UsageData(
@@ -291,6 +304,21 @@ public enum PerplexityUsageParser {
 
     private enum Pool {
         case recurring, promotional, purchased
+
+        /// The series this pool's lane is filed under, pinned to the pool rather
+        /// than to the label above it. Two things move that the key must not
+        /// follow: the labels are this file's own wording, and which pool leads
+        /// changes with the account — a promo-only account leads with "Bonus"
+        /// and a subscription puts it second. Keyed on the slot or the label,
+        /// the day either moves the series forks and every reading behind it is
+        /// orphaned.
+        var windowKey: String {
+            switch self {
+            case .recurring:   return "recurring_credits"
+            case .promotional: return "promotional_credits"
+            case .purchased:   return "purchased_credits"
+            }
+        }
     }
 
     /// The endpoint returns credits at the top level, but a wrapper key is the
@@ -346,10 +374,12 @@ public enum PerplexityUsageParser {
 
     private static func metric(
         label: String,
+        pool: Pool,
         usedCents: Double,
         totalCents: Double,
         resetDate: Date?,
-        windowLabel: String?
+        windowLabel: String?,
+        windowDuration: TimeInterval?
     ) -> UsageMetric {
         UsageMetric(
             label: label,
@@ -357,8 +387,35 @@ public enum PerplexityUsageParser {
             limit: credits(fromCents: totalCents),
             unit: "credits",
             resetDate: resetDate,
-            windowLabel: windowLabel
+            windowLabel: windowLabel,
+            windowDuration: windowDuration,
+            windowKey: pool.windowKey
         )
+    }
+
+    /// How long the subscription period is, and only when the response names
+    /// both of its edges.
+    ///
+    /// The recurring pool is the one lane here that is a window: it refills at
+    /// `renewal_date_ts`, so the meter can draw a pace notch on it — but only
+    /// against a length Perplexity states. The renewal date alone gives the far
+    /// edge and nothing gives the near one, and filling that in with a flat 30
+    /// days would put the notch most of a day out on every 31-day month and
+    /// three days out in February. Both edges or neither, as with the promo
+    /// expiry above: half a period is not a period.
+    private static func periodDuration(_ root: [String: Any], renewal: Date?) -> TimeInterval? {
+        guard let renewal else { return nil }
+        let start = timestamp(
+            root["current_period_start_ts"] ?? root["currentPeriodStartTs"]
+                ?? root["current_period_start"] ?? root["period_start_ts"]
+        )
+        guard let start else { return nil }
+        let length = renewal.timeIntervalSince(start)
+        // A non-positive length is not a short period, it is a pair of dates
+        // that cannot be divided by; the same goes for what an "inf" in the
+        // JSON would produce.
+        guard length > 0, length.isFinite else { return nil }
+        return length
     }
 
     /// Rounding to whole cents first keeps a part-spent credit exact and float

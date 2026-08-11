@@ -16,7 +16,6 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     @Published public private(set) var isAuthenticated: Bool = false
     @Published public private(set) var lastError: ProviderError?
 
-    private let cookieName = "__Secure-next-auth.session-token"
     private let session = SessionStore.shared
     private let userDefaults = UserDefaults.standard
     private let enabledKey: String
@@ -34,7 +33,7 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     public var webLogin: WebLoginConfig? {
         WebLoginConfig(
             startURL: URL(string: "https://chatgpt.com/auth/login")!,
-            capture: .cookie(name: cookieName, domainSuffix: "chatgpt.com"),
+            capture: .cookie(name: ChatGPTSession.cookieName, domainSuffix: "chatgpt.com"),
             hint: "Log in as usual — aibars picks up the session automatically.",
             dataDomains: ["chatgpt.com", "openai.com", "auth.openai.com"]
         )
@@ -42,7 +41,9 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
 
     /// Two legs, because `/backend-api` does not accept the session cookie: the
     /// web app trades it for a short-lived bearer token at `/api/auth/session`
-    /// first.
+    /// first. That exchange lives in `ChatGPTSession` — `CodexProvider` makes
+    /// the identical call, and two copies of it would drift the moment the
+    /// endpoint or the cookie name moves.
     ///
     /// There is no message allowance to report. `/backend-api/usage`,
     /// `/conversation_limit` and `/rate_limits` are all 404 for a signed-in
@@ -56,7 +57,11 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
             throw ProviderError.notAuthenticated
         }
 
-        let identity = try await identity(sessionToken: token)
+        let identity = try await ChatGPTSession.identity(sessionToken: token)
+        // No `ChatGPT-Account-Id` header, deliberately. This endpoint is the one
+        // that enumerates every workspace the session can see, and the parser
+        // then picks whichever of them is actually paying; scoping the request
+        // to a single workspace would throw that choice away.
         let http = ProviderHTTP(headers: [
             "Authorization": "Bearer \(identity.accessToken)",
             "Origin": "https://chatgpt.com",
@@ -82,33 +87,25 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
         }
     }
 
-    /// The web app's own cookie-for-token exchange. It also names the signed-in
-    /// account, which is the only place that comes from.
-    private func identity(sessionToken: String) async throws -> (accessToken: String, email: String?) {
-        let url = URL(string: "https://chatgpt.com/api/auth/session")!
-        let (data, _) = try await ProviderHTTP(headers: [
-            "Cookie": "\(cookieName)=\(sessionToken)",
-            "Referer": "https://chatgpt.com/",
-            "User-Agent": Self.browserUserAgent
-        ]).get(url)
-
-        guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw ProviderError.parse("Session endpoint did not return JSON")
-        }
-        guard let accessToken = raw["accessToken"] as? String, !accessToken.isEmpty else {
-            // An expired cookie gets an empty object rather than an error.
-            throw ProviderError.sessionExpired
-        }
-        let email = (raw["user"] as? [String: Any])?["email"] as? String
-        return (accessToken, email)
-    }
-
+    /// `backend-api` sits behind the same edge as the web app and answers the
+    /// aibars agent string with a challenge page, so this leg has to look like a
+    /// browser too.
+    ///
+    /// A Safari-shaped string would be the closer claim: these requests go out
+    /// over URLSession's own TLS stack, whose fingerprint is Apple's, and
+    /// pairing that with a Chrome agent string is a mismatch an edge can read.
+    /// The string is not changed here on a guess, because the two chatgpt.com
+    /// legs must agree — `ChatGPTSession` sends Chrome on the cookie exchange —
+    /// and a session that starts as one browser and finishes as another is a
+    /// worse claim than a consistent wrong one. Both belong on a shared
+    /// `.browser` identity in `ProviderHTTP`, where the pair can be changed
+    /// once and stay in step.
     private static let browserUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
     public func authenticate() async throws {
-        if let cookie = CookieExtractors.firstAvailableCookie(named: cookieName, for: "chatgpt.com") {
+        if let cookie = CookieExtractors.firstAvailableCookie(named: ChatGPTSession.cookieName, for: "chatgpt.com") {
             try session.setToken(cookie.value, for: id, source: .browserCookie, accountHint: cookie.source.displayName)
             await MainActor.run { self.isAuthenticated = true }
         }
@@ -164,7 +161,14 @@ public enum ChatGPTUsageParser {
                 limit: 0,
                 unit: nil,
                 resetDate: active ? renewal : nil,
-                windowLabel: nil
+                windowLabel: nil,
+                // Nil, and stated rather than defaulted so nobody fills it in
+                // later. The date above is when the subscription renews, not
+                // the length of a rolling allowance — ChatGPT publishes no
+                // allowance at all — and a pace notch drawn from a billing
+                // cycle would measure how far through the month the user is
+                // and then claim it was pace.
+                windowDuration: nil
             ),
             secondary: [],
             accountLabel: account,

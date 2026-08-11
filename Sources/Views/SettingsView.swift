@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 private extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
@@ -6,19 +7,38 @@ private extension String {
 
 /// The settings window's type, by role.
 ///
-/// Three sizes and two weights for the whole window, named by role rather
-/// than written out at each call site: the browser row and the service row read
-/// as the same kind of thing and were 12pt and 13pt in adjacent sections of one
-/// form, which shows up only as a wobble in the line the eye lands on first.
+/// Two sizes and two weights for the whole window, named by role rather than
+/// written out at each call site: the browser row and the service row read as the
+/// same kind of thing and were 12pt and 13pt in adjacent sections of one form,
+/// which shows up only as a wobble in the line the eye lands on first. The 12pt
+/// went with `Ramp.body` — a row's subject and the prose beside it are both
+/// `Ramp.title` now, told apart by weight rather than by a point, which is what
+/// 13/11/10 being macOS's own control ramp buys.
+///
+/// The middle rung is deliberately unspent here. `Ramp.detail` is the panel's
+/// secondary reading and the chart's series label; in this window the line under
+/// a subject is `Ramp.caption`, because that is where Alerts' log rows and
+/// History's day summaries already set theirs, and one pane setting the same line
+/// a point larger is that same wobble read down the sidebar instead of across a
+/// row.
+///
+/// None of these is `Tokens.Ramp.figureDesign`, and that is the rule rather than
+/// an oversight: SF Mono is for a run that is only digits and separators, and
+/// this window has none. Every number here shares its run with a word — "3
+/// sessions ready · 1 locked", "Unlock 4", "v0.4" — which is the mixed case, so
+/// it is SF Pro with tabular figures. That still buys what the column needs:
+/// a count re-read by a background sweep no longer shifts the words beside it.
 private extension Font {
     /// A row's subject: a service, a browser, the app's own name.
     static var paneTitle: Font {
         .system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight)
     }
     /// Prose, and whatever is typed into a field.
-    static var paneBody: Font { .system(size: Tokens.Ramp.body) }
-    /// The line under a title, a section footer, a status.
-    static var paneCaption: Font { .system(size: Tokens.Ramp.caption) }
+    static var paneBody: Font { .system(size: Tokens.Ramp.title).monospacedDigit() }
+    /// The line under a title, a status, and the profile lines under that. Prose
+    /// under a section is not here: it goes through `SectionFooter`, which sets
+    /// this same size in the one place the whole window shares.
+    static var paneCaption: Font { .system(size: Tokens.Ramp.caption).monospacedDigit() }
 }
 
 private extension View {
@@ -34,18 +54,11 @@ private extension View {
     }
 }
 
-/// One line of prose under a section. Every footer in the window is this one
-/// treatment, so a pane cannot quietly acquire a louder one.
-private struct PaneFooter: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.paneCaption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
+// `PaneFooter` was here: three lines that were `SectionFooter` under another
+// name, in a window whose every other pane already used the shared one. Two
+// copies of one voice is how a footer in one pane ends up a shade louder than
+// the footer in the next, so the private one is gone rather than kept in step.
+// Both footers in this file go through `SectionFooter`, and a new one has to.
 
 public struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -84,14 +97,23 @@ public struct SettingsView: View {
         height: Tokens.Control.settingsMinHeight
     )
 
+    /// The panes, in the order the sidebar lists them.
+    ///
+    /// Declaration order *is* that order — `allCases` is what the sidebar
+    /// iterates — so the two new panes are placed rather than appended. History
+    /// and Spend both answer "what has this cost me", which is a question about
+    /// the services two rows up, and neither is a preference; Alerts, General
+    /// and About are, so they stay together at the bottom.
     enum Pane: String, CaseIterable, Identifiable {
-        case services, appearance, alerts, general, about
+        case services, appearance, history, spend, alerts, general, about
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .services: return "Services"
             case .appearance: return "Appearance"
+            case .history:  return "History"
+            case .spend:    return "Spend"
             case .alerts:   return "Alerts"
             case .general:  return "General"
             case .about:    return "About"
@@ -102,6 +124,8 @@ public struct SettingsView: View {
             switch self {
             case .services: return "square.grid.2x2"
             case .appearance: return "paintbrush"
+            case .history:  return "chart.xyaxis.line"
+            case .spend:    return "dollarsign.circle"
             case .alerts:   return "bell"
             case .general:  return "gearshape"
             case .about:    return "info.circle"
@@ -122,7 +146,14 @@ public struct SettingsView: View {
                 // backgrounds meeting partway down the pane is what produced the
                 // dark band across the top.
                 .scrollContentBackgroundHidden()
-                .background(Color(nsColor: .windowBackgroundColor))
+                // Warm graphite, the same ground the panel stands on. No material
+                // and no scrim: the panel's scrim is the whole of the
+                // application's translucency, and a form is a surface with
+                // figures on it — a wallpaper showing through the ground under
+                // them is what makes every contrast figure in the design system a
+                // hope rather than a statement. No shadow and no top highlight
+                // either: this window has three planes and each is a ground.
+                .background(Tokens.Surface.base)
         }
         // No ideal size: the window controller opens at a size of its own, and
         // an ideal three points above the minimum only ever described the same
@@ -152,7 +183,20 @@ public struct SettingsView: View {
         // Clears the titlebar, which the sidebar now runs underneath.
         .padding(.top, Tokens.Control.titlebarInset)
         .frame(width: Tokens.Control.sidebarWidth)
-        .background(VisualEffectBackground(material: .sidebar).ignoresSafeArea())
+        // Opaque, and the last material in this window goes with it: the panel's
+        // scrim over one material is the whole of the application's translucency,
+        // so a sidebar blending the desktop through itself was the second one —
+        // and it is the one that made a settings window on a bright wallpaper a
+        // different colour from the panel it configures.
+        //
+        // `well` rather than `base`, because the plane change is now the only
+        // thing dividing the sidebar from the pane: a hairline down the middle
+        // would be a second vertical rule in a window whose Appearance pane
+        // already has one, and chrome recessed under content is the way round
+        // every native window has it. No `ignoresSafeArea` needed —
+        // `background(_:)` over a `ShapeStyle` already ignores it, which is what
+        // carries the colour up behind the transparent titlebar.
+        .background(Tokens.Surface.well)
     }
 
     @ViewBuilder
@@ -160,6 +204,8 @@ public struct SettingsView: View {
         switch pane {
         case .services: providersTab
         case .appearance: AppearancePane()
+        case .history:  HistoryPane()
+        case .spend:    BudgetPane()
         case .alerts:   AlertsPane()
         case .general:  generalTab
         case .about:    aboutTab
@@ -240,7 +286,7 @@ public struct SettingsView: View {
             } header: {
                 sourcesHeader
             } footer: {
-                PaneFooter(text: scanNote ?? sourcesFooter)
+                SectionFooter(scanNote ?? sourcesFooter)
             }
 
             // One section for all of them, one line each. A section per service
@@ -264,7 +310,7 @@ public struct SettingsView: View {
                     )
                 }
             } footer: {
-                PaneFooter(text: "The switch controls whether a service appears in the dropdown.")
+                SectionFooter("The switch controls whether a service appears in the dropdown.")
             }
         }
         .formStyle(.grouped)
@@ -403,12 +449,11 @@ public struct SettingsView: View {
 
     private var aboutTab: some View {
         VStack(spacing: Tokens.Space.large) {
-            UsageMeterGlyph(
-                levels: [0.9, 0.65, 0.4, 0.2],
-                alertColor: .accentColor,
-                alertThreshold: 0,
-                height: Tokens.Control.aboutGlyph
-            )
+            // The mark, not the meter. It used to be a `UsageMeterGlyph` given
+            // four fixed levels, which is a reporting instrument drawing
+            // something it is not reporting; `AppMark` is the same shape with
+            // nothing to say, in the one colour the app keeps for itself.
+            AppMark(size: Tokens.Control.aboutGlyph, tint: Tokens.Ink.arc)
 
             VStack(spacing: Tokens.Space.tight) {
                 Text("aibars").font(.paneTitle)
@@ -423,8 +468,12 @@ public struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
             if let repository = Self.repository {
+                // Arc, because a text link is one of the four places it is
+                // allowed. Not `.accentColor`: that one is the user's and is
+                // spent on selection and focus, and a link is neither.
                 Link("View on GitHub", destination: repository)
                     .font(.paneBody)
+                    .foregroundStyle(Tokens.Ink.arc)
             }
 
             Text("Product names and logos are trademarks of their respective owners.")
@@ -596,6 +645,67 @@ private struct BrowserSourceRow: View {
     }
 }
 
+/// A service aibars reads off this Mac rather than signs into.
+///
+/// Named, not derived. `webLogin == nil` is the wrong test: Z.ai and MiniMax
+/// have no login page either and still want the connect window, because a
+/// pasted key is something the user can actually give. These two have nothing
+/// to give — the files are already there or they are not — so the credential
+/// question does not apply to them and a Connect button in that column could
+/// only ever fail. What the column offers instead is the way to go and look.
+///
+/// The paths come from the providers themselves rather than being written here
+/// a second time: both honour an environment variable that moves the directory,
+/// and a settings row pointing at `~/.claude/projects` while the reader is
+/// somewhere else is worse than no row.
+enum LocalSource: String, CaseIterable {
+    case claudeCode = "claudecode"
+    case openCode = "opencode"
+
+    /// Where the files are. Asked for on demand — it resolves the environment
+    /// and the home directory, which is not work for a view's body.
+    var directory: URL {
+        switch self {
+        case .claudeCode: return ClaudeCodeScanner.defaultRoot()
+        case .openCode:   return OpenCodeProvider.dataDirectory()
+        }
+    }
+
+    /// What the row says it is reading, once there is something to read.
+    var reads: String {
+        switch self {
+        case .claudeCode: return "Reads local files · session transcripts"
+        case .openCode:   return "Reads local files · this Mac's sessions"
+        }
+    }
+
+    /// And what it says when there is nothing there yet. Not "not connected":
+    /// there is no connection to make, and sending someone to a sign-in they
+    /// cannot complete is the failure this whole type exists to avoid.
+    var absent: String {
+        switch self {
+        case .claudeCode: return "Nothing to read yet — run claude once."
+        case .openCode:   return "Nothing to read yet — run an OpenCode session."
+        }
+    }
+
+    /// Opens the directory in Finder, selecting it in its parent so the window
+    /// that appears names the folder rather than showing its contents with no
+    /// clue which folder they are.
+    @MainActor
+    func reveal() {
+        let url = directory
+        // A directory that does not exist yet cannot be selected, and Finder
+        // answers a failed reveal by doing nothing at all. Its parent is the
+        // useful second best: `~/.claude` exists long before `projects` does.
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url.deletingLastPathComponent()])
+        }
+    }
+}
+
 /// One service in the Services pane: its mark, what state it is in, the switch
 /// that hides it, and the one button that changes its connection.
 ///
@@ -620,6 +730,12 @@ private struct ServiceRow: View {
     /// trimmed, and swallowed on the way to the screen — the field could not be
     /// made to hold two words.
     @State private var accountName: String
+
+    /// Where this row's credential came from, for the one service that has
+    /// three answers and gave none of them. Resolved in `.task` rather than in
+    /// `body` because answering it stats a file, and a body runs on every
+    /// refresh of every row in the pane.
+    @State private var credentialOrigin: String?
 
     init(
         provider: AnyUsageProvider,
@@ -682,14 +798,19 @@ private struct ServiceRow: View {
 
                 signInControl
                     .controlSize(.small)
-                    // One width for every state, or the column of them steps in
-                    // and out as services connect.
-                    .frame(width: Tokens.Control.actionColumn)
+                    // A floor rather than a fixed width, which is what the
+                    // browser rows above already do and for the same reason:
+                    // the column is sized for "Configure…" and "Reveal in
+                    // Finder" is longer than it. Trailing-aligned, so every
+                    // button in the pane still ends at one x — only the two
+                    // long ones reach further left, instead of truncating.
+                    .frame(minWidth: Tokens.Control.actionColumn, alignment: .trailing)
             }
 
             if namesAccounts { renameField }
         }
         .padding(.vertical, Tokens.Space.tight)
+        .task { credentialOrigin = Self.credentialOrigin(forService: provider.serviceID) }
     }
 
     /// Indented to start where the name it renames starts, so it reads as
@@ -710,9 +831,20 @@ private struct ServiceRow: View {
         }
     }
 
+    /// The local source this row is, if it is one. A stored property would be
+    /// wrong: the row is rebuilt from the provider, and this is a fact about
+    /// the service rather than about the instance.
+    private var localSource: LocalSource? { LocalSource(rawValue: provider.serviceID) }
+
     @ViewBuilder
     private var signInControl: some View {
-        if provider.isAuthenticated {
+        if let local = localSource {
+            // No Connect and no Sign out. There is no credential either way,
+            // and the switch beside this already does the only thing "stop
+            // showing me this" can mean for a source that needs no permission.
+            Button("Reveal in Finder") { local.reveal() }
+                .help("Opens \(local.directory.path) in Finder.")
+        } else if provider.isAuthenticated {
             Button("Sign out") {
                 Task { try? await provider.signOut() }
             }
@@ -729,18 +861,38 @@ private struct ServiceRow: View {
     /// early: a service that has been connected for two seconds and reported
     /// nothing yet is idle, not healthy, and a service that is connected and not
     /// answering wants the user rather than a tick.
+    ///
+    /// Amber and red are two different asks and now say so. A sign-in that has
+    /// expired — or a Keychain the user declined — is `attention`: there is
+    /// something for them to do. A request that simply failed is `failure`:
+    /// there is not, and colouring it amber sent people looking for a dialog
+    /// that was never going to appear.
+    ///
+    /// And this is one of the only two places `Ink.ok` is allowed: a connection
+    /// row here, and the status dot on a connected status-only service in the
+    /// panel. Both are places where the connection *is* the reading. A panel row
+    /// showing 92% has already proved it is connected, and a green tick beside
+    /// that figure is ink spent saying what the figure said.
     private var statusColor: Color {
         guard provider.isAuthenticated else { return Tokens.Ink.idle }
         switch snapshot {
         case .success: return Tokens.Ink.ok
-        case .failure: return Tokens.Ink.attention
+        case .failure(let error): return wantsTheUser(error) ? Tokens.Ink.attention : Tokens.Ink.failure
         case .none:    return Tokens.Ink.idle
         }
+    }
+
+    /// Whether the failure is one the user can act on.
+    private func wantsTheUser(_ error: ProviderError) -> Bool {
+        SessionStore.shared.isAccessDenied || error.isAuth
     }
 
     /// What the row says under the name. "Connected" alone leaves the obvious
     /// next question — connected to what plan, and is it actually working.
     private var status: String {
+        if let local = localSource {
+            return provider.isAuthenticated ? local.reads : local.absent
+        }
         guard provider.isAuthenticated else {
             return provider.webLogin == nil ? "Needs a token" : "Not connected"
         }
@@ -748,16 +900,46 @@ private struct ServiceRow: View {
         case .success(let data):
             // Prefer the account over the plan: with more than one subscription
             // in the list, "which account" is the question "Connected" leaves.
+            // The origin goes last, because it answers a question only the row
+            // that has stopped working makes anyone ask.
             let plan = data.planName.map { PlanName.pretty($0, service: provider.displayName) }
-            return [account, plan]
-                .compactMap { $0 }
-                .joined(separator: " · ")
-                .ifEmpty("Connected")
+            let lead = [account, plan].compactMap { $0 }.joined(separator: " · ").ifEmpty("Connected")
+            return [lead, credentialOrigin].compactMap { $0 }.joined(separator: " · ")
         case .failure(let error):
             return "Connected · \(failureNote(error))"
         case .none:
-            return account.map { "Connected · \($0)" } ?? "Connected"
+            return (["Connected"] + [account, credentialOrigin].compactMap { $0 })
+                .joined(separator: " · ")
         }
+    }
+
+    /// Where a Codex row's credential came from.
+    ///
+    /// Only Codex, and only because Codex is the one row the user may never
+    /// have touched: it takes its own stored token, then the ChatGPT row's
+    /// browser session, then the `codex` CLI's own auth file — three sources,
+    /// two of them adopted off the machine. A row that works for a reason
+    /// nobody stated is a row nobody can fix when it stops.
+    ///
+    /// Nothing here reads a token or the Keychain item: the credential
+    /// metadata lives in UserDefaults, and the CLI rung is answered by the
+    /// file's existence. `CodexAuth.load` would fall through to a keychain item
+    /// whose ACL names the `codex` binary, and asking that question to label a
+    /// settings row would put an access dialog on screen.
+    static func credentialOrigin(forService serviceID: String) -> String? {
+        guard serviceID == "codex" else { return nil }
+        let store = SessionStore.shared
+        if let source = store.credential(for: "codex")?.source {
+            return source == .browserCookie ? "via browser session" : "via Keychain"
+        }
+        if store.credential(for: "chatgpt") != nil { return "via browser session" }
+        let hasAuthFile = CodexAuth
+            .authFileURLs(
+                environment: ProcessInfo.processInfo.environment,
+                home: FileManager.default.homeDirectoryForCurrentUser
+            )
+            .contains { FileManager.default.fileExists(atPath: $0.path) }
+        return hasAuthFile ? "via Codex CLI" : nil
     }
 
     /// Which account this row is: what the user called it, else what the service
@@ -782,9 +964,12 @@ private struct ServiceRow: View {
     }
 }
 
-/// Manual credential entry, for providers with no hosted login page to host.
-///
-/// The same anatomy as `ConnectDialog` and now the same measurements: one width,
-/// one inset, one logo size, one headline. They were 460/20/26/headline and
-/// 440/16/34/14pt-semibold for the same dialog, and the only thing that decided
-/// which you got was whether the provider had a login page.
+// Manual credential entry was here: a second dialog with its own width, inset,
+// logo size and headline — 440/16/34/14pt-semibold against 460/20/26/headline for
+// the same job, and the only thing that decided which one you got was whether the
+// provider had a login page. It is `ConnectDialog` in `BrowserLoginView` now, at
+// one set of measurements.
+//
+// A note rather than the doc comment this was, because `///` with nothing under it
+// is documentation the next declaration added to the end of this file inherits
+// silently.

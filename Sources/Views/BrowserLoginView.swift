@@ -18,6 +18,12 @@ public struct ConnectDialog: View {
     private let onFinish: (Bool) -> Void
     private let onContentResize: () -> Void
 
+    /// Every edge in this window steps up under increased contrast — the rules
+    /// between its blocks and the border round each account row. At 0.07 and 0.09
+    /// they are the first things a low-contrast display gives up, and they are
+    /// the only thing separating the blocks and the only thing bounding a row.
+    @Environment(\.colorSchemeContrast) private var contrast
+
     /// `onContentResize` is called when the content's height changes — revealing
     /// the token field, or a stage growing a second line. An `NSWindow` does not
     /// follow its content, so without this the field opened underneath the
@@ -41,15 +47,22 @@ public struct ConnectDialog: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             headline
-            Divider().opacity(Tokens.Fill.divider)
+            rule
             if !steps.isEmpty {
                 stepList
-                Divider().opacity(Tokens.Fill.divider)
+                rule
             }
             statusArea
         }
         .frame(width: Tokens.Control.dialogWidth)
-        .background(Color(nsColor: .windowBackgroundColor))
+        // The same warm graphite ground the settings window and the panel stand
+        // on, rather than the system's window colour. Not a house preference: the
+        // account rows below are `Surface.raised`, whose step above the ground is
+        // measured against this base, and over `windowBackgroundColor` in the
+        // dark appearance that step inverts — a raised row would read as a well.
+        // A window in this app has one of the three planes under it, not a
+        // fourth.
+        .background(Tokens.Surface.base)
         .onAppear { flow.begin() }
         .onDisappear { flow.cancel() }
         .onChange(of: flow.stage) { stage in
@@ -63,6 +76,20 @@ public struct ConnectDialog: View {
             }
         }
         .onChange(of: flow.showsTokenField) { _ in onContentResize() }
+    }
+
+    /// The line between the dialog's blocks — headline, steps, status.
+    ///
+    /// A 1pt `Rectangle` rather than a `Divider`, which is retired from the app:
+    /// a `Divider` carries its own material and its own weight, so a window with
+    /// two of them had a second rule weight in it that no token named. It was
+    /// also the one rule here that did not step up under increased contrast,
+    /// because dimming a system control is not the same as reading an opacity.
+    /// One weight, one colour, one accessor, the same as the panel header's.
+    private var rule: some View {
+        Rectangle()
+            .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
+            .frame(height: Tokens.Control.hairline)
     }
 
     // MARK: - Headline
@@ -80,7 +107,7 @@ public struct ConnectDialog: View {
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                 if let host = flow.provider.webLogin?.startURL.host {
                     Text(host)
-                        .font(.system(size: Tokens.Ramp.label))
+                        .font(.system(size: Tokens.Ramp.detail))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -165,11 +192,11 @@ public struct ConnectDialog: View {
             }
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
                 Text(flow.headline)
-                    .font(.system(size: Tokens.Ramp.body))
+                    .font(.system(size: Tokens.Ramp.title))
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = flow.detail {
                     Text(detail)
-                        .font(.system(size: Tokens.Ramp.label))
+                        .font(.system(size: Tokens.Ramp.detail))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -210,7 +237,7 @@ public struct ConnectDialog: View {
                     Image(systemName: "person.crop.circle")
                         .foregroundStyle(.secondary)
                     Text(candidate.label)
-                        .font(.system(size: Tokens.Ramp.body, weight: Tokens.Ramp.emphasisWeight))
+                        .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
                         // A Chromium profile is named by its owner, so this is a
                         // sentence as often as it is a word. Unconstrained it
                         // wraps, and a wrapped row pushes its own Connect button
@@ -227,7 +254,25 @@ public struct ConnectDialog: View {
                 }
                 .padding(.horizontal, Tokens.Space.large)
                 .frame(height: Self.pickRowHeight)
-                .background(Tokens.surface(Tokens.Radius.row).fill(Tokens.quiet(Tokens.Fill.card)))
+                // A raised surface, not a card: this row is a thing to pick, and
+                // the whole point of the picker is that choosing between two
+                // Chrome profiles is a decision the app does not get to make
+                // quietly. A ground plus one stroke, at the radius a floating
+                // surface takes — the app has no shadows and no inner
+                // highlights, so an edge is the only elevation there is.
+                //
+                // `Fill.card` was the wrong plane for it. That is a
+                // `Color.primary` opacity over whatever is behind it, which on
+                // this window's ground is a 5% lift and a row you have to look
+                // for; and a card is what a row at rest in the panel is drawn
+                // at, which is the opposite of what this row is.
+                .background(Tokens.surface(Tokens.Radius.panel).fill(Tokens.Surface.raised))
+                .overlay(
+                    Tokens.surface(Tokens.Radius.panel).strokeBorder(
+                        Tokens.quiet(Tokens.borderOpacity(increased: contrast == .increased)),
+                        lineWidth: Tokens.Control.hairline
+                    )
+                )
             }
         }
     }
@@ -240,7 +285,7 @@ public struct ConnectDialog: View {
                 // drawn. Hidden from VoiceOver, which would otherwise read the
                 // name twice on the way through the stack.
                 Text("Usage endpoint")
-                    .font(.system(size: Tokens.Ramp.label))
+                    .font(.system(size: Tokens.Ramp.detail))
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 TextField("Usage endpoint", text: $flow.endpoint, prompt: Text("https://api.example.com/usage"))
@@ -248,7 +293,7 @@ public struct ConnectDialog: View {
                     .textFieldStyle(.roundedBorder)
             }
             Text(tokenFieldLabel)
-                .font(.system(size: Tokens.Ramp.label))
+                .font(.system(size: Tokens.Ramp.detail))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             HStack(spacing: Tokens.Space.medium) {
@@ -358,17 +403,26 @@ public struct ConnectDialog: View {
     /// Its glyph and its colour come off the flow like every other stage's. Named
     /// here as `lock.shield` in `Tokens.Ink.attention` they were a second opinion
     /// about a state the flow already has an answer for.
+    ///
+    /// The wash stays a wash, and stays translucent: `Ink.attentionWash` is the
+    /// one named exception to "nothing in this app is drawn on something you can
+    /// see through", because it is a tint *over* a surface rather than a material
+    /// with a wallpaper behind it — it has to let the ground through or it is a
+    /// flat amber panel with black text on it. So this block is not
+    /// `Surface.raised` and takes no border: the wash is doing the work an edge
+    /// would, and a raised plane under a tint would be two answers to the same
+    /// question.
     private var limitationBanner: some View {
         HStack(alignment: .top, spacing: Tokens.Space.medium) {
             Image(systemName: flow.symbol ?? "lock.shield")
                 .foregroundStyle(flow.tone.ink)
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
                 Text(flow.headline)
-                    .font(.system(size: Tokens.Ramp.body, weight: Tokens.Ramp.emphasisWeight))
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = flow.detail {
                     Text(detail)
-                        .font(.system(size: Tokens.Ramp.label))
+                        .font(.system(size: Tokens.Ramp.detail))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -399,7 +453,7 @@ private struct StepRow: View {
                 .frame(width: 17, height: 17)
                 .background(Circle().fill(Tokens.quiet(Tokens.Fill.controlHover)))
             Text(text)
-                .font(.system(size: Tokens.Ramp.body))
+                .font(.system(size: Tokens.Ramp.title))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }

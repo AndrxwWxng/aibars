@@ -115,7 +115,15 @@ public final class AppState: ObservableObject {
         Service(id: "copilot") { AnyUsageProvider(CopilotProvider(accountID: $0)) },
         Service(id: "openrouter") { AnyUsageProvider(OpenRouterProvider(accountID: $0)) },
         Service(id: "mistral") { AnyUsageProvider(MistralProvider(accountID: $0)) },
-        Service(id: "minimax") { AnyUsageProvider(MiniMaxProvider(accountID: $0)) }
+        Service(id: "minimax") { AnyUsageProvider(MiniMaxProvider(accountID: $0)) },
+        // Appended rather than slotted in by importance. Declared order is the
+        // sort tiebreak in `rankedProviders` and the fallback for manual order,
+        // so inserting anything above the original eleven would reshuffle rows
+        // that have been sitting still for existing users.
+        Service(id: "codex") { AnyUsageProvider(CodexProvider(accountID: $0)) },
+        Service(id: "zai") { AnyUsageProvider(ZaiProvider(accountID: $0)) },
+        Service(id: "claudecode") { AnyUsageProvider(ClaudeCodeProvider(accountID: $0)) },
+        Service(id: "opencode") { AnyUsageProvider(OpenCodeProvider(accountID: $0)) }
     ]
 
     public func start() {
@@ -210,24 +218,35 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// Hands a reading to the two things that watch usage over time rather than
-    /// at an instant: the sample ring the pace line is fitted to, and the
-    /// threshold policy.
+    /// Hands a reading to everything that watches usage over time rather than at
+    /// an instant: the sample ring the pace line is fitted to, the ninety-day
+    /// history, and the two alert policies.
     ///
     /// It hangs off the one place results land, so a single-row refresh feeds
     /// them exactly as a sweep does — otherwise a user watching one service and
     /// refreshing it by hand would contribute no samples at all, and could cross
     /// a level without aibars ever seeing it happen.
     ///
-    /// Nothing here can fail the poll: the store only writes to UserDefaults and
-    /// the alert centre swallows every delivery failure by design.
+    /// Nothing here can fail the poll: the trend store writes to UserDefaults,
+    /// the history store swallows its own write errors by design and is simply
+    /// absent when its file could not be opened, and the alert centre swallows
+    /// every delivery failure.
     private func note(_ providerID: String, _ result: Result<UsageData, ProviderError>) async {
         guard case .success(let data) = result,
               let provider = provider(for: providerID) else { return }
         UsageTrendStore.shared.record(data, for: providerID)
+        UsageHistoryStore.shared?.record(data, for: providerID)
         await AlertCenter.shared.consider(
             data, providerID: providerID, displayName: provider.displayName
         )
+        // Budgets are per service, not per account: two Claude subscriptions are
+        // one bill to the person paying it, and an alert naming the account slot
+        // would be reporting an internal id.
+        if let spend = data.spend {
+            await AlertCenter.shared.consider(
+                spend: spend, serviceID: provider.serviceID, displayName: provider.displayName
+            )
+        }
     }
 
     /// Drops what the time-series features remember about an account.
@@ -237,9 +256,15 @@ public final class AppState: ObservableObject {
     /// inherit the previous account's samples — projecting a pace across two
     /// people's usage — and its armed levels, so a fresh account at 40% could
     /// fire nothing until it passed a line the old one had already crossed.
+    ///
+    /// The stored history is dropped for the same reason and it is the worst of
+    /// the three to get wrong: a chart is read as one person's record, so ninety
+    /// days of somebody else's usage under a new account's name is not a stale
+    /// number, it is a fabricated one.
     @MainActor
     public static func forgetHistory(_ providerID: String) {
         UsageTrendStore.shared.forget(providerID)
+        UsageHistoryStore.shared?.forget(providerID)
         AlertCenter.shared.forget(providerID)
     }
 
@@ -363,6 +388,13 @@ public final class AppState: ObservableObject {
     public func adoptBrowserSessions(allowingKeychainPrompt: Bool = false) async -> [String] {
         // One query per service, not per provider: several providers can share
         // a service once its accounts have been discovered.
+        //
+        // A service whose template has no `webLogin`, or a `webLogin` with no
+        // cookie domain, contributes no query and so costs the sweep nothing.
+        // That was incidental and is now load-bearing: Claude Code and OpenCode
+        // are read off this Mac, have no session to adopt and nothing to log
+        // into, and they must not make every launch copy the browser cookie
+        // databases twice more for a lookup that could never match.
         let queries = Self.services.compactMap { service -> CookieExtractors.Query? in
             guard let template = providers.first(where: { $0.serviceID == service.id }),
                   let config = template.webLogin,
@@ -573,6 +605,108 @@ public final class AppState: ObservableObject {
         let values = usageLevels
         guard !values.isEmpty else { return 0 }
         return values.reduce(0, +) / Double(values.count)
+    }
+
+    /// What each service has reported, for the menu bar strip to draw a mark and
+    /// a figure against.
+    ///
+    /// `nil` percent means the service publishes no quota — ChatGPT reports a
+    /// subscription and Copilot reports a seat, and neither is a fraction of
+    /// anything. They must never be handed a number: an invented 0 reads as
+    /// plenty left and an invented 100 reads as capped, and both are claims the
+    /// provider did not make.
+    ///
+    /// A provider that has not answered yet is left out rather than given that
+    /// same `nil`, because the strip draws `nil` as a dash and "reports no
+    /// quota" is a different statement from "has not answered". An empty list is
+    /// what the renderer's own fallback is for, and it is the honest first
+    /// second of a launch.
+    ///
+    /// One entry per account, not per service: two Claude subscriptions arrive
+    /// as two entries. Which of them the strip keeps, in what order, and how
+    /// many fit are all `MenuBarStripContent`'s — it is pure and it is the part
+    /// that has to be assertable without a menu bar to look at.
+    public var serviceReadings: [(serviceID: String, displayName: String, percent: Double?)] {
+        providers
+            .filter(\.isEnabled)
+            .compactMap { provider in
+                guard let snapshot = snapshots[provider.id],
+                      let data = try? snapshot.get() else { return nil }
+                let percent: Double? = data.primary.limit > 0 ? data.primary.percent : nil
+                return (
+                    serviceID: provider.serviceID,
+                    displayName: provider.displayName,
+                    percent: percent
+                )
+            }
+    }
+
+    /// What each service says it has cost, one figure per service, in the order
+    /// the services were declared.
+    ///
+    /// Folded per service rather than per account because that is the unit a
+    /// budget is set in: two subscriptions to one service are one bill to the
+    /// person paying it. Only services that actually reported a figure appear —
+    /// most publish usage and not spend, and a row of zero would claim a month
+    /// had cost nothing.
+    public var spendReports: [(serviceID: String, report: SpendReport)] {
+        var order: [String] = []
+        var byService: [String: [SpendReport]] = [:]
+
+        for provider in providers where provider.isEnabled {
+            guard let snapshot = snapshots[provider.id],
+                  let data = try? snapshot.get(),
+                  let spend = data.spend else { continue }
+            if byService[provider.serviceID] == nil { order.append(provider.serviceID) }
+            byService[provider.serviceID, default: []].append(spend)
+        }
+
+        return order.compactMap { service in
+            guard let folded = Self.fold(byService[service] ?? []) else { return nil }
+            return (serviceID: service, report: folded)
+        }
+    }
+
+    /// Several accounts of one service, added into the single figure a budget is
+    /// measured against.
+    ///
+    /// Only what can honestly be added. `BudgetPolicy.total` refuses to cross
+    /// currencies because there is no exchange rate in this app and there is not
+    /// going to be one, and a month's spend added to a lifetime total is the
+    /// same kind of fiction — so the first account's currency and period decide
+    /// what joins the sum, and anything else is left out rather than folded in
+    /// wrong. One report passes through untouched, which is every case but the
+    /// rare one.
+    private static func fold(_ reports: [SpendReport]) -> SpendReport? {
+        guard let first = reports.first else { return nil }
+        guard reports.count > 1 else { return first }
+
+        let joined = reports.filter {
+            $0.period == first.period && $0.currency == first.currency
+        }
+        let (minor, _) = BudgetPolicy.total(joined, currency: first.currency)
+
+        return SpendReport(
+            amountMinor: minor,
+            currency: first.currency,
+            // The scale the total was carried at: `BudgetPolicy` restates
+            // everything at the coarsest exponent present, and reading the sum
+            // back at a finer one would be off by orders of magnitude.
+            exponent: joined.map(\.exponent).min() ?? first.exponent,
+            // Deliberately dropped. Adding two accounts' ceilings together
+            // invents headroom the service never offered, and one account with
+            // no ceiling makes the sum uncapped anyway — the budget the user set
+            // is the ceiling that means anything here.
+            limitMinor: nil,
+            period: first.period,
+            // One estimate in the sum makes the sum an estimate. A total that
+            // presented itself as measured because most of it was would be the
+            // one thing `SpendReport.Confidence` exists to prevent.
+            confidence: joined.allSatisfy { $0.confidence == .measured } ? .measured : .estimated,
+            // The soonest rollover: the first of these periods to end is the
+            // point the total stops being current.
+            resetDate: joined.compactMap(\.resetDate).min()
+        )
     }
 
     /// How many accounts exist for a service, for the settings UI to mention.

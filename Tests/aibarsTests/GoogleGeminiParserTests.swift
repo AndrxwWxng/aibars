@@ -98,6 +98,48 @@ final class GoogleGeminiUsageParserTests: XCTestCase {
         XCTAssertTrue(data.secondary.contains { $0.label == "5h credits left" })
     }
 
+    func testNamedWindowsCarryTheirLengthAndTheirType() throws {
+        let payload: [Any] = [2, [proWeekly, proFiveHour], false]
+        let data = try GoogleGeminiUsageParser.parse(["payload": payload])
+
+        // The pace notch needs both ends of the window, and window type 1 is the
+        // five-hour pool the label already names in words.
+        XCTAssertEqual(data.primary.windowDuration, 5 * 60 * 60)
+        XCTAssertEqual(data.primary.windowKey, "window_type_1")
+
+        let weekly = try XCTUnwrap(data.secondary.first)
+        XCTAssertEqual(weekly.windowDuration, 7 * 24 * 60 * 60)
+        XCTAssertEqual(weekly.windowKey, "window_type_2")
+
+        // Credits remaining is a balance, not a window: no length to notch.
+        let credits = try XCTUnwrap(data.secondary.first { $0.unit == "credits" })
+        XCTAssertNil(credits.windowDuration)
+    }
+
+    func testUnnamedWindowIsKeyedOnItsTypeNotItsLabel() throws {
+        // A window type aibars has no name for gets a label this parser
+        // generates, which is exactly the label that must not become the key.
+        let unknown: [Any] = [900, 0.3, 7, [[1779446440, 1]]]
+        let alone: [Any] = [2, [unknown], false]
+        let crowded: [Any] = [2, [proWeekly, unknown, proFiveHour], false]
+
+        let first = try GoogleGeminiUsageParser.parse(["payload": alone]).primary
+        let crowdedData = try GoogleGeminiUsageParser.parse(["payload": crowded])
+        let later = try XCTUnwrap(crowdedData.secondary.first { $0.unit == "%" && $0.label != "Weekly" })
+
+        // One bucket in the payload or three, before its neighbours or after
+        // them: one series.
+        XCTAssertEqual(first.windowKey, "window_type_7")
+        XCTAssertEqual(later.windowKey, first.windowKey)
+        // And not the label, which the store would otherwise slugify into a key
+        // that moves whenever the wording does.
+        XCTAssertNotEqual(first.windowKey, HistorySeriesID.windowKey(for: first.label))
+
+        // Never a denominator we made up: an unnamed window has no known length.
+        XCTAssertNil(first.windowDuration)
+        XCTAssertNil(later.windowDuration)
+    }
+
     func testWeeklyOnlyPayloadLeadsWithWeekly() throws {
         let payload: [Any] = [2, [proWeekly], false]
         let data = try GoogleGeminiUsageParser.parse(["payload": payload])

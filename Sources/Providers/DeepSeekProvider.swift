@@ -155,15 +155,42 @@ public enum DeepSeekUsageParser {
             limit: 0,
             unit: currency,
             resetDate: nil,
-            windowLabel: nil
+            windowLabel: nil,
+            // Nil, and written out rather than left to the default so nobody
+            // fills it in later: prepaid credit is not a window. It never
+            // resets, so there is no length, and a duration here would put a
+            // pace notch on a track measuring nothing.
+            windowDuration: nil,
+            // DeepSeek's own field name, pinned because the label above moves.
+            // An account that runs dry renames this window to
+            // "Balance (exhausted)", and a key derived from the label would file
+            // that as a second series with none of the first one's readings
+            // behind it — the exact fork the key exists to prevent.
+            windowKey: "total_balance"
         )
 
+        // The two components of the same balance, keyed on the fields they come
+        // from. Neither has a length either, for the same reason as above.
         var secondary: [UsageMetric] = []
         if let granted {
-            secondary.append(UsageMetric(label: "Granted", used: granted, limit: 0, unit: currency))
+            secondary.append(UsageMetric(
+                label: "Granted",
+                used: granted,
+                limit: 0,
+                unit: currency,
+                windowDuration: nil,
+                windowKey: "granted_balance"
+            ))
         }
         if let toppedUp {
-            secondary.append(UsageMetric(label: "Topped up", used: toppedUp, limit: 0, unit: currency))
+            secondary.append(UsageMetric(
+                label: "Topped up",
+                used: toppedUp,
+                limit: 0,
+                unit: currency,
+                windowDuration: nil,
+                windowKey: "topped_up_balance"
+            ))
         }
 
         return UsageData(

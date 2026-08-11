@@ -72,15 +72,31 @@ final class MistralUsageParserTests: XCTestCase {
         XCTAssertEqual(spend.unit, "USD")
         XCTAssertEqual(spend.windowLabel, "Month to date")
         XCTAssertEqual(spend.resetDate, ProviderDate.parse("2026-08-31T23:59:59Z"))
+        // The response states both ends of the billing period, so the pace
+        // notch has a real length to sit on: 31 days less the second between
+        // 23:59:59 and midnight.
+        XCTAssertEqual(try XCTUnwrap(spend.windowDuration), 31 * 24 * 3_600 - 1, accuracy: 0.5)
+        XCTAssertEqual(spend.windowKey, "billing_period_spend")
+
+        // The quota is a percentage with a reset instant and no stated length,
+        // so it gets no notch rather than an assumed month.
+        XCTAssertNil(data.primary.windowDuration)
+        XCTAssertEqual(data.primary.windowKey, "vibe_usage_percentage")
 
         let balance = data.secondary[1]
         // 50 + 5 − 2.5
         XCTAssertEqual(balance.used, 52.5, accuracy: 0.0001)
         XCTAssertEqual(balance.limit, 0)
+        // A wallet never resets, so it has no length and no pace to keep.
+        XCTAssertNil(balance.windowDuration)
+        XCTAssertEqual(balance.windowKey, "credit_balance")
 
         let tokens = data.secondary[2]
         XCTAssertEqual(tokens.used, 1_250_000, accuracy: 0.5)
         XCTAssertEqual(tokens.unit, "tokens")
+        // Same response, same two dates, so the same period as the spend row.
+        XCTAssertEqual(try XCTUnwrap(tokens.windowDuration), 31 * 24 * 3_600 - 1, accuracy: 0.5)
+        XCTAssertEqual(tokens.windowKey, "billing_period_tokens")
     }
 
     // MARK: - Other spellings of the same thing
@@ -335,6 +351,42 @@ final class MistralUsageParserTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(both.secondary.first).used, 100, accuracy: 0.5)
     }
 
+    // MARK: - The window length
+
+    func testTheBillingPeriodIsReadFromBothOfItsDates() throws {
+        let window = try spendWindow(start: "2026-08-01T00:00:00Z", end: "2026-08-31T00:00:00Z")
+        XCTAssertEqual(try XCTUnwrap(window.windowDuration), 30 * 24 * 3_600, accuracy: 0.5)
+
+        // The same pair under the other spelling.
+        let camel = try spendWindow(start: "2026-02-01T00:00:00Z", end: "2026-03-01T00:00:00Z", camel: true)
+        XCTAssertEqual(try XCTUnwrap(camel.windowDuration), 28 * 24 * 3_600, accuracy: 0.5)
+    }
+
+    func testAPeriodWithOnlyOneEndCarriesNoWindowLength() throws {
+        // The end alone is what the usage payload most often carries, and it is
+        // exactly the case that tempts a calendar month to be inferred. The
+        // reset instant is still real; the length behind it is not.
+        let endOnly = try spendWindow(start: nil, end: "2026-08-31T23:59:59Z")
+        XCTAssertEqual(endOnly.resetDate, ProviderDate.parse("2026-08-31T23:59:59Z"))
+        XCTAssertNil(endOnly.windowDuration)
+        // Pinned either way: the key is what the series is filed under, not a
+        // property of the month this response happened to describe.
+        XCTAssertEqual(endOnly.windowKey, "billing_period_spend")
+
+        XCTAssertNil(try spendWindow(start: "2026-08-01T00:00:00Z", end: nil).windowDuration)
+        XCTAssertNil(try spendWindow(start: nil, end: nil).windowDuration)
+    }
+
+    func testAPeriodThatIsNotAPeriodIsRefused() throws {
+        // Backwards, and zero-length.
+        XCTAssertNil(try spendWindow(start: "2026-08-31T00:00:00Z", end: "2026-08-01T00:00:00Z").windowDuration)
+        XCTAssertNil(try spendWindow(start: "2026-08-01T00:00:00Z", end: "2026-08-01T00:00:00Z").windowDuration)
+        // A date field carrying an epoch of 0 against a real end: parses, and is
+        // fifty-six years long. Mistral bills monthly, so this is a malformed
+        // pair rather than a window to draw a pace notch against.
+        XCTAssertNil(try spendWindow(start: "0", end: "2026-08-31T00:00:00Z").windowDuration)
+    }
+
     // MARK: - Credits
 
     func testNegativeWalletIsNotANegativeBalance() throws {
@@ -397,6 +449,19 @@ final class MistralUsageParserTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The spend row of a month with nothing in it but the period's dates —
+    /// which is the primary metric, since no quota is passed.
+    private func spendWindow(start: String?, end: String?, camel: Bool = false) throws -> UsageMetric {
+        var raw: [String: Any] = [
+            "currency": "USD",
+            "prices": [[String: Any]](),
+            "completion": ["models": [String: Any]()]
+        ]
+        if let start { raw[camel ? "startDate" : "start_date"] = start }
+        if let end { raw[camel ? "endDate" : "end_date"] = end }
+        return try MistralUsageParser.parse(raw, now: now).primary
+    }
 
     private func entry(
         event: String,

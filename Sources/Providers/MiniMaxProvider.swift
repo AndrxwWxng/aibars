@@ -90,7 +90,23 @@ public enum MiniMaxUsageParser {
             used: used,
             limit: limit,
             unit: unit,
-            resetDate: reset
+            resetDate: reset,
+            windowLabel: nil,
+            // Nil for every response, and spelled out rather than left to the
+            // default so nobody reads it as an oversight and fills it in. This
+            // is the user-configured-endpoint provider: the URL is theirs, the
+            // shape is only pattern-matched, and none of the shapes states how
+            // long the window is. `reset_at` gives the end of it and nothing
+            // gives the start, so any duration here would be aibars deciding
+            // the window is five hours or a month on the user's behalf, and the
+            // meter would draw its pace notch at that invented place.
+            windowDuration: nil,
+            // No key either, for the same reason: there is no provider-stable
+            // identifier to pin to. In the nested shape the label *is* a key
+            // from the user's own payload, so the normalised label the history
+            // store falls back to is the closest thing to a stable series name
+            // that exists here.
+            windowKey: nil
         )
         return UsageData(
             providerID: "minimax",

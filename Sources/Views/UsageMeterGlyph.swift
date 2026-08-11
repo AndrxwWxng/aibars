@@ -1,138 +1,136 @@
 import SwiftUI
-import AppKit
 
-/// The app's own mark: a small bar chart on a baseline.
+/// The app's own mark: four bars on a baseline.
 ///
-/// Each bar is one service, tallest usage first, so a glance at the menu bar
-/// tells you both how many services are near their cap and how close the worst
-/// one is. The baseline is what keeps the mark legible when everything is idle —
-/// without it a quiet meter is just a row of dots.
+/// It reports nothing, and that is the change. The mark used to be the meter —
+/// the bar heights were live usage levels — but the menu bar strip now carries
+/// one brand glyph and one figure per service, so a mark that also carried data
+/// would be two instruments in the same window answering the same question
+/// differently. What is left is identity: the header, the About pane, and the
+/// status item's "nothing to report yet" fallback.
 ///
-/// Drawn in `Color.primary` so it inherits the menu bar's light/dark treatment,
-/// and tinted only on the bars that have actually crossed the threshold.
-public struct UsageMeterGlyph: View {
-    /// Fill levels, 0...1. Rendered tallest-first; padded to `barCount`.
-    public let levels: [Double]
-    /// Highlight colour, applied per bar — only bars at or above
-    /// `alertThreshold` take it, so one maxed-out service doesn't make the
-    /// whole meter look maxed out.
-    public let alertColor: Color?
-    public let alertThreshold: Double
-    /// Colour every bar by its own level rather than only flagging the worst
-    /// one. Four grey bars and a number tell you how bad the worst service is;
-    /// they don't tell you whether that's one service or all of them.
-    public let perBarColour: Bool
-    /// The colour for everything that is not carrying a usage tint: the baseline
-    /// and the stubs of bars with nothing to report.
+/// Every measurement is a fraction of `size`, so 16pt in the panel header and
+/// 44pt in About are the same shape rather than two drawings that resemble each
+/// other.
+public struct AppMark: View {
+    /// The whole height of the mark, baseline included.
+    public let size: CGFloat
+    /// The mark's colour.
     ///
-    /// `Color.primary` cannot do this job here. A coloured glyph is rasterised
-    /// into a non-template image, so AppKit stops recolouring it and primary
-    /// resolves once — to black — which is invisible on a dark menu bar. The
-    /// caller resolves it against the menu bar's actual appearance instead.
-    public let neutral: Color
-    public let height: CGFloat
-    public let barCount: Int
+    /// `Tokens.Ink.arc` by default. The accent's call sites are a closed list of
+    /// six — this mark in the panel header, this mark in About, a text link, the
+    /// connect affordance on a disconnected row, the same affordance at first
+    /// run, and a focus ring — and the first two are both this default. None of
+    /// the six is a meter, which is why nothing else in this file reaches for
+    /// Arc: the usage ramp below is a different statement, and a meter drawn in
+    /// the app's own colour would say "this is aibars" where it has to say "this
+    /// is how full you are".
+    ///
+    /// A caller rasterising the mark into a template image passes a flat colour
+    /// instead, because a template is drawn from its alpha and AppKit supplies
+    /// the rest — so the strip's fallback glyph is not a seventh call site.
+    public let tint: Color
 
-    public init(
-        levels: [Double],
-        alertColor: Color? = nil,
-        alertThreshold: Double = 0.85,
-        perBarColour: Bool = false,
-        neutral: Color = .primary,
-        height: CGFloat = 13,
-        barCount: Int = 4
-    ) {
-        self.levels = levels
-        self.alertColor = alertColor
-        self.alertThreshold = alertThreshold
-        self.perBarColour = perBarColour
-        self.neutral = neutral
-        self.height = height
-        self.barCount = barCount
+    public init(size: CGFloat, tint: Color = Tokens.Ink.arc) {
+        self.size = size
+        self.tint = tint
     }
 
-    private var normalized: [Double] {
-        let sorted = levels.map { min(max($0, 0), 1) }.sorted(by: >)
-        return (0..<barCount).map { $0 < sorted.count ? sorted[$0] : 0 }
-    }
+    /// The mark's own profile, tallest first. Fixed, and these four values in
+    /// particular: they are the heights the About pane passed in by hand while
+    /// the glyph still took live levels, so the shape the app was already being
+    /// represented by is the shape it keeps.
+    private static let profile: [Double] = [0.9, 0.65, 0.4, 0.2]
 
-    // Everything scales off `height` so the same mark works at 13pt in the menu
-    // bar and at 44pt in the About pane.
-    private var barWidth: CGFloat { max(2, (height * 0.23).rounded()) }
-    private var spacing: CGFloat { max(1.5, height * 0.14) }
-    private var baselineHeight: CGFloat { max(1, (height * 0.09).rounded()) }
-    private var plotHeight: CGFloat { height - baselineHeight - max(1, height * 0.11) }
-    private var stubHeight: CGFloat { max(1.5, height * 0.14) }
+    /// The baseline is quieter than the bars it carries. It exists to keep the
+    /// mark legible as a mark — without it, four unequal bars floating in a
+    /// 16pt box read as noise at menu bar size.
+    private static let baselineOpacity: Double = 0.55
+
+    // Every measurement is rounded to a whole point. Two of these — the spacing
+    // and the plot height — were free-floating while the other two were already
+    // rounded, which left `totalWidth` fractional at most sizes; the status item
+    // then resamples the image to fit its slot, and half a point of resampling
+    // is visible blur on a mark that is mostly 3pt-wide bars.
+    private var barWidth: CGFloat { max(2, (size * 0.23).rounded()) }
+    private var spacing: CGFloat { max(1, (size * 0.14).rounded()) }
+    private var baselineHeight: CGFloat { max(1, (size * 0.09).rounded()) }
+    /// Bars to baseline. Its own measurement rather than a share of the spacing:
+    /// it is the gap that makes the baseline read as an axis instead of as a
+    /// fifth bar lying on its side.
+    private var baselineGap: CGFloat { max(1, (size * 0.11).rounded()) }
+    /// Rounded down, so the three stacked parts can never add up to more than
+    /// the height the caller asked for. Any slack left over sits above the bars,
+    /// where nothing is drawn.
+    private var plotHeight: CGFloat {
+        max(1, (size - baselineHeight - baselineGap).rounded(.down))
+    }
     private var totalWidth: CGFloat {
-        CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * spacing
+        let count = CGFloat(Self.profile.count)
+        return count * barWidth + (count - 1) * spacing
     }
 
     public var body: some View {
-        VStack(spacing: max(1, height * 0.11)) {
+        VStack(spacing: baselineGap) {
             HStack(alignment: .bottom, spacing: spacing) {
-                ForEach(Array(normalized.enumerated()), id: \.offset) { _, level in
-                    RoundedRectangle(cornerRadius: barWidth * 0.4, style: .continuous)
-                        .fill(fill(for: level))
-                        .frame(width: barWidth, height: max(stubHeight, plotHeight * level))
+                ForEach(Array(Self.profile.enumerated()), id: \.offset) { _, level in
+                    RoundedRectangle(cornerRadius: barWidth * 0.4, style: Tokens.Radius.style)
+                        .fill(tint)
+                        .frame(width: barWidth, height: barHeight(level))
                 }
             }
             .frame(height: plotHeight, alignment: .bottom)
 
-            RoundedRectangle(cornerRadius: baselineHeight / 2, style: .continuous)
-                .fill(neutral.opacity(0.55))
+            RoundedRectangle(cornerRadius: baselineHeight / 2, style: Tokens.Radius.style)
+                .fill(tint.opacity(Self.baselineOpacity))
                 .frame(width: totalWidth, height: baselineHeight)
         }
-        .frame(width: totalWidth, height: height, alignment: .bottom)
-        // The status item rasterises this view through `ImageRenderer`, which
-        // draws in the light appearance whatever the menu bar is doing — so the
-        // usage ramp would bake its light-panel colours into a dark menu bar.
-        // Pinning the scheme to the app's own appearance is a no-op everywhere
-        // the glyph is drawn as a live view.
-        .environment(\.colorScheme, MenuBarIcon.isDarkMenuBar ? .dark : .light)
+        .frame(width: totalWidth, height: size, alignment: .bottom)
     }
 
-    /// An empty bar stays as a faint stub on the axis — present, but clearly
-    /// not reporting usage.
-    private func fill(for level: Double) -> Color {
-        guard level > 0 else { return neutral.opacity(0.32) }
-        if perBarColour { return UsageTint.color(for: level) }
-        guard let alertColor, level >= alertThreshold else { return neutral }
-        return alertColor
+    /// Integral like the rest: a bar whose top edge lands on half a pixel is a
+    /// bar with a grey lid at menu bar size.
+    private func barHeight(_ level: Double) -> CGFloat {
+        max(1, (plotHeight * CGFloat(level)).rounded())
     }
 }
 
-/// Colour ramp shared by the meter, the usage bars, and the menu bar badge.
+/// The usage ramp: three stops, shared by every meter, every percentage and the
+/// menu bar strip.
+///
+/// Each stop is a light/dark pair rather than one value, because the ramp is
+/// also the text colour of a readout and a single value cannot serve both
+/// appearances — the dark stops sit at 2.2:1–3.9:1 on a light panel, well under
+/// the 4.5:1 body text needs. Every stop here clears 4.5:1 against
+/// `Tokens.Surface.base` in its own appearance.
+///
+/// The boundaries are settings (`cautionThreshold`, `warningThreshold`); only
+/// the palette lives here, so there is one place to read the ramp off. The
+/// sampled boundaries below are the shipped defaults of those two settings, and
+/// they are what a caller asking for "the caution colour" has to pass — they are
+/// not a second, private opinion about where caution starts. Anything drawing a
+/// live reading goes through `AppearanceSettings.tint(for:providerAccent:)`,
+/// which reads the user's thresholds and the chosen ramp.
+///
+/// There is deliberately no menu bar variant here. Whether the strip takes a
+/// tint at all depends on `menuBarColour`, which is a setting, so that decision
+/// belongs to `AppearanceSettings.menuBarTint(for:)` and living in two places is
+/// how the strip came to ignore `.monochrome` while the panel honoured it.
 public enum UsageTint {
     public static func color(for percent: Double) -> Color {
         switch percent {
-        case ..<0.60: return ramp(light: 0x136F41, dark: 0x30A46C)   // green
-        case ..<0.85: return ramp(light: 0x8F6100, dark: 0xE0A200)   // amber
-        default:      return ramp(light: 0xC62A2F, dark: 0xE5484D)   // red
+        // Two reasons the low stop is no longer green. 0–60% is the resting
+        // state of every row on a fresh launch, so a saturated green spent the
+        // eye's whole colour budget on the least informative state the panel
+        // has. And green→amber→red is the single worst axis for deuteranomaly
+        // and protanopia — the two ends collapse into each other — while
+        // teal→amber→red separates on the blue–yellow axis, which both preserve.
+        case ..<0.60: return Tokens.dynamic(light: 0x3F6B72, dark: 0x7FB3BD)   // resting teal
+        case ..<0.85: return Tokens.dynamic(light: 0x8F6100, dark: 0xE0A200)   // amber
+        // The dark red moved off 0xE5484D because the ground beneath it moved:
+        // it was tuned against the system panel background, and on the darker
+        // `Surface.base` it lands at 4.44:1. This one measures 5.22:1.
+        default:      return Tokens.dynamic(light: 0xC62A2F, dark: 0xEC5D62)   // red
         }
-    }
-
-    /// One stop on the ramp, resolved against the appearance it is drawn in.
-    ///
-    /// The ramp is also the text colour for the percentage readouts, and one
-    /// fixed value cannot serve both appearances: the dark values sit at
-    /// 2.2:1–3.9:1 on a light panel, well under the 4.5:1 that body text needs.
-    /// The dark values are the originals; the light ones are the same hues
-    /// darkened until they clear it.
-    private static func ramp(light: UInt32, dark: UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let hex = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-            return NSColor(
-                srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-                green:   CGFloat((hex >>  8) & 0xFF) / 255,
-                blue:    CGFloat( hex        & 0xFF) / 255,
-                alpha:   1
-            )
-        })
-    }
-
-    /// Menu bar tint — nil below the threshold so the glyph stays monochrome
-    /// and unobtrusive most of the time.
-    public static func menuBarTint(for percent: Double) -> Color? {
-        percent >= 0.85 ? color(for: percent) : nil
     }
 }

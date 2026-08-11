@@ -145,6 +145,21 @@ public final class ConnectionFlow: ObservableObject {
     /// Which of `Tokens.Ink` a stage's headline is drawn in. Connection state is
     /// the one thing in the app with no single source of colour, which is how the
     /// same condition came to read orange in one pane and red in another.
+    ///
+    /// Never the usage ramp and never `AppearanceSettings.tint`: a connection is
+    /// not a reading, so nothing here scales from teal to red. It is the same
+    /// line `RowSpine.ink` draws between `nearCap`, which takes the row's tint,
+    /// and its two state reasons, which take these inks — and the reason the two
+    /// alarm hues are shared with the ramp's amber and red rather than being a
+    /// second pair the user has to learn.
+    ///
+    /// `Ink.ok` is spent here deliberately, and it passes the same test that lets
+    /// the panel's status-only dot keep it: green beside a figure is redundant,
+    /// because a row reporting 92% has already proved the connection works. This
+    /// window has no figure — "Connected." is the whole reading, and the ink is
+    /// doing real work rather than decorating one. It never does it alone: the
+    /// word and `symbol`'s tick say the same thing, so the state survives
+    /// greyscale.
     public enum Tone {
         case ok, attention, failure, idle
 
@@ -195,7 +210,16 @@ public final class ConnectionFlow: ObservableObject {
         }
 
         /// Whether this is the one thing to do here. `openPageAgain` never is:
-        /// it is the escape hatch beside whatever the stage is actually asking.
+        /// it is the escape hatch beside whatever the stage is actually asking,
+        /// and the dialog draws that as a link rather than a button.
+        ///
+        /// The emphasis the true case earns is the user's accent, which keeps
+        /// primary buttons. `Tokens.Ink.arc` is a different fact and never fills
+        /// a control: the app's own colour has a closed list of call sites, and
+        /// on that list Connect is `.bordered`. `connectTo` sits outside this
+        /// question in any case — it never reaches `actions`, because the picker
+        /// draws its own Connect per row — so what it answers here is only what a
+        /// later call site would inherit.
         public var isProminent: Bool {
             switch self {
             case .openPageAgain: return false
@@ -713,6 +737,14 @@ public final class ConnectionFlow: ObservableObject {
         } catch {
             // The credential saved and only the usage call failed. Keep it — the
             // endpoint may just be temporarily unhappy — but say which it was.
+            //
+            // `ProviderError.blocked` lands here rather than above, and that is
+            // the point of it existing: a Cloudflare interstitial, a captcha or a
+            // hotel wifi splash page is a challenge, not a dead session, and
+            // `isAuth` leaves it out so nothing discards a session that is
+            // perfectly good. The two read differently on screen for the same
+            // reason — "rejected that sign-in" tells the user to log in again,
+            // which is wasted effort against a challenge that will clear itself.
             stage = .notResponding(message: error.localizedDescription)
         }
     }

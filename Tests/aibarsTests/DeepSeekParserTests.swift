@@ -69,6 +69,51 @@ final class DeepSeekUsageParserTests: XCTestCase {
         XCTAssertEqual(data.primary.used, 0)
     }
 
+    /// DeepSeek publishes no window with a stated length — a prepaid balance
+    /// never resets — so the assertion that matters is that every metric says
+    /// so with nil rather than with a zero. Zero is a duration, and a zero-long
+    /// window puts the pace notch hard against the left edge of every row.
+    func testNoWindowCarriesADurationAndNoneCarriesZero() throws {
+        let infos: [[String: Any]] = [
+            [
+                "currency": "USD",
+                "total_balance": "110.00",
+                "granted_balance": "10.00",
+                "topped_up_balance": "100.00"
+            ]
+        ]
+        let data = try DeepSeekUsageParser.parse(["is_available": true, "balance_infos": infos])
+        for metric in [data.primary] + data.secondary {
+            XCTAssertNil(metric.windowDuration, "\(metric.label) invented a window length")
+        }
+    }
+
+    /// The balance is keyed on DeepSeek's own field name, not on its label, and
+    /// this is why: the label moves when the account runs dry. A label-derived
+    /// key would fork the series at exactly the moment the history is worth
+    /// reading.
+    func testBalanceKeySurvivesTheExhaustedRelabel() throws {
+        let healthy = try DeepSeekUsageParser.parse([
+            "is_available": true,
+            "balance_infos": [["currency": "USD", "total_balance": "110.00"]]
+        ])
+        let empty = try DeepSeekUsageParser.parse([
+            "is_available": false,
+            "balance_infos": [["currency": "USD", "total_balance": "0.00"]]
+        ])
+        XCTAssertNotEqual(healthy.primary.label, empty.primary.label)
+        XCTAssertEqual(healthy.primary.windowKey, "total_balance")
+        XCTAssertEqual(empty.primary.windowKey, healthy.primary.windowKey)
+    }
+
+    func testComponentBalancesCarryTheirOwnKeys() throws {
+        let infos: [[String: Any]] = [
+            ["currencyCode": "usd", "grantedBalance": 5, "toppedUpBalance": 20.25]
+        ]
+        let data = try DeepSeekUsageParser.parse(["balance_infos": infos])
+        XCTAssertEqual(data.secondary.map(\.windowKey), ["granted_balance", "topped_up_balance"])
+    }
+
     func testEmptyResponseThrowsParseError() {
         assertParseError([:])
     }

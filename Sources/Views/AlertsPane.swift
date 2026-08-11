@@ -98,7 +98,7 @@ public struct AlertsPane: View {
             HStack(spacing: Tokens.Space.gutter) {
                 Text(explanation)
                     .font(.system(size: Tokens.Ramp.caption))
-                    .foregroundStyle(Tokens.Ink.attention)
+                    .foregroundStyle(permissionInk)
                     .fixedSize(horizontal: false, vertical: true)
 
                 // Only for a refusal. `.unavailable` is a build macOS will not
@@ -117,6 +117,22 @@ public struct AlertsPane: View {
                 }
             }
         }
+    }
+
+    /// Amber where the user can do something about it, red where they cannot.
+    ///
+    /// The same split `SettingsView` makes on a connection's last error — a
+    /// failure that wants the user is `Ink.attention`, one that is simply broken
+    /// is `Ink.failure` — so the two windows do not disagree about what red
+    /// means. A refusal is fixable, and the button beside this sentence is where
+    /// it gets fixed; a build macOS will not deliver notifications for at all has
+    /// nothing to fix, and drawing that in the ink that means "do something"
+    /// sends the reader looking for a switch that is not there.
+    ///
+    /// Only reached for the two states that say anything: `.unknown` and
+    /// `.granted` have no explanation and draw no row.
+    private var permissionInk: Color {
+        center.permission == .denied ? Tokens.Ink.attention : Tokens.Ink.failure
     }
 
     // MARK: - Thresholds
@@ -228,9 +244,20 @@ public struct AlertsPane: View {
         Section {
             Toggle("Show a pace line on each row", isOn: $trend.showsPaceInPanel)
             if paceNeedsFasterRefresh {
+                // The third note in this pane that says a switch cannot do what
+                // it claims, and the other two are amber: a toggle sitting on
+                // over something that cannot work is exactly what
+                // `Ink.attention` means, and it is fixable in General. On the
+                // ramp at `Ramp.caption` like every other note here rather than
+                // `.callout`, which was a system size a point over the pane's
+                // own title and agreed with nothing beside it.
+                //
+                // Prose with an interval in it, so SF Pro with tabular digits
+                // rather than the figure face.
                 Text("No pace can be shown while the refresh interval is \(refreshIntervalName). The fit reads the last half hour and ignores anything older than fifteen minutes, so readings this far apart never make three inside the window. Set it to 5 minutes or less in General.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: Tokens.Ramp.caption))
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.Ink.attention)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -288,11 +315,33 @@ public struct AlertsPane: View {
 
 // MARK: - Rows
 
+/// The widths the log rows share, named once rather than written into each:
+/// five rows whose right edges are three points apart read as a rendering fault.
+private enum AlertColumn {
+    /// The elapsed-time rail at a log row's trailing edge.
+    ///
+    /// Seven cells at `Ramp.caption`, which is `23h 59m` — the widest reading
+    /// `Countdown.short` produces, because the moment it starts counting days it
+    /// gets shorter again (`9d 23h`). Reserved rather than measured, like every
+    /// other rail in the app: an alert ageing from `59m` into `1h 2m` gains a
+    /// character and must not move the column it is in. A session left open long
+    /// enough to read `100d 5h` overflows the rail instead of widening it, which
+    /// is what reserving one is for.
+    static let age = Tokens.figureWidth(Tokens.Ramp.caption, digits: 7)
+}
+
 /// One alert the policy produced: what it said, when, and whether macOS took it.
 ///
-/// Laid out like `BrowserSourceRow` in the Services pane — a symbol in the logo
-/// column, then a title over its detail — because the two are the same kind of
-/// row and this window has one shape for that.
+/// Laid out like `SpendRow` in the Budget pane — a symbol in the logo column,
+/// then a title over its detail, then the row's figure trailing in a reserved
+/// rail — because the three are the same kind of row and this window has one
+/// shape for that.
+///
+/// Every line in it is held at `Tokens.lineBox`, so the row's height is
+/// structural rather than a function of what a provider happens to call its
+/// window. Five of these sit in a scrolling form under four other sections, and
+/// a row that grew with its text would move the footers under it depending on
+/// which services warned.
 private struct AlertLogRow: View {
     let alert: PendingAlert
     /// Kept off `PendingAlert` by `AlertCenter`, because the policy that built
@@ -308,51 +357,87 @@ private struct AlertLogRow: View {
                 .frame(width: Tokens.Control.settingsLogo)
 
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
+                // A run with words in it, so SF Pro with tabular digits rather
+                // than the figure face: "Claude at 92%" is a sentence that
+                // happens to end in a number. The figure it ends in is the
+                // reading the alert fired on, and it is the title that carries
+                // it — the body underneath carries the window and its reset.
                 Text(alert.title)
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                    .monospacedDigit()
                     .lineLimit(1)
+                    .frame(height: Tokens.lineBox(Tokens.Ramp.title), alignment: .leading)
 
+                // Held to its line rather than allowed a second one. It was
+                // wrapping so as not to lose the reading, but the reading is in
+                // the title: what a second line actually bought was a row whose
+                // height depended on how long a provider's window label is, and
+                // the whole sentence is in the row's tooltip either way.
                 Text(alert.body)
                     .font(.system(size: Tokens.Ramp.caption))
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
-                    // Wraps rather than truncates: the body carries the figure
-                    // and the window it belongs to, which is the whole content
-                    // of the row.
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .frame(height: Tokens.lineBox(Tokens.Ramp.caption), alignment: .leading)
 
-                Text(meta)
+                // On every row, including the happy one: the question this list
+                // exists to answer is whether alerts are landing, and a row that
+                // says nothing when they are leaves the reader to infer it from
+                // the shape of an icon.
+                Text(delivered ? "delivered" : "macOS didn't show it")
                     .font(.system(size: Tokens.Ramp.caption))
                     .foregroundStyle(delivered ? Tokens.Ink.idle : Tokens.Ink.attention)
+                    .lineLimit(1)
+                    .frame(height: Tokens.lineBox(Tokens.Ramp.caption), alignment: .leading)
             }
 
             Spacer(minLength: Tokens.Space.gutter)
+
+            // The row's figure, in the one rail this pane reserves. Digits and
+            // the unit letters attached to them and nothing else, so it is the
+            // figure face — which is also why the "ago" it used to carry is
+            // gone: a word in the rail would be a word in SF Mono, and the
+            // column it sits in beside a log of past events says it anyway.
+            Text(age)
+                .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: AlertColumn.age, alignment: .trailing)
         }
         .padding(.vertical, Tokens.Space.tight)
+        .help(detail)
     }
 
-    /// "3h 12m ago · delivered". Both halves on every row, including the happy
-    /// one: the question this list exists to answer is whether alerts are
-    /// landing, and a row that says nothing when they are leaves the reader to
-    /// infer it from the shape of an icon.
-    private var meta: String {
-        [age, delivered ? "delivered" : "macOS didn't show it"]
-            .joined(separator: " · ")
+    /// What holding the row to three lines gives up: the body in full, and the
+    /// instant itself rather than the distance back to it. The same trade the
+    /// History pane makes on a day row, where the tenth of a percent the columns
+    /// round away survives in the tooltip.
+    private var detail: String {
+        "\(alert.body) · \(alert.at.formatted(date: .abbreviated, time: .shortened))"
     }
 
     /// The panel's own countdown, run backwards: `Countdown.short` measures from
     /// `from` to `until`, so an elapsed time is those two swapped. A second
     /// formatter here would be a second set of rounding rules for the "3h 12m"
     /// the dropdown is already showing.
+    ///
+    /// `0s` where the countdown answers nothing, which is an alert that fired
+    /// inside this second: it refuses a zero or negative interval, and "just now"
+    /// is two words that cannot go in a figure rail.
     private var age: String {
-        Countdown.short(until: Date(), from: alert.at).map { "\($0) ago" } ?? "just now"
+        Countdown.short(until: Date(), from: alert.at) ?? "0s"
     }
 }
 
 /// A labelled percentage with a stepper. Set like the Appearance pane's own
-/// steppers and sliders — caption type, monospaced, trailing in one width —
+/// steppers and sliders — caption type, the figure face, trailing in one width —
 /// because "80%" here and "62%" there are the same kind of answer to an eye
 /// running down the settings window.
+///
+/// Digits and a per-cent sign and nothing else, which is the rule for which face
+/// a run takes: this is SF Mono, in the reserved rail `Control.readoutWidth`
+/// names. It was SF Pro with tabular digits, which is the treatment for a run
+/// with a word in it.
 private struct PercentStepper: View {
     let title: String
     @Binding var value: Int
@@ -366,7 +451,11 @@ private struct PercentStepper: View {
             // 50 to 90 forty clicks long.
             Stepper(value: $value, in: range, step: 5) {
                 Text("\(value)%")
-                    .font(.system(size: Tokens.Ramp.caption))
+                    // The tabular request stays alongside the design token, for
+                    // the reason the Appearance pane's readouts keep it: it costs
+                    // nothing and does not depend on `figureDesign` staying
+                    // monospaced.
+                    .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     // A readout wide enough to wrap would take the row's height

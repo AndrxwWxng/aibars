@@ -21,6 +21,16 @@ public struct MenuBarContentView: View {
         self._showSettings = showSettings
     }
 
+    /// The panel is drawn over the desktop, so its ground is a material and the
+    /// scrim over it has to know which appearance it is resolving against.
+    @Environment(\.colorScheme) private var colorScheme
+    /// A blur under an opaque scrim is cost nobody can see, so the material is
+    /// dropped outright rather than merely covered.
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    /// The rules this file draws are hairlines, which are the first thing a
+    /// low-contrast display loses.
+    @Environment(\.colorSchemeContrast) private var contrast
+
     private typealias PanelSection = AppearanceSettings.PanelSection
 
     /// Which collapsible blocks the user has opened, keyed by section id. Kept
@@ -60,7 +70,7 @@ public struct MenuBarContentView: View {
         let sections = appearance.sections(from: state.rankedProviders, snapshots: state.snapshots)
         return VStack(spacing: 0) {
             header(firstRow: sections.first?.providers.first)
-            Divider().opacity(Tokens.Fill.divider)
+            headerRule
 
             if sections.isEmpty {
                 emptyState
@@ -70,10 +80,64 @@ public struct MenuBarContentView: View {
             }
         }
         .frame(width: CGFloat(appearance.panelWidth))
+        // Outermost, and the only material in the app. Every fill above it is a
+        // `Color.primary` opacity — which is what lets one base carry the whole
+        // ladder, and is also why the base has to be a value rather than
+        // whatever wallpaper happens to be behind the window.
+        .background { ground }
         // Expansion follows the shape of the list, so it can only move when the
         // list's own structure does — never when a percentage changes.
         .onAppear { adoptExpansion(of: sections) }
         .onChange(of: shape(of: sections)) { _ in adoptExpansion(of: sections) }
+    }
+
+    /// The panel's ground: one material, and an opaque-enough scrim over it.
+    ///
+    /// Nothing above this is ever a material. Stacked materials multiply blur
+    /// cost and resolve to values that depend on what is behind the window,
+    /// which is exactly what a value hierarchy cannot tolerate: the card steps
+    /// above are worth about 13 and 23 L* points and the scrim holds the base's
+    /// own wallpaper swing to about 11, so the ladder cannot invert on any
+    /// desktop. Thinner and a white wallpaper flattens the base into the card
+    /// sitting on it.
+    private var ground: some View {
+        ZStack {
+            // Dropped rather than hidden under the opaque scrim: a blur nobody
+            // can see is still a blur being drawn every frame.
+            //
+            // `.regularMaterial`, not a thinner one: the scrim's 0.88/0.92 are
+            // derived against this material's own lift, and under a thinner one
+            // the same alphas let more of the wallpaper through than the value
+            // ladder above has room for.
+            if !reduceTransparency {
+                Rectangle().fill(.regularMaterial)
+            }
+            Rectangle().fill(
+                Tokens.Surface.base.opacity(Tokens.scrimAlpha(
+                    isDark: colorScheme == .dark,
+                    reduceTransparency: reduceTransparency
+                ))
+            )
+        }
+    }
+
+    /// The line under the header. Neutral at every usage level.
+    ///
+    /// It used to take the warning colour whenever anything was near its cap,
+    /// and that is now deleted rather than tuned: the alarm belongs to the row
+    /// that has the problem — its figure, its square-capped fill, its spine —
+    /// and a coloured edge across the chrome names no service, so it cannot be
+    /// acted on. It also put hue on the one element that stays on screen while
+    /// the list is scrolled, which is to say it shouted for as long as a user
+    /// left the panel open. One weight, one colour, one accessor, everywhere in
+    /// the app.
+    ///
+    /// A `Rectangle` rather than a `Divider` because a `Divider` carries its own
+    /// material and a second rule weight with it, and this app has one of each.
+    private var headerRule: some View {
+        Rectangle()
+            .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
+            .frame(height: Tokens.Control.hairline)
     }
 
     /// What `adoptExpansion` watches: which blocks exist and which of them carry
@@ -173,8 +237,14 @@ public struct MenuBarContentView: View {
         }
     }
 
+    /// Group headers no longer follow the panel's text scale.
+    ///
+    /// A group header is a divider with a word on it, not reading matter, so the
+    /// slider that sizes the numbers has nothing to say about it — and the
+    /// special case it used to need (9 × 0.85 is 7.6, which is a grey smear) has
+    /// nothing left to defend at a fixed 10.
     private var sectionFontSize: CGFloat {
-        Tokens.sectionSize(textScale: appearance.textScale)
+        Tokens.Ramp.caption
     }
 
     private func expansion(of id: String) -> Binding<Bool> {
@@ -190,6 +260,17 @@ public struct MenuBarContentView: View {
         )
     }
 
+    /// One row, handed the one `AppearanceSettings` every other row is handed.
+    ///
+    /// That is the whole of the rail contract, and it is structural rather than a
+    /// promise: a row's figure rails come out of `RowGeometry`, which is a pure
+    /// function of these settings — so every rail in the window is the same width
+    /// and ends on the same trailing edge, including on rows with no figure, rows
+    /// still loading and rows that never report a percentage at all. A row that
+    /// worked its rail out from its own content would break that, which is why
+    /// content is not an input to `RowGeometry`. The panel cannot hand a whole
+    /// geometry down — its height needs the row's own lines, which is the one
+    /// part of it the row alone knows.
     private func row(for provider: AnyUsageProvider) -> some View {
         ProviderRow(
             provider: provider,
@@ -210,8 +291,8 @@ public struct MenuBarContentView: View {
             topPercent: state.topUsagePercent,
             summary: headerSubtitle(firstRow: firstRow)
         ) {
-            // Refresh, settings and quit are never hideable: they are the only
-            // way out of an app with no Dock icon and no window.
+            // Refresh, history, settings and quit are never hideable: they are
+            // the only way out of an app with no Dock icon and no window.
             //
             // The sweep counts as refreshing here: the panel a first-time user
             // opens ten seconds after install is mid-adoption, and a spun-down
@@ -229,6 +310,15 @@ public struct MenuBarContentView: View {
                     Task { await state.refreshAll(userInitiated: true) }
                 }
                 .keyboardShortcut("r")
+            }
+
+            // Straight onto the History pane rather than through
+            // `showSettings`, which opens the window on whichever pane it was
+            // last left on. A chart is the one thing in Settings the panel
+            // routinely wants, and making the user find it under a gear is how
+            // ninety days of readings stay unread.
+            HoverIconButton(systemName: "chart.xyaxis.line", help: "Usage history") {
+                SettingsWindowController.show(state: state, pane: .history)
             }
 
             HoverIconButton(systemName: "gearshape", help: "Settings (⌘,)") {
@@ -361,20 +451,31 @@ public struct MenuBarContentView: View {
     }
 }
 
-/// The panel's header: the status-item mark, the app's name and its one-line
-/// summary, and whatever the caller puts on the right.
+/// The panel's header: the app's mark, its name and its one-line summary, and
+/// whatever the caller puts on the right.
 ///
 /// Written to be shared with the Appearance pane's preview, which draws the same
 /// header with plain images where the panel has buttons. It existed in both files
 /// literal for literal with nothing linking the copies, and the copy in the pane
 /// whose job is to show what the panel looks like was the one that went stale.
 /// The pane still holds that copy and should take this one.
+///
+/// The mark here is identity and nothing else. It used to be a second instrument
+/// — a four-bar meter of the same usage the rows underneath already draw — and
+/// the strip in the menu bar carries that reading now, with a brand mark against
+/// each figure so it names the service it belongs to. A header that repeats the
+/// list in miniature is a header that changes height when a quota does.
 public struct PanelHeader<Trailing: View>: View {
     @ObservedObject private var appearance: AppearanceSettings
-    /// Per-service usage for the mark's bars — `AppState.usageLevels`.
+    /// Per-service usage. Retained so callers written against the meter mark
+    /// keep compiling; the header draws no instrument and reads nothing from it.
     public let levels: [Double]
-    /// The highest of them, which is what decides whether the mark goes to its
-    /// alert colour.
+    /// The worst percentage on the panel. Also retained, and now read by nothing
+    /// at all: the alert state it used to colour the mark with went to the rule
+    /// under the header, and the rule has since given it up too. Nothing in the
+    /// chrome changes with a percentage — the row that has the problem carries
+    /// the alarm, and a header whose paint moves with a reading is a header that
+    /// eventually moves its height with one.
     public let topPercent: Double
     /// The line under the title, drawn only while `showsHeaderSummary` is on.
     public let summary: String?
@@ -383,8 +484,8 @@ public struct PanelHeader<Trailing: View>: View {
 
     public init(
         appearance: AppearanceSettings,
-        levels: [Double],
-        topPercent: Double,
+        levels: [Double] = [],
+        topPercent: Double = 0,
         summary: String?,
         @ViewBuilder trailing: () -> Trailing
     ) {
@@ -403,24 +504,33 @@ public struct PanelHeader<Trailing: View>: View {
             // height, so the setting does not apply here — and the mark sits at
             // the gutter with no nudge of its own, which puts it on the same
             // left edge as every logo in the list below.
-            UsageMeterGlyph(
-                levels: levels,
-                alertColor: appearance.menuBarTint(for: topPercent),
-                alertThreshold: appearance.warningThreshold,
-                height: Tokens.Control.headerGlyph
-            )
+            //
+            // Arc is the app's own colour and one of the three saturated things
+            // the panel allows: this mark, the provider logos, and the usage
+            // ramp. It is never a surface, a meter or a row background.
+            AppMark(size: Tokens.Control.headerGlyph, tint: Tokens.Ink.arc)
 
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
-                Text("AI Usage")
-                    .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.titleWeight))
-                    // A wrapped title grows the header, which pushes the divider
+                // A wordmark, so it takes `Ramp.title` rather than the panel's
+                // scaled `titleSize`: the text-scale slider sizes the reading
+                // matter, and a masthead that grows with it starts competing
+                // with the figures it is a label for.
+                Text(Wordmark.text)
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
+                    .tracking(Wordmark.tracking)
+                    // A wrapped title grows the header, which pushes the rule
                     // and every row below it down and makes the window resize to
                     // follow. The summary under it already holds one line; the
                     // title is the half of this pair that had no such promise.
                     .lineLimit(1)
                 if appearance.showsHeaderSummary, let summary {
+                    // SF Pro with tabular digits, not SF Mono: "updated 12s ago"
+                    // is a run with words in it, and the mono face is reserved
+                    // for runs that are only digits and separators. The tabular
+                    // figures still matter — this line counts up every second
+                    // the panel is open.
                     Text(summary)
-                        .font(.system(size: appearance.metrics.captionSize))
+                        .font(.system(size: appearance.metrics.captionSize).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -428,18 +538,33 @@ public struct PanelHeader<Trailing: View>: View {
 
             Spacer(minLength: Tokens.Space.small)
 
-            // One cluster, tight enough to read as a set of three rather than
-            // three unrelated controls scattered along the edge.
+            // One cluster, tight enough to read as a set rather than as four
+            // unrelated controls scattered along the edge.
             HStack(spacing: Tokens.Space.tight) {
                 trailing
             }
         }
         .padding(.horizontal, Tokens.Space.gutter)
-        // Asymmetric: the divider beneath reads as part of the bottom edge, so
-        // the gap to it is smaller than the gap above the title.
+        // Asymmetric: the rule beneath reads as part of the bottom edge, so the
+        // gap to it is smaller than the gap above the title.
         .padding(.top, Tokens.Space.headerTop)
         .padding(.bottom, Tokens.Space.headerBottom)
     }
+
+}
+
+/// The panel's masthead.
+///
+/// Outside `PanelHeader` because that type is generic over its trailing view and
+/// Swift will not hold a static stored property inside a generic one.
+private enum Wordmark {
+    /// Uppercased in the literal rather than by `.uppercased()`: that transform
+    /// is locale-sensitive and this is a name, not prose.
+    static let text = "AI USAGE"
+    /// Slightly less than a group header's 0.5. A masthead is read as one word
+    /// at a glance and needs only enough air to stop the caps touching; a
+    /// section label is scanned past and needs more.
+    static let tracking: CGFloat = 0.4
 }
 
 /// A quiet group divider that folds the rows beneath it away.
@@ -447,7 +572,7 @@ struct DisclosureHeader: View {
     let title: String
     let count: Int
     @Binding var isExpanded: Bool
-    var fontSize: CGFloat = Tokens.Ramp.section
+    var fontSize: CGFloat = Tokens.Ramp.caption
 
     @State private var isHovered = false
 
@@ -470,7 +595,9 @@ struct DisclosureHeader: View {
         } label: {
             HStack(spacing: Self.labelSpacing) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: fontSize * 0.9, weight: .bold))
+                    // Semibold, not bold: the panel runs on three weights and
+                    // this is the only mark that had reached for a fourth.
+                    .font(.system(size: fontSize * 0.9, weight: Tokens.Ramp.titleWeight))
                     .foregroundStyle(.tertiary)
                     // A fixed box, or the column `chevronColumn` promises is
                     // whatever width the glyph happened to render at.
@@ -495,26 +622,51 @@ struct DisclosureHeader: View {
     }
 }
 
-/// A quiet group divider for the dropdown list.
+/// A quiet group divider for the dropdown list, and the app's only definition of
+/// what a group header looks like: `Ramp.caption`, uppercased, tracked, semibold,
+/// secondary, and unscaled. `DisclosureHeader` draws this one rather than a second
+/// copy of it, so a collapsible block and a whole one cannot disagree.
 struct SectionLabel: View {
     let title: String
     let count: Int
-    var fontSize: CGFloat = Tokens.Ramp.section
+    var fontSize: CGFloat = Tokens.Ramp.caption
+
+    /// The rule trailing the label is a hairline, and a hairline is the first
+    /// thing a low-contrast display loses.
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         HStack(spacing: Tokens.Space.small) {
             Text(title.uppercased())
+                // Secondary, not tertiary: at a fixed 10pt with letter spacing on
+                // it, tertiary is the weight at which an uppercased label stops
+                // being read and becomes texture. It is a label on a group of
+                // rows, and it has to survive being scanned past.
                 .font(.system(size: fontSize, weight: Tokens.Ramp.titleWeight))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .tracking(Tokens.sectionTracking)
+            // A run that is only digits, so it takes the mono face like every
+            // other figure in the panel — a count set in SF Pro beside nine
+            // percentages set in SF Mono is the one number that looks borrowed.
+            //
+            // And so it takes a rail, because mono outside a reserved width is
+            // what puts the jitter back: two digits, which is every count this
+            // panel can produce. Centred rather than trailing-aligned — a lone
+            // pill in a header is furniture, not a column being read down, and
+            // the flexible rule after it absorbs the slack either way.
             Text("\(count)")
-                .font(.system(size: fontSize, weight: Tokens.Ramp.emphasisWeight))
-                .foregroundStyle(.tertiary)
+                .font(.system(
+                    size: fontSize,
+                    weight: Tokens.Ramp.emphasisWeight,
+                    design: Tokens.Ramp.figureDesign
+                ))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: Tokens.figureWidth(fontSize, digits: 2), alignment: .center)
                 .padding(.horizontal, Tokens.Space.snug)
                 .padding(.vertical, Tokens.Space.hairline)
                 .background(Capsule().fill(Tokens.quiet(Tokens.Fill.pill)))
             Rectangle()
-                .fill(Tokens.quiet(Tokens.Fill.rule))
+                .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
                 .frame(height: Tokens.Control.hairline)
         }
         .padding(.trailing, Tokens.Space.gutter)

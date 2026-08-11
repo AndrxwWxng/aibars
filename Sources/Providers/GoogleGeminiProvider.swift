@@ -564,8 +564,36 @@ public enum GoogleGeminiUsageParser {
             limit: 100,
             unit: "%",
             resetDate: bucket.reset,
-            windowLabel: window
+            windowLabel: window,
+            windowDuration: windowDuration(forType: bucket.type),
+            windowKey: windowKey(forType: bucket.type)
         )
+    }
+
+    /// How long a window of this type is, or nil where we have no name for it.
+    ///
+    /// Not read off the reset dates and not averaged over two fetches: the type
+    /// field is what names the window, and the two named types have fixed
+    /// lengths — the same claim the window labels above already make in words.
+    /// A type we have never seen gets nothing, because the pace notch is drawn
+    /// against this and a notch on a guessed length is a guessed instrument.
+    private static func windowDuration(forType type: Int) -> TimeInterval? {
+        switch type {
+        case 1: return 5 * 60 * 60
+        case 2: return 7 * 24 * 60 * 60
+        default: return nil
+        }
+    }
+
+    /// The history series key, taken from the payload's own window type.
+    ///
+    /// The unnamed buckets are the reason this is not left to the label. They
+    /// render as "Window 7", a string this file generates and may reword — and
+    /// a key derived from a generated label forks the series the day the wording
+    /// moves, orphaning every reading behind it. The type is the only name
+    /// Google gives these windows, so it is the one thing that can be the key.
+    private static func windowKey(forType type: Int) -> String {
+        "window_type_\(type)"
     }
 
     /// The tier sits at index 0 of the payload, ahead of the bucket array.

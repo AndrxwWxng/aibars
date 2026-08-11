@@ -35,6 +35,16 @@ import SwiftUI
 /// `VStack`, which already varies in height from one row to the next, and the
 /// line is only ever added to a row being drawn fresh rather than switched on
 /// under a panel that is already open.
+///
+/// So the height contract has two halves, and both are needed for the row to be
+/// measurable ahead of its content. Absent, the line costs nothing. Present, it
+/// is held at `Tokens.lineBox(captionSize)` — the same box every other
+/// single-line detail in the row is floored at — so the pace changing its
+/// wording, or a countdown stepping from "1h 20m" to "59m", cannot move the row
+/// underneath it. That is exactly the figure `RowGeometry` reserves for
+/// `Lines.forecast`, and `text` below is how a caller decides whether to put
+/// `.forecast` in the set: a non-nil sentence and a drawn line are the same
+/// condition, asked once.
 public struct ForecastLine: View {
     @ObservedObject private var appearance: AppearanceSettings
     /// The row's id — "claude#2", not "claude". Two accounts of one service are
@@ -78,11 +88,30 @@ public struct ForecastLine: View {
         let projection = trend.projection(for: providerID)
         if let line = Self.text(projection: projection, now: now, showsPace: trend.showsPaceInPanel) {
             Text(line)
+                // A caption, one size under the countdown above it. The pace is a
+                // claim the app is making and the countdown is a fact the
+                // provider stated, so the claim is drawn quieter — and what marks
+                // it out instead is the tint below, not a larger size.
                 .font(.system(size: appearance.metrics.captionSize))
+                // SF Pro with tabular digits, not SF Mono: this is a run with
+                // words in it, and mono on prose is the terminal pastiche the
+                // direction rules out. Only the digits inside it need to hold
+                // still, which is all this asks for. `View.monospacedDigit()` is
+                // macOS 12; `Text.monospaced()` is 13.3 and would raise the
+                // stated floor silently, so it is never called anywhere here.
+                .monospacedDigit()
                 .foregroundStyle(ink(for: projection))
                 // A pace that wraps to a second line has grown the row by more
                 // than the reading is worth.
                 .lineLimit(1)
+                // Held at the row's line box rather than at whatever this
+                // sentence happens to measure, so the wording changing — "under a
+                // minute" for "on pace to cap in 1h 20m" — cannot move the row.
+                // `minHeight` and not a fixed height, as everywhere else in the
+                // row: at the top of the text-scale range a caption's own line is
+                // a fraction taller than the box, and the choice there is between
+                // a clipped descender and a row a point over its reservation.
+                .frame(minHeight: Tokens.lineBox(appearance.metrics.captionSize), alignment: .leading)
         }
     }
 
@@ -98,11 +127,17 @@ public struct ForecastLine: View {
         return UsageForecast.phrase(for: projection, now: now)
     }
 
+    /// The row's own tint, and the caption is the one piece of prose in the panel
+    /// allowed to take it — because the sentence is the app's claim rather than a
+    /// reading, and the tint is how it says so.
+    ///
     /// Secondary, except where the cap is projected to arrive before the window
     /// renews — which is `.capsAt`, since a reset that gets there first is
     /// reported as `.resetsFirst` instead. That line is reassurance and reads as
     /// the note it is; this one is the row's own warning and takes the ink the
-    /// meter beside it would.
+    /// meter beside it would. Holding the reassurance neutral is the same rule
+    /// the figures follow: colour arriving on the row is the event, so spending
+    /// it on the calm case would leave nothing to spend on the loud one.
     private func ink(for projection: UsageProjection?) -> Color {
         guard let outcome = projection?.outcome, case .capsAt(let eta) = outcome else { return .secondary }
         // The forecast has already weighed the renewal it was given, so this

@@ -34,6 +34,21 @@ final class CopilotUsageParserTests: XCTestCase {
         XCTAssertEqual(data.primary.percent, 0)
     }
 
+    func testStatusRowHasNoQuotaAndNoWindow() {
+        // The regression guard for the strip's honesty rule. The zero limit is
+        // what earns Copilot an em dash instead of a percentage, and the nil
+        // duration is what keeps a pace notch off a row that has no pace: the
+        // renewal date below says when the seat bills again, not how long a
+        // usage window runs.
+        for user in [[:], ["chat_enabled": true], ["chat_enabled": false]] as [[String: Any]] {
+            let data = CopilotUsageParser.parse(user: user, usage: ["quota_reset_date": "2026-09-01T00:00:00Z"])
+
+            XCTAssertEqual(data.primary.limit, 0)
+            XCTAssertNil(data.primary.windowDuration)
+            XCTAssertTrue(data.secondary.isEmpty)
+        }
+    }
+
     func testQuotaResetDate() {
         let data = CopilotUsageParser.parse(user: [:], usage: ["quota_reset_date": "2026-09-01T00:00:00Z"])
         XCTAssertEqual(data.primary.resetDate, ProviderDate.parse("2026-09-01T00:00:00Z"))

@@ -105,14 +105,21 @@ public enum CopilotUsageParser {
         // Most public-facing Copilot endpoints don't expose numeric usage, so
         // this is a status rather than a quota. A zero limit marks it as such:
         // it keeps a seat that is merely *active* from reading as 100% used
-        // and dragging the menu bar meter into the red.
+        // and dragging the menu bar meter into the red. The menu bar strip
+        // reads the same zero and prints an em dash, which is the honest
+        // statement — Copilot reports that it is on, not how much is left.
         let primary = UsageMetric(
             label: chat ? "Active" : "Paused",
             used: chat ? 1 : 0,
             limit: 0,
             unit: nil,
             resetDate: quotaReset,
-            windowLabel: nil
+            windowLabel: nil,
+            // Nil, and stated rather than defaulted so nobody fills it in later:
+            // the date above is when the seat renews, not the length of a
+            // rolling window. A notch drawn from a billing cycle would measure
+            // how far through the month the user is and claim it was pace.
+            windowDuration: nil
         )
 
         return UsageData(

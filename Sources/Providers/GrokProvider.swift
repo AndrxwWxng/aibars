@@ -243,8 +243,19 @@ public enum GrokUsageParser {
         // is spent.
         let resetDate: Date? = waitSeconds.flatMap { $0 > 0 ? now.addingTimeInterval($0) : nil }
         let windowLabel = windowSeconds.flatMap(durationLabel).map { "every \($0)" }
+        // The same field again, as geometry rather than prose. Grok states its
+        // window length outright, so the pace notch divides by a figure the
+        // provider published instead of one aibars assumed; `windowLabel` is
+        // the sentence grok.com writes beside its quota pill, and this is the
+        // number the meter measures with.
+        let windowDuration = duration(windowSeconds)
 
-        func meter(_ label: String, unit: String, total: Double?, remaining: Double?) -> UsageMetric? {
+        // `key` is the payload field the figures came from, never the label
+        // above them. The labels here are aibars' words: the day the quota pill
+        // starts naming its mode and "Queries" becomes "Auto queries", a key
+        // derived from the label forks the series and orphans every reading
+        // behind it.
+        func meter(_ label: String, unit: String, key: String, total: Double?, remaining: Double?) -> UsageMetric? {
             guard let total, total > 0 else { return nil }
             // A missing `remaining` reads as untouched rather than as capped.
             let used = min(max(total - (remaining ?? total), 0), total)
@@ -254,12 +265,14 @@ public enum GrokUsageParser {
                 limit: total,
                 unit: unit,
                 resetDate: resetDate,
-                windowLabel: windowLabel
+                windowLabel: windowLabel,
+                windowDuration: windowDuration,
+                windowKey: key
             )
         }
 
-        let queries = meter("Queries", unit: "queries", total: totalQueries, remaining: remainingQueries)
-        let tokens = meter("Tokens", unit: "tokens", total: totalTokens, remaining: remainingTokens)
+        let queries = meter("Queries", unit: "queries", key: "queries", total: totalQueries, remaining: remainingQueries)
+        let tokens = meter("Tokens", unit: "tokens", key: "tokens", total: totalTokens, remaining: remainingTokens)
         let gateMeters = gates.map { gateMetrics($0) } ?? []
 
         var lanes: [UsageMetric] = []
@@ -278,7 +291,18 @@ public enum GrokUsageParser {
             guard let bucket = (root[key] ?? root[snakeCased(key)]) as? [String: Any],
                   let remaining = number(bucket, "remainingQueries", "remaining_queries")
             else { continue }
-            secondary.append(UsageMetric(label: label, used: remaining, limit: 0, unit: "queries"))
+            secondary.append(UsageMetric(
+                label: label,
+                used: remaining,
+                limit: 0,
+                unit: "queries",
+                // No length: a bucket publishes what is left and what a call
+                // costs, and nothing at all about how long the count lasts.
+                windowDuration: nil,
+                // Grok's own field name, taken in its canonical camelCase so a
+                // snake_cased payload keys to the same window as a camel one.
+                windowKey: key
+            ))
         }
 
         return UsageData(
@@ -363,7 +387,15 @@ public enum GrokUsageParser {
                 limit: allowance,
                 unit: "queries",
                 resetDate: nil,
-                windowLabel: "free tier"
+                windowLabel: "free tier",
+                // A gate publishes an allowance and what is left of it, and
+                // never how long the allowance runs for. Nil rather than the
+                // day everyone assumes: the notch would then mark a pace
+                // against a window nobody stated.
+                windowDuration: nil,
+                // The gate's own key, so "Imagine" can be reworded without
+                // forking the series behind it.
+                windowKey: key
             )
         }
     }
@@ -387,6 +419,18 @@ public enum GrokUsageParser {
             if let value = ProviderNumber.coerce(dict[key]) { return value }
         }
         return nil
+    }
+
+    /// A window length, or nothing.
+    ///
+    /// Bounded on both sides because the pace notch divides by this: a zero or
+    /// a negative is not a window at all, and a figure past a year is a field
+    /// carrying something other than seconds. Either way the metric goes
+    /// without a duration, which draws a plain track and no notch — the honest
+    /// answer, rather than a mark placed by arithmetic on a bad number.
+    private static func duration(_ seconds: Double?) -> TimeInterval? {
+        guard let seconds, seconds > 0, seconds <= 366 * 24 * 60 * 60 else { return nil }
+        return seconds
     }
 
     /// Rounded to the nearest minute: the windows in the wild are hours, and a

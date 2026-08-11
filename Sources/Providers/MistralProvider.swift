@@ -340,6 +340,11 @@ public enum MistralUsageParser {
     /// (event_type, billing_metric, billing_group) triple and multiplied out
     /// here. Every category and every field inside one is optional.
     ///
+    /// The `start_date`/`end_date` pair is the only window length any of these
+    /// responses states, so the spend and token rows are the only ones that
+    /// carry a `windowDuration`. The quota knows when it resets but never over
+    /// what, and a balance is not a window at all.
+    ///
     /// `credits` is `GET /api/billing/credits`; `vibe` is the console's
     /// `billing.vibeUsage` tRPC batch. Both are best-effort and may be nil.
     public static func parse(
@@ -383,6 +388,8 @@ public enum MistralUsageParser {
         // figure with no window attached reads as a lifetime total.
         let periodEnd = string(root, "end_date", "endDate", "next_month", "nextMonth")
             .flatMap { ProviderDate.parse($0) }
+        let periodStart = string(root, "start_date", "startDate").flatMap { ProviderDate.parse($0) }
+        let periodLength = billingPeriod(from: periodStart, to: periodEnd)
 
         // Spend has no ceiling here — a spend limit exists only on the
         // Enterprise admin API — so it stays status-only rather than being
@@ -396,7 +403,12 @@ public enum MistralUsageParser {
             limit: 0,
             unit: currency,
             resetDate: periodEnd,
-            windowLabel: "Month to date"
+            windowLabel: "Month to date",
+            // The period this response states the two ends of, and nothing when
+            // it states fewer than two of them. The month aibars asked for is
+            // not evidence of the month the account is billed on.
+            windowDuration: periodLength,
+            windowKey: "billing_period_spend"
         )
 
         let vibeMetric = quota.map {
@@ -406,7 +418,13 @@ public enum MistralUsageParser {
                 limit: 100,
                 unit: "%",
                 resetDate: $0.resetAt,
-                windowLabel: "Monthly"
+                windowLabel: "Monthly",
+                // The console gives the instant this resets and never the
+                // window's length. "Monthly" above is Mistral's own wording for
+                // the plan, not a duration it stated, so there is nothing here
+                // to hang a pace notch on.
+                windowDuration: nil,
+                windowKey: "vibe_usage_percentage"
             )
         }
 
@@ -416,7 +434,17 @@ public enum MistralUsageParser {
         var secondary: [UsageMetric] = []
         if vibeMetric != nil { secondary.append(spend) }
         if let balance {
-            secondary.append(UsageMetric(label: "Balance", used: rounded(balance.amount), limit: 0, unit: balance.currency))
+            secondary.append(UsageMetric(
+                label: "Balance",
+                used: rounded(balance.amount),
+                limit: 0,
+                unit: balance.currency,
+                // A wallet is not a window: it never resets, so it has no
+                // length and no pace to keep. Written out rather than left to
+                // the default so nobody fills it in later.
+                windowDuration: nil,
+                windowKey: "credit_balance"
+            ))
         }
         if tokens > 0 {
             secondary.append(UsageMetric(
@@ -425,14 +453,27 @@ public enum MistralUsageParser {
                 limit: 0,
                 unit: "tokens",
                 resetDate: periodEnd,
-                windowLabel: "Month to date"
+                windowLabel: "Month to date",
+                // The same billing period the spend row is measured over,
+                // because it is the same response's dates.
+                windowDuration: periodLength,
+                windowKey: "billing_period_tokens"
             ))
         }
         // `vibe_usage` in the usage payload is a bare number with no documented
         // unit, so it is only worth showing when the console percentage — which
         // is unambiguous — could not be read.
         if quota == nil, let reportedVibe, reportedVibe > 0 {
-            secondary.append(UsageMetric(label: "Vibe", used: reportedVibe, limit: 0))
+            secondary.append(UsageMetric(
+                label: "Vibe",
+                used: reportedVibe,
+                limit: 0,
+                // Keyed apart from the console percentage above even though the
+                // two never appear together: one is a share of an allowance and
+                // the other a bare count, and filing them as one series would
+                // put 3 and 42.5 on the same chart line.
+                windowKey: "vibe_usage"
+            ))
         }
 
         return UsageData(
@@ -498,6 +539,25 @@ public enum MistralUsageParser {
         let resetAt = string(node, "reset_at", "resetAt", "resets_at", "resetsAt").flatMap { ProviderDate.parse($0) }
         return (min(percent, 100), resetAt)
     }
+
+    /// How long the billing period is, from the two dates the usage response
+    /// states itself — the one window Mistral publishes a length for.
+    ///
+    /// Both ends are required. A month inferred from `end_date` alone would be
+    /// a calendar assumption dressed up as a reading, and the pace notch drawn
+    /// against it would put a mark on the meter that no response ever supported.
+    /// A period running backwards, or one long enough to be a Unix epoch
+    /// arriving in a date field, is refused for the same reason.
+    private static func billingPeriod(from start: Date?, to end: Date?) -> TimeInterval? {
+        guard let start, let end else { return nil }
+        let length = end.timeIntervalSince(start)
+        guard length > 0, length.isFinite, length <= longestBillingPeriod else { return nil }
+        return length
+    }
+
+    /// A year. Mistral bills monthly and the endpoint is asked for one month at
+    /// a time, so anything past this is a malformed pair rather than a period.
+    private static let longestBillingPeriod: TimeInterval = 366 * 24 * 60 * 60
 
     /// Ten times an allowance. Nobody documents a bound; this is only far enough
     /// past the ceiling that the field has to be counting something rather than

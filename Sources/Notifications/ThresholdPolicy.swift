@@ -86,14 +86,85 @@ public struct ThresholdState: Codable, Equatable, Sendable {
     public var isEmpty: Bool { entries.isEmpty }
 }
 
+/// What the policy remembers about the budgets between readings.
+///
+/// Kept apart from `ThresholdState` rather than folded into it, because the two
+/// are keyed differently and one dictionary would have to pretend they are not:
+/// usage arms per account and per window ("claude#2", "weekly"), while a budget
+/// is one line per service — two subscriptions are one bill to the person
+/// paying them. Opaque for the same reason, and with the same failure mode: a
+/// blob that no longer decodes costs the user a missed alert rather than a
+/// burst of them, because every fallback below is the silent one.
+public struct BudgetAlertState: Codable, Equatable, Sendable {
+    fileprivate struct Entry: Codable, Equatable, Sendable {
+        /// The fraction of the budget the last reading stood at, which is what
+        /// a crossing is measured against. Optional because "not observed yet"
+        /// is a real state and 0 is not it — `BudgetPolicy.crossings` already
+        /// reads `nil` that way and stays silent.
+        var fraction: Double?
+        /// The budget that fraction was measured against, so a budget the user
+        /// edits seeds again instead of firing. Halving the amount moves the
+        /// line under a spend that never moved, and an alert somebody caused by
+        /// typing tells them nothing they had not just decided.
+        var budgetMinor: Int
+        /// Normalised, because it is compared and never shown.
+        var currency: String
+        var lastFiredAt: Date?
+        /// In basis points, for the reason the usage entry keeps its armed
+        /// levels that way: a Double round trip through JSON is not something an
+        /// escalation should depend on.
+        var lastFiredLevel: Int?
+
+        /// Written out because declaring `init(from:)` below removes the
+        /// memberwise one the policy builds entries with.
+        init(
+            fraction: Double?,
+            budgetMinor: Int,
+            currency: String,
+            lastFiredAt: Date? = nil,
+            lastFiredLevel: Int? = nil
+        ) {
+            self.fraction = fraction
+            self.budgetMinor = budgetMinor
+            self.currency = currency
+            self.lastFiredAt = lastFiredAt
+            self.lastFiredLevel = lastFiredLevel
+        }
+
+        /// Field by field, following `ThresholdRules`: a field added in a later
+        /// version should not make every stored entry undecodable. The two
+        /// fallbacks are chosen so a half-read entry cannot alert — no fraction
+        /// is a first observation, and a budget of zero matches no live budget
+        /// and therefore seeds again.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.fraction = try container.decodeIfPresent(Double.self, forKey: .fraction)
+            self.budgetMinor = try container.decodeIfPresent(Int.self, forKey: .budgetMinor) ?? 0
+            self.currency = try container.decodeIfPresent(String.self, forKey: .currency) ?? ""
+            self.lastFiredAt = try container.decodeIfPresent(Date.self, forKey: .lastFiredAt)
+            self.lastFiredLevel = try container.decodeIfPresent(Int.self, forKey: .lastFiredLevel)
+        }
+    }
+
+    fileprivate var entries: [String: Entry] = [:]
+
+    public init() {}
+
+    public var isEmpty: Bool { entries.isEmpty }
+}
+
 /// One notification the caller should post. Free of UserNotifications types so
 /// the decision can be tested without a notification centre, an authorisation
 /// prompt, or a bundle identifier.
 public struct PendingAlert: Equatable, Sendable {
-    /// Stable per provider and window. Reused as the request identifier so that
-    /// a 95% banner replaces the 80% one still sitting in Notification Centre
-    /// rather than stacking under it.
+    /// Stable per provider and window, or per service for a budget alert.
+    /// Reused as the request identifier so that a 95% banner replaces the 80%
+    /// one still sitting in Notification Centre rather than stacking under it.
     public let key: String
+    /// The account a usage alert is about, or the service a budget alert is
+    /// about — a budget is one line however many accounts sit under it. Also
+    /// the notification's thread, so one service's alerts collapse into one
+    /// stack.
     public let providerID: String
     public let title: String
     public let body: String
@@ -331,5 +402,107 @@ public enum ThresholdPolicy {
 
     private static func resetBody(for metric: UsageMetric) -> String {
         "\(metric.label) is back to \(percentText(metric))"
+    }
+}
+
+/// The same arming discipline as `ThresholdPolicy`, applied to money.
+///
+/// Separate from it rather than folded in, for the reason `BudgetAlertState` is
+/// separate from `ThresholdState`: a window arms per account and per limit, a
+/// budget arms per service, and one function taking both would spend its length
+/// on the difference. It lives in this file because the state it walks keeps its
+/// entries `fileprivate`.
+public enum BudgetAlertPolicy {
+    /// Pure, like `ThresholdPolicy.evaluate`: same spend, same budget, same
+    /// state, same answer. The caller keeps the returned state.
+    ///
+    /// Returns no alert and only a seeded entry the first time a service is
+    /// seen, and again whenever the budget itself moves. Editing a cap changes
+    /// where the line sits without the spend moving at all, and telling somebody
+    /// they have crossed a line they just drew reports their own typing back at
+    /// them.
+    public static func evaluate(
+        spend: SpendReport,
+        serviceID: String,
+        displayName: String,
+        budget: Budget?,
+        rules: ThresholdRules,
+        state: BudgetAlertState,
+        now: Date
+    ) -> (alerts: [PendingAlert], state: BudgetAlertState) {
+        // Switched off forgets as well as stays quiet, exactly as the usage
+        // policy does: otherwise turning it back on compares against a reading
+        // nobody was watching when it happened.
+        guard rules.isEnabled, let budget, !budget.alertsAt.isEmpty else {
+            var cleared = state
+            cleared.entries[serviceID] = nil
+            return ([], cleared)
+        }
+        guard let status = BudgetPolicy.status(spend: spend, budget: budget) else {
+            return ([], state)
+        }
+
+        var next = state
+        let previous = next.entries[serviceID]
+        let budgetMoved = previous.map {
+            $0.budgetMinor != budget.amountMinor || $0.currency != budget.currency
+        } ?? true
+
+        guard let entry = previous, !budgetMoved else {
+            next.entries[serviceID] = BudgetAlertState.Entry(
+                fraction: status.fraction,
+                budgetMinor: budget.amountMinor,
+                currency: budget.currency
+            )
+            return ([], next)
+        }
+
+        var updated = entry
+        updated.fraction = status.fraction
+        var alerts: [PendingAlert] = []
+
+        let crossed = BudgetPolicy.crossings(
+            previous: entry.fraction,
+            current: status.fraction,
+            levels: budget.alertsAt
+        )
+
+        if let top = crossed.max() {
+            let level = Int((top * 10_000).rounded())
+            let cooldown = max(0, rules.cooldown)
+            // Same rule as a usage crossing: repetition waits, escalation does
+            // not. Going from "most of the budget" to "over it" is the crossing
+            // somebody set a budget in order to hear about.
+            let escalates = entry.lastFiredLevel.map { level > $0 } ?? true
+            let cooled = entry.lastFiredAt.map { now.timeIntervalSince($0) >= cooldown } ?? true
+            if cooled || escalates {
+                alerts.append(PendingAlert(
+                    key: "budget.\(serviceID)",
+                    providerID: serviceID,
+                    title: "\(displayName) at \(percentText(status.fraction)) of budget",
+                    body: body(for: status, spend: spend),
+                    at: now
+                ))
+                updated.lastFiredAt = now
+                updated.lastFiredLevel = level
+            }
+        }
+
+        next.entries[serviceID] = updated
+        return (alerts, next)
+    }
+
+    /// "$41.20 of $50.00 spent this month" — and says so when the figure is
+    /// arithmetic this app did rather than a number anybody billed.
+    private static func body(for status: BudgetStatus, spend: SpendReport) -> String {
+        let sentence = status.isOver
+            ? "\(spend.display) spent, over the budget"
+            : "\(spend.display) spent"
+        return status.includesEstimates ? "\(sentence) — partly estimated" : sentence
+    }
+
+    private static func percentText(_ fraction: Double) -> String {
+        guard fraction.isFinite else { return "0%" }
+        return "\(Int((min(max(fraction, 0), 10) * 100).rounded()))%"
     }
 }

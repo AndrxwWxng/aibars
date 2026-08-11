@@ -164,6 +164,9 @@ public final class AppearanceSettings: ObservableObject {
         }
     }
 
+    /// The raw values are unchanged so a stored preference survives; `perBar` now
+    /// means one colour per service rather than one per abstract bar, which is
+    /// the same promise made about a mark the user can identify.
     public enum MenuBarColour: String, CaseIterable, Identifiable {
         case monochrome, alertOnly, perBar
         public var id: String { rawValue }
@@ -171,29 +174,43 @@ public final class AppearanceSettings: ObservableObject {
             switch self {
             case .monochrome: return "Monochrome"
             case .alertOnly:  return "Colour above the warning"
-            case .perBar:     return "Colour every bar"
+            case .perBar:     return "Colour every figure"
             }
         }
     }
 
-    /// Raw values match AppState.MenuBarDisplay so the stored setting carries
-    /// over without a translation table.
+    /// What each service contributes to the menu bar strip: its mark, its
+    /// figure, or both.
+    ///
+    /// The raw values are unchanged so a stored preference survives, but they no
+    /// longer mean what they used to. The strip draws one mark and one figure per
+    /// service rather than one number for the whole app, so `.iconAndPercent` is
+    /// "mark plus figure, per service" and not "icon plus the highest percentage".
+    ///
+    /// `.iconAndName` — icon plus rotating service names — is retired. Rotating a
+    /// name through a single slot was the old strip's way of saying which service
+    /// the number belonged to; a per-service brand mark says it continuously and
+    /// without waiting. A stored "name" is migrated to `.iconAndPercent` in
+    /// `migrateLegacyKeys`.
     public enum MenuBarLabelStyle: String, CaseIterable, Identifiable {
         case iconOnly = "icon"
         case iconAndPercent = "percent"
-        case iconAndName = "name"
         case percentOnly = "percentOnly"
         public var id: String { rawValue }
         public var label: String {
             switch self {
-            case .iconOnly:       return "Icon only"
-            case .iconAndPercent: return "Icon + highest %"
-            case .iconAndName:    return "Icon + rotating names"
-            case .percentOnly:    return "Percentage only"
+            case .iconOnly:       return "Marks only"
+            case .iconAndPercent: return "Mark + figure"
+            case .percentOnly:    return "Figures only"
             }
         }
-        /// `.percentOnly` is the one style that drops the mark entirely.
+        /// `.percentOnly` is the one style that drops the marks entirely.
         public var showsGlyph: Bool { self != .percentOnly }
+        /// `.iconOnly` is the one style that drops the figures entirely. Named
+        /// beside `showsGlyph` rather than derived at each call site, so the
+        /// renderer and the Appearance pane's preview cannot disagree about what
+        /// a style means.
+        public var showsFigure: Bool { self != .iconOnly }
     }
 
     // MARK: - Density and size
@@ -221,7 +238,6 @@ public final class AppearanceSettings: ObservableObject {
     @Published public var meterStyle: MeterStyle { didSet { write(meterStyle.rawValue, .meterStyle) } }
     @Published public var meterThickness: Double { didSet { clampAndWrite(\.meterThickness, 3...12, .meterThickness) } }
     @Published public var colorRamp: ColorRamp { didSet { write(colorRamp.rawValue, .colorRamp) } }
-    @Published public var usesGradientFill: Bool { didSet { write(usesGradientFill, .usesGradientFill) } }
     /// sRGB 0xRRGGBB. Nil follows the system accent, which is what a user who
     /// never opens the picker should keep getting when they change it in
     /// System Settings.
@@ -249,8 +265,20 @@ public final class AppearanceSettings: ObservableObject {
     // MARK: - The menu bar
 
     @Published public var menuBarLabel: MenuBarLabelStyle { didSet { write(menuBarLabel.rawValue, .menuBarLabel) } }
+    /// Which single figure the header summary reads out, and which one the alert
+    /// tint is measured against.
+    ///
+    /// It no longer reaches the strip. The strip now names the services it draws,
+    /// and an average taken across two named services is a number belonging to
+    /// neither of them — "Claude 78" would be a lie about Claude. `menuBarPercent`
+    /// is the one caller left.
     @Published public var menuBarValue: MenuBarValue { didSet { write(menuBarValue.rawValue, .menuBarValue) } }
-    @Published public var menuBarBarCount: Int { didSet { clampAndWrite(\.menuBarBarCount, 1...6, .menuBarBarCount) } }
+    /// How many services the strip carries. Clamped to `MenuBarStripContent`'s
+    /// own range rather than to a local literal, so the setting and the thing it
+    /// limits cannot drift apart.
+    @Published public var menuBarServiceCount: Int {
+        didSet { clampAndWrite(\.menuBarServiceCount, MenuBarStripContent.range, .menuBarServiceCount) }
+    }
     @Published public var menuBarColour: MenuBarColour { didSet { write(menuBarColour.rawValue, .menuBarColour) } }
     @Published public var menuBarGlyphHeight: Double { didSet { clampAndWrite(\.menuBarGlyphHeight, 10...16, .menuBarGlyphHeight) } }
 
@@ -283,7 +311,6 @@ public final class AppearanceSettings: ObservableObject {
         self.meterStyle = Self.readCase(store, .meterStyle) ?? defaults.meterStyle
         self.meterThickness = Self.readDouble(store, .meterThickness) ?? defaults.meterThickness
         self.colorRamp = Self.readCase(store, .colorRamp) ?? defaults.colorRamp
-        self.usesGradientFill = Self.readBool(store, .usesGradientFill) ?? defaults.usesGradientFill
         self.accentColorHex = Self.readInt(store, .accentColorHex)
         self.cautionThreshold = Self.readDouble(store, .cautionThreshold) ?? defaults.cautionThreshold
         self.warningThreshold = Self.readDouble(store, .warningThreshold) ?? defaults.warningThreshold
@@ -296,9 +323,16 @@ public final class AppearanceSettings: ObservableObject {
         self.hidesQuotalessServices = Self.readBool(store, .hidesQuotalessServices) ?? defaults.hidesQuotalessServices
         self.showsHeaderSummary = Self.readBool(store, .showsHeaderSummary) ?? defaults.showsHeaderSummary
 
+        // A stored "name" no longer parses, so the fallback already lands this on
+        // `.iconAndPercent`; `migrateLegacyKeys` rewrites the dead string.
         self.menuBarLabel = Self.readCase(store, .menuBarLabel) ?? defaults.menuBarLabel
         self.menuBarValue = Self.readCase(store, .menuBarValue) ?? defaults.menuBarValue
-        self.menuBarBarCount = Self.readInt(store, .menuBarBarCount) ?? defaults.menuBarBarCount
+        // A stored bar count is a count of the same kind of thing — how many
+        // services the item speaks for — so it carries over rather than being
+        // discarded. `normalize` is what pulls a stored 4 or 6 into range.
+        self.menuBarServiceCount = Self.readInt(store, .menuBarServiceCount)
+            ?? Self.readInt(store, .legacyMenuBarBarCount)
+            ?? defaults.menuBarServiceCount
         self.menuBarColour = Self.readCase(store, .menuBarColour) ?? defaults.menuBarColour
         self.menuBarGlyphHeight = Self.readDouble(store, .menuBarGlyphHeight) ?? defaults.menuBarGlyphHeight
 
@@ -353,6 +387,52 @@ public final class AppearanceSettings: ObservableObject {
             self.barHeight = barHeight
             self.secondaryBarHeight = secondaryBarHeight
             self.ringDiameter = ringDiameter
+        }
+
+        // The five sizes above are the ones density and text scale set directly.
+        // Everything below is derived from them and is therefore computed rather
+        // than stored: a caller — including a test — that builds a `Metrics` by
+        // hand cannot then hand it a figure size that disagrees with its title
+        // size, and the memberwise init stays at the ten parameters it had.
+
+        /// The row's answer, set in SF Mono.
+        ///
+        /// 1.15 rather than a larger multiple: SF Mono reads optically smaller
+        /// than SF Pro at the same point size, so a bump is needed to keep the
+        /// figure the loudest thing on the line — but at 1.25 the number shouted
+        /// down the service name, and a panel does that on nine rows at once.
+        public var figureSize: CGFloat { max(12, (titleSize * 1.15).rounded()) }
+
+        /// The unit tick beside that figure: the `%`, the currency mark.
+        ///
+        /// The unit is not the reading. It rides at 62% of the figure so it
+        /// reads as an annotation on the number rather than as part of it.
+        public var unitSize: CGFloat { max(9, (figureSize * 0.62).rounded()) }
+
+        /// Title line to the caption directly beneath it — the countdown, the
+        /// forecast sentence. Half the gap between two separate things, because
+        /// this is one block of text set in two sizes.
+        public var captionGap: CGFloat { max(2, (contentSpacing / 2).rounded()) }
+
+        /// The width reserved for the headline figure and its unit: three digits,
+        /// a hairline, and one unit character.
+        ///
+        /// Reserved rather than measured, because tabular digits fix the width of
+        /// a digit and not the length of a string: `9%` still reflows to `92%`
+        /// when a row ticks over. The rail's own width differs line by line — the
+        /// secondary rail is narrower — but every rail on a row ends at the same
+        /// trailing edge, and that shared edge is the column the eye scans down.
+        public var headlineRail: CGFloat {
+            Tokens.figureWidth(figureSize, digits: 3)
+                + Tokens.Space.hairline
+                + Tokens.figureWidth(unitSize, digits: 1)
+        }
+
+        /// The same rail for a secondary window's line, built off `detailSize`.
+        public var secondaryRail: CGFloat {
+            Tokens.figureWidth(detailSize, digits: 3)
+                + Tokens.Space.hairline
+                + Tokens.figureWidth((detailSize * 0.62).rounded(), digits: 1)
         }
     }
 
@@ -430,16 +510,59 @@ public final class AppearanceSettings: ObservableObject {
         }
     }
 
+    /// The colour a figure at `percent` is set in.
+    ///
+    /// The meter and the number it labels no longer take the same colour, and
+    /// that is the point. Below caution under `.usage` the figure is neutral: a
+    /// panel of nine rows resting teal spends the eye's whole colour budget on
+    /// the least informative state it has, and the digits are the column being
+    /// scanned down. Holding them graphite until caution makes colour arriving
+    /// on a number the event, rather than the background a healthy panel is
+    /// drawn against.
+    ///
+    /// Under `.accent`, `.provider` and `.mono` this defers unconditionally.
+    /// The user asked for a coloured column — or for no colour at all — and
+    /// gets one at every level; second-guessing that here would be this
+    /// function overruling the setting it is standing next to.
+    ///
+    /// The unit tick beside the figure is not this colour. It is `Ink.idle` in
+    /// every band and under every ramp, because it annotates the number rather
+    /// than being part of the reading, and a neutral unit is what keeps the
+    /// digits the only coloured column.
+    public func figureTint(for percent: Double, providerAccent: Color) -> Color {
+        guard colorRamp == .usage, percent < cautionThreshold else {
+            return tint(for: percent, providerAccent: providerAccent)
+        }
+        return .primary
+    }
+
     /// Menu bar tint, nil below `warningThreshold` so the glyph stays quiet —
     /// and nil always under `.monochrome`, which is the whole point of that
     /// setting: a tint makes AppKit stop treating the image as a template.
+    ///
+    /// The threshold is the configured one, and `.monochrome` is read off the
+    /// setting: this is the survivor of a pair of near-identical functions, the
+    /// other of which hardcoded 0.85 and so quietly ignored a user who had
+    /// moved the line. `.perBar` is not answered here — a strip that colours
+    /// every figure needs a colour per figure and a brand colour for each mark
+    /// beside it, which is more than one optional can carry — so the renderer
+    /// is handed `menuBarColour` itself and resolves that case per segment.
     public func menuBarTint(for percent: Double) -> Color? {
         guard menuBarColour != .monochrome, percent >= warningThreshold else { return nil }
         return warningColor
     }
 
-    /// Whether the glyph colours every bar by its own level, for
-    /// UsageMeterGlyph's `perBarColour` and MenuBarIcon's `colourPerBar`.
+    /// Whether every figure in the menu bar takes its own level's colour: the
+    /// yes/no form of the setting, for a caller that draws one thing and only
+    /// needs to know whether to tint it.
+    ///
+    /// The strip renderer is not that caller and is handed `menuBarColour`
+    /// itself, because it has a third case to honour — `.alertOnly` colours the
+    /// one figure that crossed the warning and nothing else — and a Bool cannot
+    /// carry three states. The two parameters this used to name,
+    /// `UsageMeterGlyph.perBarColour` and `MenuBarIcon.colourPerBar`, went with
+    /// the four abstract bars; naming them here would be this comment
+    /// describing an app that no longer exists.
     public var coloursEveryMenuBarBar: Bool { menuBarColour == .perBar }
 
     /// Resolved accent: the stored hex, or the live system accent when unset.
@@ -547,12 +670,39 @@ public final class AppearanceSettings: ObservableObject {
             + disconnectedSection(missing, isCollapsible: !connected.isEmpty, hasConnectedRows: !connected.isEmpty)
     }
 
-    /// The percent the menu bar shows and tints from, per `menuBarValue`.
+    /// The one figure the panel header summarises the app with, and the one the
+    /// alert tint is measured against, per `menuBarValue`.
+    ///
+    /// Despite the name it no longer reaches the menu bar strip: the strip draws
+    /// several services by name, and an average across named services is a number
+    /// belonging to nobody. The name is kept because the setting it reads is
+    /// stored under `aibars.appearance.menuBarValue` and renaming a persisted
+    /// setting to tidy a call site is how a user's preference gets dropped.
     public func menuBarPercent(in state: AppState) -> Double {
         switch menuBarValue {
         case .highest: return state.topUsagePercent
         case .average: return state.averageUsagePercent
         }
+    }
+
+    /// What the menu bar strip draws, closest to its cap first.
+    ///
+    /// The single place that decision is made. The status item and the Appearance
+    /// pane's live preview both come through here, for the reason
+    /// `Tokens.rowBackground` exists: the preview and the panel disagreed once
+    /// because each had its own copy of the rule, and a preview that lies about
+    /// the setting it is previewing is worse than no preview.
+    ///
+    /// Providers that have not answered yet are absent from `serviceReadings`
+    /// rather than present with a nil percent, so an empty result means "nothing
+    /// has reported" and never "everything reports no quota".
+    public func menuBarEntries(in state: AppState) -> [MenuBarEntry] {
+        MenuBarStripContent.entries(
+            from: state.serviceReadings.map {
+                MenuBarEntry(serviceID: $0.serviceID, displayName: $0.displayName, percent: $0.percent)
+            },
+            limit: menuBarServiceCount
+        )
     }
 
     private func disconnectedSection(
@@ -705,12 +855,12 @@ public final class AppearanceSettings: ObservableObject {
                     showsPercentage: true, showsAmounts: false, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: false,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
-                    meterStyle: .bar, meterThickness: 4, colorRamp: .usage, usesGradientFill: false,
+                    meterStyle: .bar, meterThickness: 4, colorRamp: .usage,
                     cautionThreshold: 0.60, warningThreshold: 0.85,
                     sortOrder: .urgency, grouping: .flat, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
                     menuBarLabel: .iconAndPercent, menuBarValue: .highest,
-                    menuBarBarCount: 4, menuBarColour: .perBar, menuBarGlyphHeight: 13
+                    menuBarServiceCount: 3, menuBarColour: .perBar, menuBarGlyphHeight: 13
                 )
             case .minimal:
                 return Snapshot(
@@ -719,12 +869,16 @@ public final class AppearanceSettings: ObservableObject {
                     showsPercentage: true, showsAmounts: false, showsCountdowns: false,
                     showsPlanNames: false, showsAccountLabels: false,
                     secondaryWindows: .hidden, secondaryWindowLimit: 1, rowActions: .never,
-                    meterStyle: .numberOnly, meterThickness: 4, colorRamp: .usage, usesGradientFill: false,
+                    meterStyle: .numberOnly, meterThickness: 4, colorRamp: .usage,
                     cautionThreshold: 0.60, warningThreshold: 0.85,
                     sortOrder: .alphabetical, grouping: .flat, disconnectedServices: .hidden,
                     showsAllAccounts: false, hidesQuotalessServices: true, showsHeaderSummary: false,
+                    // One service, because this is the preset that drops the
+                    // marks: three bare figures in a row have nothing to say
+                    // which service each belongs to, which is the fault the
+                    // per-service marks were added to fix.
                     menuBarLabel: .percentOnly, menuBarValue: .highest,
-                    menuBarBarCount: 3, menuBarColour: .alertOnly, menuBarGlyphHeight: 12
+                    menuBarServiceCount: 1, menuBarColour: .alertOnly, menuBarGlyphHeight: 12
                 )
             case .dashboard:
                 return Snapshot(
@@ -733,12 +887,12 @@ public final class AppearanceSettings: ObservableObject {
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: true, showsAccountLabels: true,
                     secondaryWindows: .expanded, secondaryWindowLimit: 6, rowActions: .always,
-                    meterStyle: .bar, meterThickness: 7, colorRamp: .usage, usesGradientFill: true,
+                    meterStyle: .bar, meterThickness: 7, colorRamp: .usage,
                     cautionThreshold: 0.55, warningThreshold: 0.80,
                     sortOrder: .urgency, grouping: .usageBand, disconnectedServices: .shown,
                     showsAllAccounts: true, hidesQuotalessServices: false, showsHeaderSummary: true,
-                    menuBarLabel: .iconAndName, menuBarValue: .average,
-                    menuBarBarCount: 6, menuBarColour: .perBar, menuBarGlyphHeight: 14
+                    menuBarLabel: .iconAndPercent, menuBarValue: .average,
+                    menuBarServiceCount: 3, menuBarColour: .perBar, menuBarGlyphHeight: 14
                 )
             case .monochrome:
                 return Snapshot(
@@ -747,12 +901,15 @@ public final class AppearanceSettings: ObservableObject {
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: true,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
-                    meterStyle: .ring, meterThickness: 4, colorRamp: .mono, usesGradientFill: false,
+                    meterStyle: .ring, meterThickness: 4, colorRamp: .mono,
                     cautionThreshold: 0.60, warningThreshold: 0.90,
                     sortOrder: .manual, grouping: .status, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
+                    // Two, because this preset draws marks and no figures: a
+                    // third undifferentiated mark adds width without adding a
+                    // reading.
                     menuBarLabel: .iconOnly, menuBarValue: .highest,
-                    menuBarBarCount: 4, menuBarColour: .monochrome, menuBarGlyphHeight: 13
+                    menuBarServiceCount: 2, menuBarColour: .monochrome, menuBarGlyphHeight: 13
                 )
             }
         }
@@ -782,7 +939,6 @@ public final class AppearanceSettings: ObservableObject {
         public var meterStyle: MeterStyle
         public var meterThickness: Double
         public var colorRamp: ColorRamp
-        public var usesGradientFill: Bool
         public var cautionThreshold: Double
         public var warningThreshold: Double
         public var sortOrder: SortOrder
@@ -793,7 +949,7 @@ public final class AppearanceSettings: ObservableObject {
         public var showsHeaderSummary: Bool
         public var menuBarLabel: MenuBarLabelStyle
         public var menuBarValue: MenuBarValue
-        public var menuBarBarCount: Int
+        public var menuBarServiceCount: Int
         public var menuBarColour: MenuBarColour
         public var menuBarGlyphHeight: Double
 
@@ -815,7 +971,6 @@ public final class AppearanceSettings: ObservableObject {
             meterStyle: MeterStyle = .bar,
             meterThickness: Double = 5,
             colorRamp: ColorRamp = .usage,
-            usesGradientFill: Bool = true,
             cautionThreshold: Double = 0.60,
             warningThreshold: Double = 0.85,
             sortOrder: SortOrder = .urgency,
@@ -826,7 +981,7 @@ public final class AppearanceSettings: ObservableObject {
             showsHeaderSummary: Bool = true,
             menuBarLabel: MenuBarLabelStyle = .iconAndPercent,
             menuBarValue: MenuBarValue = .highest,
-            menuBarBarCount: Int = 4,
+            menuBarServiceCount: Int = 3,
             menuBarColour: MenuBarColour = .perBar,
             menuBarGlyphHeight: Double = 13
         ) {
@@ -847,7 +1002,6 @@ public final class AppearanceSettings: ObservableObject {
             self.meterStyle = meterStyle
             self.meterThickness = meterThickness
             self.colorRamp = colorRamp
-            self.usesGradientFill = usesGradientFill
             self.cautionThreshold = cautionThreshold
             self.warningThreshold = warningThreshold
             self.sortOrder = sortOrder
@@ -858,7 +1012,7 @@ public final class AppearanceSettings: ObservableObject {
             self.showsHeaderSummary = showsHeaderSummary
             self.menuBarLabel = menuBarLabel
             self.menuBarValue = menuBarValue
-            self.menuBarBarCount = menuBarBarCount
+            self.menuBarServiceCount = menuBarServiceCount
             self.menuBarColour = menuBarColour
             self.menuBarGlyphHeight = menuBarGlyphHeight
         }
@@ -872,13 +1026,12 @@ public final class AppearanceSettings: ObservableObject {
             showsPlanNames: showsPlanNames, showsAccountLabels: showsAccountLabels,
             secondaryWindows: secondaryWindows, secondaryWindowLimit: secondaryWindowLimit, rowActions: rowActions,
             meterStyle: meterStyle, meterThickness: meterThickness, colorRamp: colorRamp,
-            usesGradientFill: usesGradientFill,
             cautionThreshold: cautionThreshold, warningThreshold: warningThreshold,
             sortOrder: sortOrder, grouping: grouping, disconnectedServices: disconnectedServices,
             showsAllAccounts: showsAllAccounts, hidesQuotalessServices: hidesQuotalessServices,
             showsHeaderSummary: showsHeaderSummary,
             menuBarLabel: menuBarLabel, menuBarValue: menuBarValue,
-            menuBarBarCount: menuBarBarCount, menuBarColour: menuBarColour,
+            menuBarServiceCount: menuBarServiceCount, menuBarColour: menuBarColour,
             menuBarGlyphHeight: menuBarGlyphHeight
         )
     }
@@ -904,7 +1057,6 @@ public final class AppearanceSettings: ObservableObject {
         meterStyle = snapshot.meterStyle
         meterThickness = snapshot.meterThickness
         colorRamp = snapshot.colorRamp
-        usesGradientFill = snapshot.usesGradientFill
         cautionThreshold = snapshot.cautionThreshold
         warningThreshold = snapshot.warningThreshold
         sortOrder = snapshot.sortOrder
@@ -915,7 +1067,7 @@ public final class AppearanceSettings: ObservableObject {
         showsHeaderSummary = snapshot.showsHeaderSummary
         menuBarLabel = snapshot.menuBarLabel
         menuBarValue = snapshot.menuBarValue
-        menuBarBarCount = snapshot.menuBarBarCount
+        menuBarServiceCount = snapshot.menuBarServiceCount
         menuBarColour = snapshot.menuBarColour
         menuBarGlyphHeight = snapshot.menuBarGlyphHeight
         normalize()
@@ -961,7 +1113,6 @@ public final class AppearanceSettings: ObservableObject {
         case meterStyle = "aibars.appearance.meterStyle"
         case meterThickness = "aibars.appearance.meterThickness"
         case colorRamp = "aibars.appearance.colorRamp"
-        case usesGradientFill = "aibars.appearance.usesGradientFill"
         case accentColorHex = "aibars.appearance.accentColorHex"
         case cautionThreshold = "aibars.appearance.cautionThreshold"
         case warningThreshold = "aibars.appearance.warningThreshold"
@@ -974,16 +1125,25 @@ public final class AppearanceSettings: ObservableObject {
         case showsHeaderSummary = "aibars.appearance.showsHeaderSummary"
         case menuBarLabel = "aibars.appearance.menuBarLabel"
         case menuBarValue = "aibars.appearance.menuBarValue"
-        case menuBarBarCount = "aibars.appearance.menuBarBarCount"
+        case menuBarServiceCount = "aibars.appearance.menuBarServiceCount"
         case menuBarColour = "aibars.appearance.menuBarColour"
         case menuBarGlyphHeight = "aibars.appearance.menuBarGlyphHeight"
         case didMigrate = "aibars.appearance.didMigrateFromAppState"
+
+        /// Retired with the four abstract bars. Read once in `init` so a user who
+        /// set a bar count keeps a service count near it, and never written.
+        case legacyMenuBarBarCount = "aibars.appearance.menuBarBarCount"
+        /// Retired outright: a gradient makes two bars of equal length look
+        /// unequal at the tip, which is exactly the down-column comparison the
+        /// figure rail and the pace notch are both built on. Named only so
+        /// `migrateLegacyKeys` can delete it.
+        case legacyGradientFill = "aibars.appearance.usesGradientFill"
     }
 
     private let store: UserDefaults
     /// Suppresses the per-property writes while a whole configuration is being
     /// loaded or applied, so the store is touched once at the end instead of
-    /// thirty-one times — and so the clamps can see every value in place.
+    /// thirty times — and so the clamps can see every value in place.
     private var isBulkUpdating = true
 
     private var cautionRange: ClosedRange<Double> {
@@ -1036,7 +1196,10 @@ public final class AppearanceSettings: ObservableObject {
         panelWidth = min(max(panelWidth, 300), 520)
         secondaryWindowLimit = min(max(secondaryWindowLimit, 1), 6)
         meterThickness = min(max(meterThickness, 3), 12)
-        menuBarBarCount = min(max(menuBarBarCount, 1), 6)
+        menuBarServiceCount = min(
+            max(menuBarServiceCount, MenuBarStripContent.range.lowerBound),
+            MenuBarStripContent.range.upperBound
+        )
         menuBarGlyphHeight = min(max(menuBarGlyphHeight, 10), 16)
         warningThreshold = min(max(warningThreshold, 0.50), 0.98)
         cautionThreshold = min(max(cautionThreshold, cautionRange.lowerBound), cautionRange.upperBound)
@@ -1060,7 +1223,6 @@ public final class AppearanceSettings: ObservableObject {
         write(meterStyle.rawValue, .meterStyle)
         write(meterThickness, .meterThickness)
         write(colorRamp.rawValue, .colorRamp)
-        write(usesGradientFill, .usesGradientFill)
         write(cautionThreshold, .cautionThreshold)
         write(warningThreshold, .warningThreshold)
         write(sortOrder.rawValue, .sortOrder)
@@ -1071,18 +1233,42 @@ public final class AppearanceSettings: ObservableObject {
         write(showsHeaderSummary, .showsHeaderSummary)
         write(menuBarLabel.rawValue, .menuBarLabel)
         write(menuBarValue.rawValue, .menuBarValue)
-        write(menuBarBarCount, .menuBarBarCount)
+        write(menuBarServiceCount, .menuBarServiceCount)
         write(menuBarColour.rawValue, .menuBarColour)
         write(menuBarGlyphHeight, .menuBarGlyphHeight)
     }
 
-    /// One-time import of the four settings AppState used to own.
+    /// One-time import of the four settings AppState used to own, plus the
+    /// retirements this version makes.
     ///
-    /// The old keys are left in place. They cost nothing, and deleting them
-    /// means a user who downgrades loses settings they never changed.
+    /// The AppState keys are left in place. They cost nothing, and deleting them
+    /// means a user who downgrades loses settings they never changed. The three
+    /// retirements below are different: their keys are this class's own, they can
+    /// never be read again, and leaving a value in the domain that nothing honours
+    /// is how a settings file starts lying about the app.
     private func migrateLegacyKeys() {
+        // Ahead of the one-time guard, because all three are retirements made in
+        // this version and the guard was already tripped for everyone who has
+        // launched a previous one.
+        store.removeObject(forKey: Key.legacyGradientFill.rawValue)
+        // The read in `init` has already clamped whatever was here into
+        // `menuBarServiceCount`; this writes the clamped value under the new key
+        // and drops the old one, so the next launch reads it directly.
+        if store.object(forKey: Key.legacyMenuBarBarCount.rawValue) != nil {
+            store.set(menuBarServiceCount, forKey: Key.menuBarServiceCount.rawValue)
+            store.removeObject(forKey: Key.legacyMenuBarBarCount.rawValue)
+        }
+        // "name" was icon plus rotating service names, which the per-service
+        // marks replace. The read in `init` has already fallen back to the
+        // default, so this only rewrites the dead string.
+        if store.string(forKey: Key.menuBarLabel.rawValue) == "name" {
+            store.set(menuBarLabel.rawValue, forKey: Key.menuBarLabel.rawValue)
+        }
+
         guard !store.bool(forKey: Key.didMigrate.rawValue) else { return }
 
+        // A raw value that no longer parses — "name" is the only one — leaves the
+        // default in place, which is where the retirement above sends it anyway.
         if let raw = store.string(forKey: "aibars.menuBarDisplay"),
            let style = MenuBarLabelStyle(rawValue: raw) {
             menuBarLabel = style
@@ -1101,7 +1287,7 @@ public final class AppearanceSettings: ObservableObject {
     }
 
     // Reads are static so `init` can use them before `self` exists, and named
-    // by type rather than overloaded so thirty-one call sites in a row don't
+    // by type rather than overloaded so thirty call sites in a row don't
     // each cost the type checker an overload search.
     private static func readCase<T: RawRepresentable>(_ store: UserDefaults, _ key: Key) -> T? where T.RawValue == String {
         store.string(forKey: key.rawValue).flatMap(T.init(rawValue:))

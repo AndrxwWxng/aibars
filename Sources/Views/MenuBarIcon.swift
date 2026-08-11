@@ -1,133 +1,163 @@
-import SwiftUI
 import AppKit
+import Combine
 
-/// Rasterises the meter into an `NSImage` for the status bar.
+/// What the status item needs to know about the bar it sits in.
 ///
-/// `MenuBarExtra` will not reliably draw a `Shape`-based label — the glyph came
-/// out blank in the menu bar while rendering correctly everywhere else. Handing
-/// AppKit a finished image is what status items actually expect, and it brings
-/// two things with it: a template image inherits the menu bar's own light/dark
-/// and vibrancy treatment for free, and the size is exact rather than whatever
-/// SwiftUI negotiates inside the status item.
+/// This used to rasterise the four-bar meter as well. `MenuBarStripRenderer`
+/// draws the status item now — a brand mark and its own figure per service,
+/// because four abstract bars could not tell you which bar was Claude — and it
+/// memoises on the strip's own inputs rather than on bucketed levels. What is
+/// left here is the pair of facts every drawing of the status item still needs
+/// and that neither the strip model nor the rasteriser should own: how tall the
+/// bar is, and which way the bar itself is currently painted.
 @MainActor
 public enum MenuBarIcon {
     /// Status bar glyphs sit in a 22pt bar; 13pt of drawing with integral width
-    /// keeps the bars crisp.
+    /// keeps the marks crisp.
     nonisolated public static let height: CGFloat = 13
 
-    private static let cache = Lock<[String: NSImage]>([:])
-
-    /// Whether the menu bar is currently dark. The menu bar follows the system
-    /// appearance, which is what `effectiveAppearance` reports.
+    /// Whether the menu bar is currently dark.
+    ///
+    /// The menu bar's own appearance, and deliberately not the application's.
+    /// macOS paints the bar dark under Light mode whenever the desktop picture
+    /// behind it is dark, and `NSApp.effectiveAppearance` reports `.aqua`
+    /// throughout that — so baking the strip's neutral from the application drew
+    /// every figure and every brand mark black on a dark bar. The status item's
+    /// own window carries the appearance the bar is actually drawn in, it is a
+    /// window in this process, and `effectiveAppearance` is a documented property
+    /// on it: nothing here reaches into a private view hierarchy or asks by KVC.
+    ///
+    /// A coloured strip cannot be a template, so it bakes its neutral colour in
+    /// and has to be told which one to bake. That is the only reason this is read
+    /// directly rather than left to SwiftUI's environment, which resolves against
+    /// the window an `ImageRenderer` draws into and not the menu bar.
+    ///
+    /// Read at the moment of drawing and never latched. The window does not exist
+    /// until the run-loop turn after launch, it is replaced when a display
+    /// arrives, and measured it answers `NSAppearanceNameVibrantLight` for the
+    /// moment before it has resolved against the bar — so a cached answer would
+    /// be a wrong one, and falling back to the application keeps the reading the
+    /// app shipped with on any Mac where the window cannot be found. *When* to
+    /// redraw is the other half of the question and not this one's: the app
+    /// target's `MenuBarAppearance` answers it by observing this same window.
     static var isDarkMenuBar: Bool {
-        NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        isDark(statusBarWindow?.effectiveAppearance ?? NSApp?.effectiveAppearance)
     }
 
-    /// - Parameter colourPerBar: paint each bar by its own usage level. That
-    ///   turns the glyph from "the worst service is at N%" into "here is every
-    ///   service", which is the whole reason for having bars rather than a
-    ///   number. A coloured image can't be a template, so AppKit stops
-    ///   recolouring it — which is fine, since the colour is the point.
-    public static func image(
-        levels: [Double],
-        tint: Color?,
-        colourPerBar: Bool = true,
-        height: CGFloat = MenuBarIcon.height,
-        barCount: Int = 4
-    ) -> NSImage {
-        // With nothing reporting there is no colour to show, so the glyph goes
-        // back to being a template and inherits the menu bar's own treatment.
-        let coloured = colourPerBar && levels.contains { $0 > 0 }
-        // Height and bar count are settings now, so they belong in the key —
-        // otherwise changing either returns the previously rendered size.
-        let key = cacheKey(
-            levels: levels, tint: tint, coloured: coloured,
-            height: height, barCount: barCount,
-            // A coloured glyph bakes its neutral colour in, so a theme change
-            // has to produce a different image rather than the cached one.
-            dark: coloured && isDarkMenuBar
-        )
-        if let cached = cache.withLock({ $0[key] }) { return cached }
-
-        // A template image is recoloured by AppKit, so black is right for it. A
-        // coloured one is not, so its neutral parts have to be resolved here
-        // against the menu bar's own appearance — otherwise the baseline and the
-        // idle stubs render black and vanish on a dark menu bar.
-        let neutral: Color = coloured ? (isDarkMenuBar ? .white : .black) : .black
-        let glyph = UsageMeterGlyph(
-            levels: levels,
-            alertColor: tint,
-            perBarColour: coloured,
-            neutral: neutral,
-            height: height,
-            barCount: barCount
-        )
-        let renderer = ImageRenderer(content: glyph.foregroundStyle(neutral))
-        renderer.scale = 2
-
-        let image = renderer.nsImage ?? NSImage(size: NSSize(width: 18, height: height))
-        image.isTemplate = !coloured
-        image.accessibilityDescription = "AI usage"
-
-        cache.withLock { $0[key] = image }
-        return image
+    /// Matched on the class name because `NSStatusBarWindow` is not a type this
+    /// app can name. There is one per screen carrying a bar, and two screens with
+    /// different wallpapers can be painted differently — but the strip is a single
+    /// image serving every bar, so there is one answer to be had and the first
+    /// window is what gives it.
+    private static var statusBarWindow: NSWindow? {
+        (NSApp?.windows ?? []).first {
+            String(describing: type(of: $0)).contains("NSStatusBarWindow")
+        }
     }
 
-    /// Levels are bucketed before they reach the cache key: the meter can only
-    /// show so many distinct bar heights, and a key per raw percentage would
-    /// re-render on every refresh for no visible difference.
-    private static func cacheKey(
-        levels: [Double],
-        tint: Color?,
-        coloured: Bool,
-        height: CGFloat,
-        barCount: Int,
-        dark: Bool
-    ) -> String {
-        let bucketed = levels
-            .map { Int((min(max($0, 0), 1) * 20).rounded()) }
-            .sorted(by: >)
-            .prefix(barCount)
-            .map(String.init)
-            .joined(separator: "-")
-        return "\(bucketed)|\(tint == nil ? "mono" : "alert")|\(coloured ? "rgb" : "tpl")|\(Int(height))|\(barCount)|\(dark ? "dark" : "light")"
+    /// The vibrant appearance names are what a status bar window actually
+    /// reports, where the application reports `NSAppearanceNameDarkAqua`;
+    /// `bestMatch(from:)` folds both spellings onto the two the strip asks about.
+    private static func isDark(_ appearance: NSAppearance?) -> Bool {
+        appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 }
 
-/// Publishes when the system flips between light and dark.
+/// Publishes when the paint of the menu bar changes.
 ///
-/// A coloured status image has its neutral colour baked in, so a theme change has
-/// to redraw it. SwiftUI re-renders on state changes, not on appearance changes,
-/// and the menu bar label has no other reason to update — so without this the
-/// glyph keeps yesterday's colour until the next usage refresh.
+/// A coloured status image has its neutral colour baked in, so anything that
+/// repaints the bar has to redraw it. SwiftUI re-renders on state changes, not on
+/// appearance changes, and a strip has no other reason to update between usage
+/// refreshes — so without this it keeps yesterday's colour until the next one.
+///
+/// Three triggers, because the bar's paint has three causes and the theme
+/// notification covers one of them:
+///
+/// - `AppleInterfaceThemeChangedNotification` — the Light/Dark switch, and the
+///   only cause the shipped observer heard about;
+/// - `activeSpaceDidChangeNotification` — a space carries its own desktop
+///   picture, and a dark picture is enough to darken the bar under Light mode;
+/// - `didChangeScreenParametersNotification` — a display arriving, leaving or
+///   being rearranged moves the bar over a different picture.
+///
+/// What none of the three sees is the user changing the picture of the space they
+/// are already on. There is no public notification for that; the trigger that
+/// does catch it is KVO on the status item window's own `effectiveAppearance`,
+/// which needs the status item, so it lives beside it in the app target rather
+/// than in a framework type that has no handle on one.
 @MainActor
 public final class SystemAppearanceObserver: ObservableObject {
     public static let shared = SystemAppearanceObserver()
 
     @Published public private(set) var isDark: Bool
 
-    private var observer: NSObjectProtocol?
+    /// One token per notification centre. Three centres deliver these three
+    /// notifications — distributed, workspace, application — and a token has to
+    /// be handed back to the centre it came from, so they are kept apart rather
+    /// than collected into one array.
+    private var themeObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
 
     private init() {
         isDark = MenuBarIcon.isDarkMenuBar
-        observer = DistributedNotificationCenter.default().addObserver(
+        themeObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // The notification arrives a beat before effectiveAppearance catches
-            // up, so read it on the next turn of the loop.
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self?.isDark = MenuBarIcon.isDarkMenuBar
-                }
-            }
+            self?.scheduleReread()
+        }
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleReread()
+        }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleReread()
         }
     }
 
     deinit {
-        if let observer {
-            DistributedNotificationCenter.default().removeObserver(observer)
+        if let themeObserver {
+            DistributedNotificationCenter.default().removeObserver(themeObserver)
         }
+        if let spaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver)
+        }
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
+    }
+
+    /// Takes the reading on the next turn of the loop rather than inline: every
+    /// one of the three notifications arrives a beat before the thing it
+    /// announces has settled — the theme flip before `effectiveAppearance` moves,
+    /// a space change before the bar has repainted, a screen change before the
+    /// status item's window has been replaced.
+    ///
+    /// `nonisolated` because a notification handler is delivered outside the
+    /// actor; the hop is what puts the read back on it.
+    private nonisolated func scheduleReread() {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.reread()
+            }
+        }
+    }
+
+    private func reread() {
+        let dark = MenuBarIcon.isDarkMenuBar
+        // Only on a flip. A space change fires on every switch and most switches
+        // do not change the bar's paint at all, and republishing an unchanged
+        // value asks the strip to redraw itself into the identical image.
+        guard dark != isDark else { return }
+        isDark = dark
     }
 }
