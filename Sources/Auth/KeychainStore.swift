@@ -25,10 +25,16 @@ public enum KeychainStore {
     /// "xctest wants to access key dev.aibars.app" dialog on screen — during
     /// someone's actual working day. It also means tests can no longer read,
     /// overwrite or delete the credentials a real install depends on.
-    private static let isTesting = ProcessInfo.processInfo
-        .environment["XCTestConfigurationFilePath"] != nil
-        || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
-        || NSClassFromString("XCTestCase") != nil
+    ///
+    /// The signal is deliberately XCTest being linked into *this* process, not
+    /// `XCTestConfigurationFilePath` or any other environment variable. The
+    /// process environment is chosen by whoever launches the app — a shell that
+    /// exported the variable, or `launchctl setenv` — and a real user's
+    /// credentials must not be silently reroutable into a dictionary that dies
+    /// with the process. No shipping target links XCTest, so this is nil in the
+    /// app and non-nil in the test runner. If a UI-test target is ever added it
+    /// will need its own signal; the environment is not it.
+    private static let isTesting = NSClassFromString("XCTestCase") != nil
 
     private static let memory = Lock<[String: Data]>([:])
 
