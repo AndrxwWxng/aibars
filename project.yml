@@ -75,7 +75,6 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
         INFOPLIST_KEY_NSHumanReadableCopyright: "MIT License"
         INFOPLIST_KEY_CFBundleDisplayName: "AI Bars"
-        INFOPLIST_KEY_NSAppTransportSecurity_AllowsArbitraryLoads: NO
 
   aibarsTests:
     type: bundle.unit-test
