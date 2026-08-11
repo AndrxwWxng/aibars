@@ -64,7 +64,7 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
         var usage: [String: Any] = [:]
         if let quotaURL = URL(string: "https://api.github.com/copilot_internal/usage") {
             if let (u, _) = try? await http.get(quotaURL),
-               let dict = try JSONSerialization.jsonObject(with: u) as? [String: Any] {
+               let dict = (try? JSONSerialization.jsonObject(with: u)) as? [String: Any] {
                 usage = dict
             }
         }
@@ -73,9 +73,8 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
     }
 
     public func authenticate() async throws {
-        if let token = session.token(for: id) {
+        if session.token(for: id) != nil {
             await MainActor.run { self.isAuthenticated = true }
-            _ = token
         }
     }
 
