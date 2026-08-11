@@ -134,11 +134,11 @@ final class AlertsPaneTests: XCTestCase {
     /// has a note and a button to draw, so the unhappy path is the one this
     /// harness can actually see.
     ///
-    /// Measured two ways because one is not enough. The toggle is the section's
-    /// only AppKit control: SwiftUI draws `Button` itself on this OS, so a
-    /// control count cannot tell a section with a note from one without, and
-    /// counting alone would pass on a section that had lost its note entirely.
-    /// The height can tell them apart — the note and the footer under it are
+    /// Measured two ways because one is not enough. The count only proves a
+    /// toggle was built at all; whether the section's button also counts as an
+    /// AppKit control varies by OS, which failed on a CI runner a version away
+    /// from the machine this was written on. So the count is a floor and the
+    /// height carries the real assertion — the note and the footer under it are
     /// several caption lines the bare switch does not have.
     @MainActor
     func testLaunchAtLoginSectionInstantiatesItsToggleAndItsNote() async throws {
@@ -151,7 +151,7 @@ final class AlertsPaneTests: XCTestCase {
         // unconstrained Form lays the footer out on one 1150pt line and reports
         // the height of a single row.
         let section = hosted(Form { LaunchAtLoginSection(item: item) }.frame(width: 620))
-        XCTAssertEqual(
+        XCTAssertGreaterThanOrEqual(
             controls(in: section).count, 1,
             "the login toggle is not being built"
         )
