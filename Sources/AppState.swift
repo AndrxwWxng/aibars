@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SwiftUI
 import Combine
 
@@ -11,7 +12,7 @@ public final class AppState: ObservableObject {
     /// Without this the launch sweep simply adopted the session again, so signing
     /// out lasted until the next refresh. An explicit sign-in clears the mark;
     /// automatic adoption respects it.
-    private static let signedOutKey = "aibars.signedOut"
+    nonisolated private static let signedOutKey = "aibars.signedOut"
 
     nonisolated public static var signedOutProviders: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: signedOutKey) ?? [])
@@ -71,6 +72,16 @@ public final class AppState: ObservableObject {
     private let userDefaults = UserDefaults.standard
     private let intervalKey = "aibars.refreshInterval"
     private var refreshTask: Task<Void, Never>?
+    private var wakeObserver: NSObjectProtocol?
+    /// Providers the timer should leave alone until this date, and how many
+    /// times in a row they have failed. Both are cleared by a success or by the
+    /// user asking for a refresh.
+    private var cooldownUntil: [String: Date] = [:]
+    private var consecutiveFailures: [String: Int] = [:]
+    /// When each provider's snapshot was actually fetched. A provider serving a
+    /// backoff keeps its old snapshot, so the panel's one freshness line has to
+    /// be the age of the oldest thing on screen — not the age of the sweep.
+    private var fetchedAt: [String: Date] = [:]
 
     public init() {
         let stored = userDefaults.integer(forKey: intervalKey)
@@ -105,6 +116,25 @@ public final class AppState: ObservableObject {
 
     public func start() {
         guard refreshTask == nil else { return }
+        // A sleeping Mac stops the clock: `Task.sleep` counts uptime, so an
+        // eight-hour lid close leaves the panel showing pre-sleep numbers until
+        // the rest of the interval elapses. Wake is the trigger the loop itself
+        // cannot provide.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // A twenty-second nap should not stack a sweep on top of the one
+                // already due — only act when the data is older than the user asked for.
+                if let last = self.lastRefresh,
+                   Date().timeIntervalSince(last) < Double(self.refreshIntervalSeconds) { return }
+                // Firing immediately races the network stack coming back, which
+                // would mark every provider failed for one cycle.
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await self.refreshAll()
+            }
+        }
         refreshTask = Task { [weak self] in
             // Adopt sessions the user already has before the first fetch, so a
             // browser they're logged into shows usage without them being asked
@@ -112,13 +142,20 @@ public final class AppState: ObservableObject {
             await self?.adoptBrowserSessions()
             while !Task.isCancelled {
                 await self?.refreshAll()
-                let interval = await self?.refreshIntervalSeconds ?? 60
+                let interval = self?.refreshIntervalSeconds ?? 60
                 try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
             }
         }
     }
 
     public func stop() {
+        // Paired with `start()` exactly: the interval picker calls stop-then-start,
+        // and a token left behind would either leak an observer or skip the next
+        // registration.
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        wakeObserver = nil
         refreshTask?.cancel()
         refreshTask = nil
     }
@@ -131,10 +168,15 @@ public final class AppState: ObservableObject {
         if userInitiated, SessionStore.shared.isAccessDenied {
             SessionStore.shared.invalidateCache()
         }
+        // Asking is exactly the thing a cooldown must not refuse.
+        if userInitiated {
+            cooldownUntil.removeAll()
+            consecutiveFailures.removeAll()
+        }
         isRefreshing = true
-        defer { isRefreshing = false; lastRefresh = Date() }
+        defer { isRefreshing = false; lastRefresh = oldestSnapshotDate() }
         await withTaskGroup(of: (String, Result<UsageData, ProviderError>).self) { group in
-            for provider in providers where provider.isEnabled {
+            for provider in providers where provider.isEnabled && isDue(provider.id) {
                 let id = provider.id
                 group.addTask {
                     do {
@@ -149,7 +191,64 @@ public final class AppState: ObservableObject {
             }
             for await (id, result) in group {
                 snapshots[id] = clarify(result)
+                fetchedAt[id] = Date()
+                noteOutcome(id, result)
                 await discardRejectedCredential(id, result)
+                // A key kept through a 403 had its row flag dropped; an answer
+                // means it works after all, so let the row say so again.
+                if case .success = result, let provider = provider(for: id), !provider.isAuthenticated {
+                    await provider.syncAuthState()
+                }
+            }
+        }
+    }
+
+    /// The age the panel should report: that of the stalest snapshot it is
+    /// showing. A sweep that skipped a cooled-down provider has not made that
+    /// provider's numbers any newer, and "updated just now" over half-hour-old
+    /// figures is the one thing this app must not say.
+    private func oldestSnapshotDate() -> Date? {
+        providers
+            .filter { $0.isEnabled && snapshots[$0.id] != nil }
+            .compactMap { fetchedAt[$0.id] }
+            .min()
+    }
+
+    /// True unless this provider is serving a backoff.
+    private func isDue(_ providerID: String) -> Bool {
+        guard let until = cooldownUntil[providerID] else { return true }
+        return until <= Date()
+    }
+
+    /// Backs a failing provider off instead of asking again on the next tick.
+    ///
+    /// A 429 answered at the same cadence for hours, with the user's own session
+    /// cookie, is the traffic pattern that gets an account flagged. A success
+    /// clears the mark; so does the user clicking refresh.
+    private func noteOutcome(_ providerID: String, _ result: Result<UsageData, ProviderError>) {
+        switch result {
+        case .success:
+            cooldownUntil[providerID] = nil
+            consecutiveFailures[providerID] = 0
+        case .failure(.rateLimited):
+            // Being told to slow down is worth taking literally, from the first one.
+            consecutiveFailures[providerID, default: 0] += 1
+            cooldownUntil[providerID] = Date().addingTimeInterval(
+                max(300, Double(refreshIntervalSeconds) * 5)
+            )
+        case .failure(.sessionExpired), .failure(.notAuthenticated):
+            // Already handled: the credential is dropped and the row says "Not
+            // connected", so there is nothing left to back off from.
+            cooldownUntil[providerID] = nil
+            consecutiveFailures[providerID] = 0
+        case .failure:
+            // The first couple are usually a blip. After that, double the wait
+            // each time up to half an hour.
+            let count = consecutiveFailures[providerID, default: 0] + 1
+            consecutiveFailures[providerID] = count
+            if count >= 3 {
+                let delay = min(1800, Double(refreshIntervalSeconds) * pow(2, Double(count - 2)))
+                cooldownUntil[providerID] = Date().addingTimeInterval(delay)
             }
         }
     }
@@ -165,6 +264,12 @@ public final class AppState: ObservableObject {
     ///
     /// The sign-out mark is deliberately not set: the session expired on its
     /// own, so a fresh one appearing in the browser should still be adopted.
+    ///
+    /// Only a browser cookie is thrown away, because only a browser cookie can be
+    /// re-derived. `sessionExpired` covers every 401 and 403, so a Cloudflare
+    /// challenge or a captive portal after a wake looks exactly like an expiry —
+    /// and deleting a pasted key over one of those loses something the user
+    /// cannot get back by relaunching.
     private func discardRejectedCredential(
         _ providerID: String,
         _ result: Result<UsageData, ProviderError>
@@ -173,6 +278,12 @@ public final class AppState: ObservableObject {
               case .sessionExpired = error,
               let provider = provider(for: providerID)
         else { return }
+        guard SessionStore.shared.credential(for: providerID)?.source == .browserCookie else {
+            // Drop the connected flag so the row stops claiming it works, but
+            // keep the key: a recovered endpoint starts working on the next tick.
+            provider.isAuthenticated = false
+            return
+        }
         SessionStore.shared.clear(providerID)
         await provider.syncAuthState()
         provider.isAuthenticated = false
@@ -245,14 +356,64 @@ public final class AppState: ObservableObject {
     /// Gives every discovered session a provider of its own.
     ///
     /// The first keeps the plain service id so existing settings and stored
-    /// keys carry over; the rest get "<service>#<n>". Providers are reused
-    /// across sweeps by matching the credential, so a session that moves
-    /// between profiles doesn't spawn a duplicate row.
+    /// keys carry over; the rest get "<service>#<n>". A session is matched back
+    /// to the account that already holds it, or failing that to the account
+    /// whose stored hint names the same browser profile, and only then falls
+    /// back to the lowest free slot. Position in the discovery list is not an
+    /// identity: sign out of Chrome's default profile and everything after it
+    /// shifts down a place, which would hand one account's name, hidden flag and
+    /// sign-out mark to another.
     private func attach(_ sessions: [BrowserCookie], to service: Service) -> [String] {
+        func identity(_ slot: Int) -> (id: String, accountID: String?) {
+            slot <= 1 ? (service.id, nil) : ("\(service.id)#\(slot)", String(slot))
+        }
+        func slot(_ provider: AnyUsageProvider) -> Int {
+            provider.accountID.flatMap(Int.init) ?? 1
+        }
+
+        var hints: [String: String] = [:]
+        for credential in SessionStore.shared.allCredentials() {
+            if let hint = credential.accountHint { hints[credential.providerID] = hint }
+        }
+        let siblings = providers.filter { $0.serviceID == service.id }
+
+        var slots: [Int?] = Array(repeating: nil, count: sessions.count)
+        var claimed: Set<Int> = []
+        // Two rules, strongest first: the session an account already holds
+        // identifies it wherever it turned up this time, and the stored profile
+        // hint takes over across launches, once the browser-derived token is gone.
+        // Both run before anything is handed out positionally, or a new session
+        // takes the slot of an account one of them would have recognised.
+        let rules: [(AnyUsageProvider, BrowserCookie) -> Bool] = [
+            { provider, cookie in
+                // Only browser-derived credentials are compared: the pasted ones
+                // are in the Keychain, and reading them here would raise a dialog
+                // during the silent launch sweep.
+                SessionStore.shared.credential(for: provider.id)?.source == .browserCookie
+                    && SessionStore.shared.token(for: provider.id) == cookie.value
+            },
+            { provider, cookie in hints[provider.id] == cookie.origin }
+        ]
+        for rule in rules {
+            for (index, cookie) in sessions.enumerated() where slots[index] == nil {
+                guard let match = siblings.first(where: {
+                    !claimed.contains(slot($0)) && rule($0, cookie)
+                }) else { continue }
+                slots[index] = slot(match)
+                claimed.insert(slot(match))
+            }
+        }
+        var next = 1
+        for index in sessions.indices where slots[index] == nil {
+            while claimed.contains(next) { next += 1 }
+            slots[index] = next
+            claimed.insert(next)
+        }
+
         var adopted: [String] = []
         for (index, cookie) in sessions.enumerated() {
-            let accountID = index == 0 ? nil : String(index + 1)
-            let id = accountID.map { "\(service.id)#\($0)" } ?? service.id
+            guard let slot = slots[index] else { continue }
+            let (id, accountID) = identity(slot)
 
             // A deliberate sign-out outranks a session sitting in a browser.
             if Self.signedOutProviders.contains(id) { continue }
@@ -264,16 +425,37 @@ public final class AppState: ObservableObject {
             }()
 
             // Nothing to do if this provider already holds this exact session.
-            guard SessionStore.shared.token(for: id) != cookie.value else { continue }
+            guard SessionStore.shared.token(for: id) != cookie.value else {
+                rememberOrigin(cookie.origin, for: id)
+                continue
+            }
             do {
                 try provider.adoptBrowserSession(cookie.value)
                 provider.browserOrigin = cookie.origin
+                rememberOrigin(cookie.origin, for: id)
                 adopted.append(id)
             } catch {
                 continue
             }
         }
         return adopted
+    }
+
+    /// Records which browser profile an account's session was last seen in, so
+    /// the next launch can find it again by something other than its position.
+    ///
+    /// Refreshed rather than written once: `searchAll` dedupes on the value and
+    /// reports whichever browser it scanned first, so an account signed into both
+    /// Safari and Chrome changes origin when one of them signs out.
+    private func rememberOrigin(_ origin: String, for providerID: String) {
+        guard let credential = SessionStore.shared.credential(for: providerID),
+              credential.source == .browserCookie,
+              credential.accountHint != origin,
+              let token = SessionStore.shared.token(for: providerID)
+        else { return }
+        try? SessionStore.shared.setToken(
+            token, for: providerID, source: .browserCookie, accountHint: origin
+        )
     }
 
     /// Drops extra accounts that no longer have a session, so signing out of a
@@ -289,6 +471,9 @@ public final class AppState: ObservableObject {
     public func refresh(_ providerID: String) async {
         guard let provider = provider(for: providerID) else { return }
         snapshots.removeValue(forKey: providerID)
+        // The user asked for this one by name, so any backoff it was serving goes.
+        cooldownUntil[providerID] = nil
+        consecutiveFailures[providerID] = 0
         if SessionStore.shared.isAccessDenied {
             // A per-row refresh is a user action, so retry the Keychain.
             SessionStore.shared.invalidateCache()
