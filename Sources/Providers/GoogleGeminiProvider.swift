@@ -288,9 +288,10 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
         // Google rotates __Secure-1PSIDTS within minutes, so the browser is
         // still consulted every fetch — but only for this account's own profile.
         let wanted = stored.contains("=") ? nil : stored
-        if let live = await Task.detached(priority: .utility) { [wanted] in
+        let lookup = Task.detached(priority: .utility) { [wanted] in
             GoogleGeminiProvider.browserCookies(matching: wanted)
-        }.value {
+        }
+        if let live = await lookup.value {
             return live.header
         }
 
