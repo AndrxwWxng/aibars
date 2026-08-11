@@ -26,8 +26,10 @@ public struct UsageMetric: Codable, Hashable {
     }
 
     public var percent: Double {
-        guard limit > 0 else { return 0 }
-        return min(used / limit, 1.0)
+        // A NaN or infinite figure from a provider must not reach the meter:
+        // `min(NaN, 1.0)` is NaN, and `Int(NaN)` traps at the call sites.
+        guard limit > 0, limit.isFinite, used.isFinite else { return 0 }
+        return min(max(used / limit, 0), 1.0)
     }
 
     public var displayUsed: String { Self.format(used) }
