@@ -6,22 +6,14 @@ private extension String {
 
 /// The settings window's type, by role.
 ///
-/// Three sizes and three weights for the whole window, named by role rather
+/// Three sizes and two weights for the whole window, named by role rather
 /// than written out at each call site: the browser row and the service row read
 /// as the same kind of thing and were 12pt and 13pt in adjacent sections of one
 /// form, which shows up only as a wobble in the line the eye lands on first.
 private extension Font {
-    /// A dialog's headline — the one place the heavier weight is used.
-    static var paneHeadline: Font {
-        .system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight)
-    }
     /// A row's subject: a service, a browser, the app's own name.
     static var paneTitle: Font {
         .system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight)
-    }
-    /// The label over a field.
-    static var paneLabel: Font {
-        .system(size: Tokens.Ramp.body, weight: Tokens.Ramp.emphasisWeight)
     }
     /// Prose, and whatever is typed into a field.
     static var paneBody: Font { .system(size: Tokens.Ramp.body) }
@@ -403,7 +395,7 @@ public struct SettingsView: View {
     /// A literal that cannot fail — but `!` is not allowed to be the reason it
     /// cannot, and a missing link is a quiet corner of an About pane rather than
     /// a crash on the way in.
-    private static let repository = URL(string: "https://github.com/aibars/aibars")
+    private static let repository = URL(string: "https://github.com/AndrxwWxng/aibars")
 
     private var aboutTab: some View {
         VStack(spacing: Tokens.Space.large) {

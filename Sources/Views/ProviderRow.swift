@@ -121,6 +121,14 @@ public struct ProviderRow: View {
                         thickness: metrics.barHeight,
                         tint: tint(for: primaryPercent ?? 0)
                     )
+                    // A dial is a shape and says nothing on its own, so it is
+                    // made an element and given its reading — but only where
+                    // there is one. The placeholder above would otherwise
+                    // announce "0% used" on every disconnected row.
+                    .accessibilityElement()
+                    .accessibilityLabel("Usage")
+                    .accessibilityValue(ringValue)
+                    .accessibilityHidden(primaryPercent == nil)
                 }
             }
             .padding(.top, Tokens.Space.hairline)
@@ -434,6 +442,13 @@ public struct ProviderRow: View {
         return data.primary.percent
     }
 
+    /// What the leading dial reads out. Empty when it is a placeholder, which is
+    /// also when it is hidden from assistive tech.
+    private var ringValue: String {
+        guard let percent = primaryPercent else { return "" }
+        return "\(Int((min(max(percent, 0), 1) * 100).rounded()))% used"
+    }
+
     /// Who this row is. The service's own answer when it gives one, otherwise
     /// the browser profile the session came from — which is at least enough to
     /// tell two accounts apart.
@@ -491,6 +506,8 @@ public struct RowActions: View {
     public let onRefresh: () -> Void
     public let onOpenDashboard: () -> Void
 
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
     public init(
         visibility: AppearanceSettings.RowActionVisibility,
         isHovered: Bool,
@@ -509,7 +526,10 @@ public struct RowActions: View {
 
     private var isShown: Bool {
         switch visibility {
-        case .onHover: return isHovered
+        // A hover that never happens hides these buttons for good from anyone
+        // driving the app by voice, and the space is reserved either way — so
+        // under VoiceOver "on hover" simply means shown.
+        case .onHover: return isHovered || voiceOverEnabled
         case .always:  return true
         case .never:   return false
         }
@@ -578,7 +598,7 @@ public struct UsageBar: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: captionGap) {
+        let bar = VStack(alignment: .leading, spacing: captionGap) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
@@ -596,6 +616,21 @@ public struct UsageBar: View {
             .frame(height: height)
 
             if caption.hasContent { caption }
+        }
+        // Two capsules say nothing out loud — the fill fraction is the whole
+        // reading, so it is spoken as the meter's value. Clamped, because an
+        // overage would otherwise announce "137% used".
+        .accessibilityElement(children: .combine)
+        .accessibilityValue("\(Int((min(max(metric.percent, 0), 1) * 100).rounded()))% used")
+
+        // The caption's own text is the label whenever one is drawn, and naming
+        // the bar here would throw the amounts and the countdown away. With both
+        // halves of the caption switched off there is no text left, so then — and
+        // only then — the window names itself.
+        if caption.hasContent {
+            bar
+        } else {
+            bar.accessibilityLabel(metric.label)
         }
     }
 

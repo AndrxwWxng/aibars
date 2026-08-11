@@ -235,17 +235,25 @@ public struct ConnectDialog: View {
     private var tokenEntry: some View {
         VStack(alignment: .leading, spacing: Tokens.Space.small) {
             if flow.needsEndpoint {
+                // The caption is the visible label and the field's title is the
+                // spoken one, so they say the same thing and only the caption is
+                // drawn. Hidden from VoiceOver, which would otherwise read the
+                // name twice on the way through the stack.
                 Text("Usage endpoint")
                     .font(.system(size: Tokens.Ramp.label))
                     .foregroundStyle(.secondary)
-                TextField("https://api.example.com/usage", text: $flow.endpoint)
+                    .accessibilityHidden(true)
+                TextField("Usage endpoint", text: $flow.endpoint, prompt: Text("https://api.example.com/usage"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
             }
             Text(tokenFieldLabel)
                 .font(.system(size: Tokens.Ramp.label))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             HStack(spacing: Tokens.Space.medium) {
-                SecureField("Token…", text: $flow.pastedToken)
+                SecureField(tokenFieldLabel, text: $flow.pastedToken, prompt: Text("Token…"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { submit() }
                 Button("Save") { submit() }
@@ -253,9 +261,20 @@ public struct ConnectDialog: View {
                     // Also off while a save is in flight: Return and a click on
                     // Save are two submissions of the same field, and the second
                     // one saves and verifies a token the first already cleared.
-                    .disabled(flow.isBusy
+                    .disabled(isSubmitting
                               || flow.pastedToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+        }
+    }
+
+    /// Whether a save is already in flight. Narrower than `flow.isBusy`, which
+    /// is "a spinner belongs here" and so covers `.watching` too — and greying
+    /// the field out for the whole ten-minute watch would kill the one escape
+    /// hatch that stage offers.
+    private var isSubmitting: Bool {
+        switch flow.stage {
+        case .captured, .verifying: return true
+        default: return false
         }
     }
 
@@ -363,7 +382,7 @@ public struct ConnectDialog: View {
     private func submit() {
         // Return bypasses the Save button's disabled state, so the guard has to
         // be here too.
-        guard !flow.isBusy else { return }
+        guard !isSubmitting else { return }
         Task { await flow.submitToken() }
     }
 }

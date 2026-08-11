@@ -242,6 +242,10 @@ public final class ConnectionFlow: ObservableObject {
     /// Found, readable, and already connected to another account of this service.
     private var claimedAway: [Candidate] = []
     private var watchTask: Task<Void, Never>?
+    /// The one-shot work: a sweep, an adoption, a retried fetch. Held separately
+    /// from `watchTask` because `watch(for:)` cancels that one, and a sweep that
+    /// ends in `watch(for: nil)` would otherwise cancel itself mid-triage.
+    private var sweepTask: Task<Void, Never>?
     /// A Keychain dialog only ever appears because the user asked for it, so
     /// every sweep is silent until they press Unlock or Check now.
     private var mayPromptKeychain = false
@@ -316,9 +320,14 @@ public final class ConnectionFlow: ObservableObject {
 
     private func checkThenConnect() {
         stage = .checkingBrowser
-        Task { [weak self] in
+        sweepTask?.cancel()
+        sweepTask = Task { [weak self] in
             guard let self else { return }
             let sweep = await self.sweep(allowingKeychainPrompt: false)
+            // Copying every browser's cookie database takes seconds, and the
+            // dialog's way out during them says "Cancel". Without this, closing
+            // it still opened a login page and started a ten-minute poll.
+            guard !Task.isCancelled else { return }
             await self.triage(sweep)
         }
     }
@@ -326,7 +335,8 @@ public final class ConnectionFlow: ObservableObject {
     public func perform(_ action: Action) {
         switch action {
         case .connectTo(let candidate):
-            Task { await adopt(candidate) }
+            sweepTask?.cancel()
+            sweepTask = Task { await adopt(candidate) }
         case .signInAgain:
             openPage()
             ignoreExistingSessions()
@@ -334,13 +344,16 @@ public final class ConnectionFlow: ObservableObject {
         case .openPageAgain:
             openPage()
         case .checkNow:
-            Task { await checkNow() }
+            sweepTask?.cancel()
+            sweepTask = Task { await checkNow() }
         case .unlock:
-            Task { await unlock() }
+            sweepTask?.cancel()
+            sweepTask = Task { await unlock() }
         case .fullDiskAccess:
             WebLoginEnvironment.openFullDiskAccessSettings()
         case .retryFetch:
-            Task {
+            sweepTask?.cancel()
+            sweepTask = Task {
                 // A refused Keychain read is cached for the life of the process,
                 // so the retry would read the same refusal back and the button
                 // would provably do nothing. `AppState.refreshAll` clears it for
@@ -361,6 +374,15 @@ public final class ConnectionFlow: ObservableObject {
     }
 
     public func cancel() {
+        stopWatching()
+        sweepTask?.cancel()
+        sweepTask = nil
+    }
+
+    /// Ends the poll and nothing else. `adopt` and `submitToken` run inside the
+    /// sweep task themselves, so the full `cancel()` there would cancel the save
+    /// they are in the middle of and report it as the service not responding.
+    private func stopWatching() {
         watchTask?.cancel()
         watchTask = nil
     }
@@ -585,6 +607,7 @@ public final class ConnectionFlow: ObservableObject {
 
         stage = .checkingBrowser
         let sweep = await self.sweep(allowingKeychainPrompt: true)
+        guard !Task.isCancelled else { return }
         recordKeychainOutcome(sweep)
 
         let arrivals = acceptable(from: sweep.candidates, matching: target)
@@ -610,6 +633,7 @@ public final class ConnectionFlow: ObservableObject {
         allowKeychainPrompt()
         stage = .checkingBrowser
         let sweep = await self.sweep(allowingKeychainPrompt: true)
+        guard !Task.isCancelled else { return }
         recordKeychainOutcome(sweep)
         await triage(sweep)
     }
@@ -621,7 +645,7 @@ public final class ConnectionFlow: ObservableObject {
             stage = .failed(message: "That session went away before aibars could read it.")
             return
         }
-        cancel()
+        stopWatching()
         stage = .captured(origin: candidate.label)
         await save(value, source: .browserCookie, origin: candidate.label)
     }
@@ -642,7 +666,7 @@ public final class ConnectionFlow: ObservableObject {
             }
             provider.configure(endpoint: trimmed, planName: "API")
         }
-        cancel()
+        stopWatching()
         await save(token, source: .manualPaste, origin: nil)
     }
 

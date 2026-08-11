@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The app's own mark: a small bar chart on a baseline.
 ///
@@ -82,6 +83,12 @@ public struct UsageMeterGlyph: View {
                 .frame(width: totalWidth, height: baselineHeight)
         }
         .frame(width: totalWidth, height: height, alignment: .bottom)
+        // The status item rasterises this view through `ImageRenderer`, which
+        // draws in the light appearance whatever the menu bar is doing — so the
+        // usage ramp would bake its light-panel colours into a dark menu bar.
+        // Pinning the scheme to the app's own appearance is a no-op everywhere
+        // the glyph is drawn as a live view.
+        .environment(\.colorScheme, MenuBarIcon.isDarkMenuBar ? .dark : .light)
     }
 
     /// An empty bar stays as a faint stub on the axis — present, but clearly
@@ -98,10 +105,29 @@ public struct UsageMeterGlyph: View {
 public enum UsageTint {
     public static func color(for percent: Double) -> Color {
         switch percent {
-        case ..<0.60: return Color(hex: 0x30A46C)   // green
-        case ..<0.85: return Color(hex: 0xE0A200)   // amber
-        default:      return Color(hex: 0xE5484D)   // red
+        case ..<0.60: return ramp(light: 0x136F41, dark: 0x30A46C)   // green
+        case ..<0.85: return ramp(light: 0x8F6100, dark: 0xE0A200)   // amber
+        default:      return ramp(light: 0xC62A2F, dark: 0xE5484D)   // red
         }
+    }
+
+    /// One stop on the ramp, resolved against the appearance it is drawn in.
+    ///
+    /// The ramp is also the text colour for the percentage readouts, and one
+    /// fixed value cannot serve both appearances: the dark values sit at
+    /// 2.2:1–3.9:1 on a light panel, well under the 4.5:1 that body text needs.
+    /// The dark values are the originals; the light ones are the same hues
+    /// darkened until they clear it.
+    private static func ramp(light: UInt32, dark: UInt32) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let hex = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(
+                srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                green:   CGFloat((hex >>  8) & 0xFF) / 255,
+                blue:    CGFloat( hex        & 0xFF) / 255,
+                alpha:   1
+            )
+        })
     }
 
     /// Menu bar tint — nil below the threshold so the glyph stays monochrome
