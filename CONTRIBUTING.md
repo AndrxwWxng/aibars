@@ -5,7 +5,7 @@ Thanks for taking a look. Here's how to get set up and submit a change.
 ## Setup
 
 1. `brew install xcodegen`
-2. `git clone https://github.com/aibars/aibars && cd aibars`
+2. `git clone https://github.com/AndrxwWxng/aibars && cd aibars`
 3. `xcodegen generate`
 4. `open aibars.xcodeproj`
 
@@ -79,7 +79,7 @@ Updated stuff and fixed the logos and added gemini
 
 See the [README](README.md#adding-a-new-provider) for the template.
 
-The most common additions are: Perplexity, Windsurf, Cody, Replit, v0, Notion AI, Notion, JetBrains AI, Cody (Sourcegraph), Augment Code.
+Commonly requested but not yet built: Windsurf, Cody (Sourcegraph), Replit, v0, Notion AI, JetBrains AI, Augment Code.
 
 ## Style
 
