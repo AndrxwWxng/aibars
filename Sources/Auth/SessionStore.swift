@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Where a session credential is stored.
 public enum SessionSource: String, Codable {
@@ -92,7 +93,12 @@ public final class SessionStore {
     public func clear(_ providerID: String) {
         ephemeral.withLock { $0[providerID] = nil }
         // Only touch the Keychain if this provider actually had something there.
-        let wasPersisted = loadMeta()[providerID].map { $0.source != .browserCookie } ?? false
+        // The metadata alone isn't enough: a pasted key stays in the item after
+        // a browser cookie is adopted for the same provider and rewrites the
+        // source, so the already-loaded cache gets a say too. Reading the cache
+        // is not a Keychain operation, so it can't raise a dialog by itself.
+        let cached = persisted.withLock { $0?[providerID] != nil }
+        let wasPersisted = (loadMeta()[providerID].map { $0.source != .browserCookie } ?? false) || cached
         if wasPersisted {
             var current = loadPersisted()
             if current.removeValue(forKey: providerID) != nil {
@@ -159,6 +165,11 @@ public final class SessionStore {
             if let data, let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
                 result = decoded
             }
+            // Only what the metadata still vouches for. `clear` always removes
+            // the metadata entry, so anything left in the item belongs to a
+            // provider the user signed out of and must not be served back.
+            let allowed = Set(irreplaceable.map(\.providerID))
+            result = result.filter { allowed.contains($0.key) }
             accessDenied.withLock { $0 = false }
         case .denied:
             // Cache the refusal. Leaving it unset meant every provider's fetch
@@ -170,24 +181,44 @@ public final class SessionStore {
             return [:]
         }
 
-        let migrated = migrateLegacyItems(into: &result, irreplaceable: irreplaceable.map(\.providerID))
+        let migratedIDs = migrateLegacyItems(into: &result, irreplaceable: irreplaceable.map(\.providerID))
         persisted.withLock { $0 = result }
-        if migrated {
-            try? persist(result)
+        if !migratedIDs.isEmpty {
+            do {
+                try persist(result)
+                // Only now is the combined item the authoritative copy, so the
+                // originals can go.
+                for providerID in migratedIDs { KeychainStore.delete(tokenKey(providerID)) }
+            } catch {
+                // The legacy items stay where they are: the next launch retries
+                // the migration with the credential still recoverable. Record a
+                // refusal too, so the UI says "Keychain access denied" instead
+                // of "you never signed in".
+                switch (error as? KeychainError)?.status {
+                case errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed:
+                    accessDenied.withLock { $0 = true }
+                default:
+                    break
+                }
+            }
         }
         return result
     }
 
     /// Earlier builds stored one item per provider.
     ///
-    /// Only pasted credentials are migrated, and nothing is deleted here.
-    /// Deleting a Keychain item is itself an authorised operation, so tidying
-    /// away the browser-derived leftovers cost one dialog each — which is how a
-    /// change meant to stop the prompts ended up causing a burst of them. The
-    /// leftovers are inert: nothing reads them, and the sessions they hold are
-    /// re-derived from the browser anyway.
-    private func migrateLegacyItems(into result: inout [String: String], irreplaceable: [String]) -> Bool {
-        var moved = false
+    /// Only pasted credentials are migrated. Returns the ids that were read, so
+    /// the caller can delete their old items once the combined write has landed
+    /// — deleting them here would throw away the only durable copy if that write
+    /// is refused.
+    ///
+    /// The browser-derived leftovers are not touched at all. Deleting a Keychain
+    /// item is itself an authorised operation, so tidying them away cost one
+    /// dialog each — which is how a change meant to stop the prompts ended up
+    /// causing a burst of them. They are inert: nothing reads them, and the
+    /// sessions they hold are re-derived from the browser anyway.
+    private func migrateLegacyItems(into result: inout [String: String], irreplaceable: [String]) -> [String] {
+        var moved: [String] = []
         for providerID in irreplaceable where result[providerID] == nil {
             guard case .success(let data) = KeychainStore.read(tokenKey(providerID)),
                   let data,
@@ -195,10 +226,7 @@ public final class SessionStore {
                   !value.isEmpty
             else { continue }
             result[providerID] = value
-            // Safe to remove: reading it just succeeded, so this is covered by
-            // the same authorisation.
-            KeychainStore.delete(tokenKey(providerID))
-            moved = true
+            moved.append(providerID)
         }
         return moved
     }
