@@ -120,14 +120,6 @@ public enum CookieExtractors {
         }
     }
 
-    /// Forgets the cached extractors, so a browser installed mid-session is
-    /// picked up on the next pass. This also discards derived keys, so prefer
-    /// `retryLockedKeys()` when the only thing that changed is the user's mind
-    /// about a keychain prompt.
-    public static func invalidate() {
-        cached.withLock { $0 = nil }
-    }
-
     /// Lets a previously refused keychain read be attempted again, without
     /// throwing away the keys that already worked.
     ///
@@ -541,16 +533,6 @@ public enum CookieExtractors {
         )
     }
 
-    /// True when a browser's cookies can be read without putting a keychain
-    /// dialog on screen — either it needs no key, or the key is already derived.
-    public static func canReadSilently(_ browser: BrowserCookie.Browser) -> Bool {
-        available().contains { extractor in
-            guard extractor.browser == browser else { return false }
-            guard let chromium = extractor as? ChromeCookieExtractor else { return true }
-            return chromium.hasCachedKey
-        }
-    }
-
     /// As above, for services that write one of several cookie names depending
     /// on when the account last signed in.
     public static func firstAvailableCookie(
@@ -570,7 +552,7 @@ public enum CookieExtractors {
 
     private static func matches(domain cookieDomain: String, _ wanted: String) -> Bool {
         let host = cookieDomain.hasPrefix(".") ? String(cookieDomain.dropFirst()) : cookieDomain
-        return host == wanted || host.hasSuffix("." + wanted) || host.contains(wanted)
+        return host == wanted || host.hasSuffix("." + wanted)
     }
 
     /// Prefers a whole cookie, then falls back to reassembling a chunked one.
@@ -609,7 +591,8 @@ public enum CookieExtractors {
             domain: first.domain,
             path: first.path,
             expiresAt: first.expiresAt,
-            source: first.source
+            source: first.source,
+            profile: first.profile
         )
     }
 }
