@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import Combine
 
 /// How the dropdown, its rows, and the menu bar mark are drawn.
 ///

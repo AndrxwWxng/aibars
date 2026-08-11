@@ -221,7 +221,8 @@ public struct AppearancePane: View {
             if appearance.colorRamp == .accent {
                 LabeledContent("Accent colour") {
                     HStack(spacing: Tokens.Space.medium) {
-                        ColorPicker("", selection: appearance.accentColorBinding, supportsOpacity: false)
+                        // Labelled for VoiceOver and then hidden.
+                        ColorPicker("Accent colour", selection: appearance.accentColorBinding, supportsOpacity: false)
                             .labelsHidden()
                         if appearance.accentColorHex != nil {
                             Button("Use system") { appearance.accentColorHex = nil }

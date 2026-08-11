@@ -13,7 +13,7 @@ import AppKit
 public enum MenuBarIcon {
     /// Status bar glyphs sit in a 22pt bar; 13pt of drawing with integral width
     /// keeps the bars crisp.
-    public static let height: CGFloat = 13
+    nonisolated public static let height: CGFloat = 13
 
     private static let cache = Lock<[String: NSImage]>([:])
 
