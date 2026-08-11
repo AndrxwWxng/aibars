@@ -85,13 +85,14 @@ public struct SettingsView: View {
     )
 
     enum Pane: String, CaseIterable, Identifiable {
-        case services, appearance, general, about
+        case services, appearance, alerts, general, about
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .services: return "Services"
             case .appearance: return "Appearance"
+            case .alerts:   return "Alerts"
             case .general:  return "General"
             case .about:    return "About"
             }
@@ -101,6 +102,7 @@ public struct SettingsView: View {
             switch self {
             case .services: return "square.grid.2x2"
             case .appearance: return "paintbrush"
+            case .alerts:   return "bell"
             case .general:  return "gearshape"
             case .about:    return "info.circle"
             }
@@ -158,6 +160,7 @@ public struct SettingsView: View {
         switch pane {
         case .services: providersTab
         case .appearance: AppearancePane()
+        case .alerts:   AlertsPane()
         case .general:  generalTab
         case .about:    aboutTab
         }
@@ -167,6 +170,16 @@ public struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
+            // First, because it is the first thing a Mac user comes to General
+            // looking for, and because it is the one setting here that decides
+            // whether the app is running at all — an app that has to be launched
+            // by hand every morning is a menu bar app you stop having.
+            //
+            // It carries its own failure line: `SMAppService` refuses to register
+            // a copy running out of Downloads or DerivedData, and the section
+            // says so in place rather than leaving a switch that unticks itself.
+            LaunchAtLoginSection()
+
             Section("Refresh") {
                 Picker("Interval", selection: $state.refreshIntervalSeconds) {
                     Text("30 seconds").tag(30)
@@ -179,18 +192,9 @@ public struct SettingsView: View {
                     state.stop(); state.start()
                 }
             }
-            Section {
-                // The menu bar mark and everything else about how the panel
-                // looks lives in Appearance now; two homes for one setting is
-                // how they drift apart.
-                LabeledContent("Appearance") {
-                    Text("Density, colours, the menu bar mark and more")
-                        .font(.paneCaption)
-                        .foregroundStyle(.secondary)
-                }
-            } footer: {
-                PaneFooter(text: "See the Appearance tab.")
-            }
+            // No signpost section to Appearance: it is two rows up in the
+            // sidebar, and a row that describes a tab without linking to it is
+            // filler that reads like a broken control.
         }
         .formStyle(.grouped)
     }
