@@ -23,7 +23,7 @@ jobs:
         run: xcodegen generate
 
       - name: Build
-        run: xcodebuild -project aibars.xcodeproj -scheme aibars -destination 'platform=macOS' build | xcpretty || true
+        run: xcodebuild -project aibars.xcodeproj -scheme aibars -destination 'platform=macOS' build
 
       - name: Test
         run: xcodebuild -project aibars.xcodeproj -scheme aibars -destination 'platform=macOS' test
