@@ -28,6 +28,17 @@ public struct MenuBarContentView: View {
     /// connected" disclosure's state to whatever block takes its place.
     @State private var expandedSections: Set<String> = []
 
+    /// Section ids currently drawn whole: no chevron, every row showing.
+    ///
+    /// Tracked because that is a state a block can *leave* under the user. The
+    /// not-connected block is built uncollapsible while nothing is connected, so
+    /// a first-time user opens the panel onto eleven visible rows — and the
+    /// moment the launch sweep adopts two sessions the same block gains a
+    /// chevron and folds itself, taking nine rows and a third of the window's
+    /// height with it while they are being read. A block that was open when it
+    /// gained its disclosure stays open; folding it by hand still sticks.
+    @State private var uncollapsibleSections: Set<String> = []
+
     /// Room the panel leaves the screen: the menu bar above it, its own header,
     /// and a margin at the bottom so the last row isn't flush with the dock.
     private static let screenReserve: CGFloat = 160
@@ -48,16 +59,39 @@ public struct MenuBarContentView: View {
         // AppearanceSettings; the panel only draws what comes back.
         let sections = appearance.sections(from: state.rankedProviders, snapshots: state.snapshots)
         return VStack(spacing: 0) {
-            header
+            header(firstRow: sections.first?.providers.first)
             Divider().opacity(Tokens.Fill.divider)
 
             if sections.isEmpty {
                 emptyState
             } else {
+                if hasNothingConnected { orientation }
                 list(sections)
             }
         }
         .frame(width: CGFloat(appearance.panelWidth))
+        // Expansion follows the shape of the list, so it can only move when the
+        // list's own structure does — never when a percentage changes.
+        .onAppear { adoptExpansion(of: sections) }
+        .onChange(of: shape(of: sections)) { _ in adoptExpansion(of: sections) }
+    }
+
+    /// What `adoptExpansion` watches: which blocks exist and which of them carry
+    /// a disclosure.
+    private func shape(of sections: [PanelSection]) -> String {
+        sections.map { "\($0.id):\($0.isCollapsible)" }.joined(separator: "|")
+    }
+
+    private func adoptExpansion(of sections: [PanelSection]) {
+        // A lone block loses its disclosure whatever it asked for, so it counts
+        // as drawn whole here too — the same rule `block(_:isFirst:isOnly:)`
+        // draws by.
+        let isOnly = sections.count == 1
+        for section in sections
+        where section.isCollapsible && !isOnly && uncollapsibleSections.contains(section.id) {
+            expandedSections.insert(section.id)
+        }
+        uncollapsibleSections = Set(sections.filter { !$0.isCollapsible || isOnly }.map(\.id))
     }
 
     // MARK: - List
@@ -169,16 +203,21 @@ public struct MenuBarContentView: View {
 
     // MARK: - Header
 
-    private var header: some View {
+    private func header(firstRow: AnyUsageProvider?) -> some View {
         PanelHeader(
             appearance: appearance,
             levels: state.usageLevels,
             topPercent: state.topUsagePercent,
-            summary: state.headlineSummary
+            summary: headerSubtitle(firstRow: firstRow)
         ) {
             // Refresh, settings and quit are never hideable: they are the only
             // way out of an app with no Dock icon and no window.
-            if state.isRefreshing {
+            //
+            // The sweep counts as refreshing here: the panel a first-time user
+            // opens ten seconds after install is mid-adoption, and a spun-down
+            // refresh glyph over an empty list presents "nothing connected" as
+            // a finished answer rather than a question still being asked.
+            if state.isRefreshing || state.isAdopting {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.8)
@@ -202,6 +241,35 @@ public struct MenuBarContentView: View {
             }
             .keyboardShortcut("q")
         }
+    }
+
+    /// The line under the title: what the panel most needs to say, and how old
+    /// the numbers beneath it are.
+    ///
+    /// `updatedText` is the only answer this app has to "when was this from?",
+    /// which in a poller reading undocumented endpoints on a backoff schedule is
+    /// the second question every number raises — and it lived exclusively inside
+    /// the refresh button's tooltip, where nobody hovers until they have already
+    /// decided to distrust the reading.
+    private func headerSubtitle(firstRow: AnyUsageProvider?) -> String {
+        let summary = state.headlineSummary
+        // Nothing has been fetched, so there is no age to report and the summary
+        // is already saying so.
+        guard state.lastRefresh != nil else { return summary }
+        // The default sort is by urgency, which puts the busiest service in row
+        // one — so "claude is nearly capped — 92%, caps in 40m" is the row
+        // directly beneath the header, its meter and its pace line, read back in
+        // smaller type. The pace is no exception: the row carries the same
+        // projection in its long form. Freshness is the one thing no row can
+        // say, so where the summary is a restatement it takes the slot outright
+        // rather than being appended to a line that holds exactly one and
+        // truncated off the end of it.
+        if let name = state.topProviderName,
+           firstRow?.displayName == name,
+           summary.hasPrefix(name) {
+            return updatedText
+        }
+        return "\(summary) · \(updatedText)"
     }
 
     private var updatedText: String {
@@ -245,6 +313,35 @@ public struct MenuBarContentView: View {
 
     private var hasEnabledServices: Bool {
         !state.rankedProviders.isEmpty
+    }
+
+    private var hasNothingConnected: Bool {
+        // Locked sessions are excluded deliberately. The header already says
+        // "n sessions found but locked — unlock a browser in Settings", and
+        // telling someone in larger type directly beneath it that they need not
+        // sign in again contradicts the one instruction they do have to follow.
+        !state.rankedProviders.contains(where: \.isAuthenticated)
+            && state.lockedAccounts.isEmpty
+    }
+
+    /// The one sentence a first launch gets.
+    ///
+    /// `emptyState` holds the panel's only other explanatory copy and it is
+    /// unreachable on a genuine first launch: every service ships enabled, so
+    /// the list is never empty, and what a new user actually sees is eleven rows
+    /// that each say "connect" — which reads as eleven logins to go and find.
+    /// This is the whole premise of the app, and it was written down nowhere the
+    /// panel could show it.
+    private var orientation: some View {
+        Text("aibars reads the sessions already open in your browsers. You don't need to sign in again.")
+            .font(.system(size: appearance.metrics.detailSize))
+            .foregroundStyle(.secondary)
+            // The sentence wraps at any panel width, and a wrapped Text inside a
+            // stack whose height is being fixed from below gets truncated to one
+            // line unless it is allowed to state its own.
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, Tokens.Space.gutter)
+            .padding(.top, Tokens.Space.small)
     }
 
     // MARK: - Actions
