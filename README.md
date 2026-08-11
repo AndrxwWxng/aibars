@@ -48,7 +48,7 @@ You probably pay for three or four AI tools and have no idea whether you're abou
 
 ## Install (development)
 
-Requirements: macOS 13+, Xcode 15+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+Requirements: macOS 13+, Xcode 16+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`). Xcode 16 is the floor because XcodeGen 2.45 and later write the project in a format earlier versions cannot open.
 
 ```sh
 git clone https://github.com/AndrxwWxng/aibars
