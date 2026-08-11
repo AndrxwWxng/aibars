@@ -34,7 +34,18 @@ struct aibarsApp: App {
 /// data. A menu bar app has to be working before anyone looks at it.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainActor.assumeIsolated { AppState.shared.start() }
+        MainActor.assumeIsolated {
+            AppState.shared.start()
+            // What macOS says, not what we last asked for: a login item can be
+            // removed in System Settings while the app isn't running, and the
+            // toggle in Settings has to open showing that.
+            LoginItem.shared.refresh()
+            // A no-op unless the user has already turned alerts on, so a first
+            // launch raises no permission prompt. Asking for notifications
+            // before anyone has asked for notifications is the nag this app is
+            // written to avoid.
+            Task { await AlertCenter.shared.primeIfNeeded() }
+        }
     }
 }
 
@@ -81,5 +92,9 @@ struct MenuBarLabel: View {
             }
         }
         .padding(.horizontal, 1)
+        // The status item said nothing at all to VoiceOver: a meter image with
+        // no label, or a bare "62%" with no service attached to it. The headline
+        // is already the one sentence carrying both the number and whose it is.
+        .accessibilityLabel(state.headlineSummary)
     }
 }
