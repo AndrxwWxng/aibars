@@ -178,11 +178,22 @@ public enum ChromeBasedBrowser: String, CaseIterable {
         cookieDatabases().first?.url
     }
 
+    /// Opera keeps its single profile's cookie database directly in the user
+    /// data directory, with no `Default` folder in between.
+    public var usesFlatProfileLayout: Bool {
+        self == .opera
+    }
+
     /// Chromium keeps one directory per profile beside `Default`, each with its
     /// own cookie database.
     public func cookieDatabases() -> [(profile: String, url: URL)] {
         guard let root = userDataDirectory else { return [] }
         let manager = FileManager.default
+        if usesFlatProfileLayout {
+            let url = root.appendingPathComponent("Cookies")
+            guard manager.fileExists(atPath: url.path) else { return [] }
+            return [("Default", url)]
+        }
         let candidates = ((try? manager.contentsOfDirectory(atPath: root.path)) ?? [])
             .filter { $0 == "Default" || $0.hasPrefix("Profile ") }
             .sorted { lhs, rhs in
@@ -201,8 +212,9 @@ public enum ChromeBasedBrowser: String, CaseIterable {
     /// The directory holding the profile folders.
     private var userDataDirectory: URL? {
         guard let rel = cookiesRelativePath else { return nil }
-        // "…/Chrome/Default/Cookies" -> "…/Chrome"
+        // "…/Chrome/Default/Cookies" -> "…/Chrome", or "…/Opera/Cookies" -> "…/Opera"
         let full = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(rel)
-        return full.deletingLastPathComponent().deletingLastPathComponent()
+        let root = full.deletingLastPathComponent()
+        return usesFlatProfileLayout ? root : root.deletingLastPathComponent()
     }
 }
