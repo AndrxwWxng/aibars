@@ -21,8 +21,9 @@ test: regen
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=macOS' test
 
 clean:
-	rm -rf $(PROJECT) build *.xcworkspace
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) clean 2>/dev/null || true
+	rm -rf $(PROJECT) *.xcworkspace
+	rm -rf ~/Library/Developer/Xcode/DerivedData/aibars-*
 
 open: regen
 	open $(PROJECT)
