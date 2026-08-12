@@ -24,6 +24,18 @@ public struct ConnectDialog: View {
     /// the only thing separating the blocks and the only thing bounding a row.
     @Environment(\.colorSchemeContrast) private var contrast
 
+    /// A rule is one device pixel, not one point. `Control.hairline` is the
+    /// system's separator thickness and stays that; drawn at 1pt on a 2× display
+    /// this window's rules are two pixels of grey, which reads as a soft band
+    /// rather than an edge beside the panel header's own rule. So the rules opt
+    /// into the display's own hairline, and land on the pixel grid.
+    @Environment(\.displayScale) private var displayScale
+
+    /// Every swappable glyph in this window sits in this square — see
+    /// `stateBlock`. One value, because two glyph slots of different sizes is two
+    /// left edges for the text beside them.
+    private static let glyphSlot = Tokens.lineBox(Tokens.Ramp.title)
+
     /// `onContentResize` is called when the content's height changes — revealing
     /// the token field, or a stage growing a second line. An `NSWindow` does not
     /// follow its content, so without this the field opened underneath the
@@ -85,11 +97,12 @@ public struct ConnectDialog: View {
     /// two of them had a second rule weight in it that no token named. It was
     /// also the one rule here that did not step up under increased contrast,
     /// because dimming a system control is not the same as reading an opacity.
-    /// One weight, one colour, one accessor, the same as the panel header's.
+    /// One weight, one colour, one accessor, the same as the panel header's —
+    /// including its thickness, which is one device pixel rather than one point.
     private var rule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-            .frame(height: Tokens.Control.hairline)
+            .frame(height: 1 / displayScale)
     }
 
     // MARK: - Headline
@@ -112,8 +125,11 @@ public struct ConnectDialog: View {
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                     .foregroundColor(Tokens.Ink.body)
                 if let host = flow.provider.webLogin?.startURL.host {
+                    // `.regular` said out loud rather than inherited, here and on
+                    // every caption in this window: the window has two weights,
+                    // and which one a line takes is a decision, not a default.
                     Text(host)
-                        .font(.system(size: Tokens.Ramp.detail))
+                        .font(.system(size: Tokens.Ramp.detail, weight: .regular))
                         .foregroundColor(Tokens.Ink.muted)
                 }
             }
@@ -170,7 +186,7 @@ public struct ConnectDialog: View {
             if case .unreadable = flow.stage {
                 limitationBanner
             } else {
-                statusRow
+                stateBlock()
             }
 
             if !flow.picks.isEmpty {
@@ -186,24 +202,44 @@ public struct ConnectDialog: View {
         .padding(Tokens.Space.dialogMargin)
     }
 
-    private var statusRow: some View {
+    /// What the stage is, in one block: a glyph, a headline, and at most one
+    /// detail line.
+    ///
+    /// One view for both the ordinary status line and the unreadable-browser
+    /// banner, which were two copies of the same anatomy and had already drifted
+    /// apart — the banner set its headline a weight above the status line's, so
+    /// the same sentence read differently depending on which stage produced it,
+    /// and a window with two weights cannot afford a third by accident.
+    private func stateBlock(fallbackSymbol: String? = nil) -> some View {
         HStack(alignment: .top, spacing: Tokens.Space.medium) {
-            if flow.isBusy {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.8)
-            } else if let symbol = flow.symbol {
-                Image(systemName: symbol)
-                    .foregroundStyle(flow.tone.ink)
+            // A fixed square, because what sits in it is swapped as the flow
+            // moves: a mini `ProgressView`, a tick, a triangle and a shield all
+            // measure differently, so sized to its content this slot changed
+            // width at every stage change and took the headline sideways with
+            // it. Centred in the title's own line box, which puts the glyph on
+            // the headline's optical centre rather than on its bounding box.
+            ZStack {
+                if flow.isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.8)
+                } else if let symbol = flow.symbol ?? fallbackSymbol {
+                    Image(systemName: symbol)
+                        // Named rather than inherited, so the glyph is the same
+                        // size in the banner as it is on the status line.
+                        .font(.system(size: Tokens.Ramp.title))
+                        .foregroundStyle(flow.tone.ink)
+                }
             }
+            .frame(width: Self.glyphSlot, height: Self.glyphSlot)
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
                 Text(flow.headline)
-                    .font(.system(size: Tokens.Ramp.title))
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                     .foregroundColor(Tokens.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = flow.detail {
                     Text(detail)
-                        .font(.system(size: Tokens.Ramp.detail))
+                        .font(.system(size: Tokens.Ramp.detail, weight: .regular))
                         .foregroundColor(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -241,10 +277,16 @@ public struct ConnectDialog: View {
         VStack(spacing: Tokens.Space.small) {
             ForEach(flow.picks) { candidate in
                 HStack(spacing: Tokens.Space.medium) {
+                    // The same square, and the same named size, as the status
+                    // block's glyph: a system glyph's width is a property of the
+                    // glyph, and two glyphs measuring themselves put the two
+                    // stacks of text in this window on two different rhythms.
                     Image(systemName: "person.crop.circle")
+                        .font(.system(size: Tokens.Ramp.title))
                         .foregroundStyle(Tokens.Ink.muted)
+                        .frame(width: Self.glyphSlot, height: Self.glyphSlot)
                     Text(candidate.label)
-                        .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                        .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                         .foregroundColor(Tokens.Ink.body)
                         // A Chromium profile is named by its owner, so this is a
                         // sentence as often as it is a word. Unconstrained it
@@ -300,7 +342,7 @@ public struct ConnectDialog: View {
                 // drawn. Hidden from VoiceOver, which would otherwise read the
                 // name twice on the way through the stack.
                 Text("Usage endpoint")
-                    .font(.system(size: Tokens.Ramp.detail))
+                    .font(.system(size: Tokens.Ramp.detail, weight: .regular))
                     .foregroundColor(Tokens.Ink.muted)
                     .accessibilityHidden(true)
                 TextField("Usage endpoint", text: $flow.endpoint, prompt: Text("https://api.example.com/usage"))
@@ -308,7 +350,7 @@ public struct ConnectDialog: View {
                     .textFieldStyle(.roundedBorder)
             }
             Text(tokenFieldLabel)
-                .font(.system(size: Tokens.Ramp.detail))
+                .font(.system(size: Tokens.Ramp.detail, weight: .regular))
                 .foregroundColor(Tokens.Ink.muted)
                 .accessibilityHidden(true)
             HStack(spacing: Tokens.Space.medium) {
@@ -430,13 +472,16 @@ public struct ConnectDialog: View {
         }
     }
 
-    /// The same headline and detail as `statusRow`, on a wash, because a browser
+    /// The same headline and detail as the status line, on a wash, because a browser
     /// whose cookies cannot be read is the one state the user has to deal with
     /// before anything else on screen will work.
     ///
-    /// Its glyph and its colour come off the flow like every other stage's. Named
-    /// here as `lock.shield` in `Tokens.Ink.attention` they were a second opinion
-    /// about a state the flow already has an answer for.
+    /// It is `stateBlock` on a wash, and nothing else: same glyph slot, same
+    /// headline weight, same detail ink. Written out a second time it drifted
+    /// from the status line it is a variant of, and a state that reads heavier
+    /// because of which stage produced it is the window disagreeing with itself.
+    /// `lock.shield` is only the fallback for the one stage that has no symbol of
+    /// its own — the glyph and its colour still come off the flow.
     ///
     /// The wash stays a wash, and stays translucent: `Ink.attentionWash` is the
     /// one named exception to "nothing in this app is drawn on something you can
@@ -447,25 +492,9 @@ public struct ConnectDialog: View {
     /// would, and a raised plane under a tint would be two answers to the same
     /// question.
     private var limitationBanner: some View {
-        HStack(alignment: .top, spacing: Tokens.Space.medium) {
-            Image(systemName: flow.symbol ?? "lock.shield")
-                .foregroundStyle(flow.tone.ink)
-            VStack(alignment: .leading, spacing: Tokens.Space.tight) {
-                Text(flow.headline)
-                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
-                    .foregroundColor(Tokens.Ink.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let detail = flow.detail {
-                    Text(detail)
-                        .font(.system(size: Tokens.Ramp.detail))
-                        .foregroundColor(Tokens.Ink.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(Tokens.Space.large)
-        .background(Tokens.surface(Tokens.Radius.panel).fill(Tokens.Ink.attentionWash))
+        stateBlock(fallbackSymbol: "lock.shield")
+            .padding(Tokens.Space.large)
+            .background(Tokens.surface(Tokens.Radius.panel).fill(Tokens.Ink.attentionWash))
     }
 
     private func submit() {
@@ -482,20 +511,25 @@ private struct StepRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.medium) {
-            // `.medium`, not `.bold`: the window sets nothing above medium, and a
-            // step number is the least important digit in it — it says what order
-            // to read the line in, not what the line says.
+            // `titleWeight`, not `.bold`: the window has two weights, and a step
+            // number is the least important digit in it — it says what order to
+            // read the line in, not what the line says.
+            //
+            // The badge is the title's own line box rather than the 17pt it was
+            // written at: one point off the box the line beside it occupies is a
+            // circle that sits a hair low against three lines of type, and 17 is
+            // on no scale this app keeps.
             Text("\(number)")
                 .font(.system(
                     size: Tokens.Ramp.caption,
-                    weight: Tokens.Ramp.emphasisWeight,
+                    weight: Tokens.Ramp.titleWeight,
                     design: Tokens.Ramp.figureDesign
                 ))
                 .foregroundColor(Tokens.Ink.muted)
-                .frame(width: 17, height: 17)
+                .frame(width: Tokens.lineBox(Tokens.Ramp.title), height: Tokens.lineBox(Tokens.Ramp.title))
                 .background(Circle().fill(Tokens.quiet(Tokens.Fill.controlHover)))
             Text(text)
-                .font(.system(size: Tokens.Ramp.title))
+                .font(.system(size: Tokens.Ramp.title, weight: .regular))
                 .foregroundColor(Tokens.Ink.body)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)

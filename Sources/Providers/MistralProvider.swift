@@ -24,7 +24,6 @@ public final class MistralProvider: ObservableObject, UsageProvider {
     public let displayName = "Mistral"
     public let iconName = "wind"
     /// Mistral's #FA500F.
-    public let accentColor: Color = Color(red: 0.98, green: 0.31, blue: 0.06)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

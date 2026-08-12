@@ -33,7 +33,6 @@ public final class ClaudeCodeProvider: ObservableObject, UsageProvider {
     public let iconName = "terminal"
     /// Claude's terracotta a shade deeper. Same brand, and the row wants to be
     /// told apart at a glance from the claude.ai one it sits next to.
-    public let accentColor: Color = Color(red: 0.72, green: 0.36, blue: 0.22)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

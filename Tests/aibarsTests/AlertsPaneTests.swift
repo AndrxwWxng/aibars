@@ -422,7 +422,7 @@ final class AlertsPaneTests: XCTestCase {
                         ForEach(0..<rows, id: \.self) { _ in
                             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
                                 Text("A title")
-                                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                                 Text("A detail")
                                     .font(.system(size: Tokens.Ramp.caption))
                                 Text("A second detail")

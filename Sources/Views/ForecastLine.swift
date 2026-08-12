@@ -99,10 +99,15 @@ public struct ForecastLine: View {
                 // A caption one size under the countdown above it, and the only
                 // line in the panel set at this size. The pace is a claim the app
                 // is making and the countdown is a fact the provider stated, so
-                // the claim is drawn quieter. Regular weight, like every other
-                // caption: the panel has one weight above medium and it belongs
-                // to a figure at its cap.
-                .font(.system(size: appearance.metrics.captionSize))
+                // the claim is drawn quieter.
+                //
+                // `.regular` written out rather than left to the default, which is
+                // §3.2: the panel has two weights, `titleWeight` for names,
+                // figures and glyphs and `alertWeight` for a figure at its cap,
+                // and every run of prose is regular. Inheriting the right weight
+                // reads the same as being given it and says nothing about which
+                // was meant, so the role each line plays is stated at each line.
+                .font(.system(size: appearance.metrics.captionSize, weight: .regular))
                 // SF Pro with tabular digits, not SF Mono: this is a run with
                 // words in it, and mono on prose is the terminal pastiche the
                 // direction rules out. Only the digits inside it need to hold
@@ -124,7 +129,15 @@ public struct ForecastLine: View {
                 // sentences `UsageForecast` writes, "on pace to cap in 40m"
                 // against "resets in 11h 59m, you'll finish under", which is
                 // where a quiet interface puts it.
-                .foregroundStyle(Tokens.Ink.muted)
+                //
+                // `foregroundColor` and not `foregroundStyle`, for the reason
+                // spelled out on `Ramp.figureDesign` and in `BudgetPane`: the
+                // receiver here is still statically a `Text` — `font` and
+                // `monospacedDigit` both hand one back — and the `Text` overload
+                // of `foregroundStyle` is macOS 14, so it is the overload the
+                // compiler would rather bind and the app's floor is 13. Same trap
+                // as `Text.monospaced()`, one modifier along.
+                .foregroundColor(Tokens.Ink.muted)
                 // A pace that wraps to a second line has grown the row by more
                 // than the reading is worth.
                 .lineLimit(1)

@@ -47,8 +47,9 @@ public final class AppearanceSettings: ObservableObject {
         public var label: String {
             switch self {
             // No longer "tinted tile": the plate is a neutral 7% container in
-            // every appearance and for every brand, so a label promising a tint
-            // would be describing a drawing the app stopped making.
+            // every appearance and for every brand, with no edge on it, so a
+            // label promising a tint would be describing a drawing the app
+            // stopped making.
             case .tile:   return "In a tile"
             case .plain:  return "Plain mark"
             case .hidden: return "None"
@@ -295,7 +296,7 @@ public final class AppearanceSettings: ObservableObject {
     public init(store: UserDefaults = .standard) {
         self.store = store
         // Before anything is read, because everything below reads through it.
-        Self.adoptSecondGenerationLook(in: store)
+        Self.adoptCurrentLook(in: store)
         // Every fallback comes from Snapshot's own defaults, so "the default of
         // this setting" is written down exactly once.
         let defaults = Snapshot()
@@ -436,6 +437,13 @@ public final class AppearanceSettings: ObservableObject {
         /// when a row ticks over. The rail's own width differs line by line — the
         /// secondary rail is narrower — but every rail on a row ends at the same
         /// trailing edge, and that shared edge is the column the eye scans down.
+        ///
+        /// The reservation is SF Mono's advance, and only SF Mono's: `"100%"` set
+        /// in the mono design measures 32.14pt at 13pt inside a 33pt rail, and the
+        /// same string in SF Pro measures 36.29pt and hangs out of it. Anyone
+        /// tempted to "simplify" the figure's mono design away has to widen this
+        /// first, or the one reading that matters most is the one drawn outside
+        /// its own column.
         public var headlineRail: CGFloat {
             Tokens.figureWidth(figureSize, digits: 3)
                 + Tokens.Space.hairline
@@ -491,7 +499,9 @@ public final class AppearanceSettings: ObservableObject {
             captionSize: max(9, step.caption * scale),
             barHeight: thickness,
             // A secondary bar thinner than 2pt disappears once its fill takes
-            // rounded caps.
+            // rounded caps. Six tenths of the shipped 5pt bar is 3pt, which is
+            // the budget bar the panel actually draws: thinner than the reading
+            // above it, still a bar.
             secondaryBarHeight: max(2, thickness * 0.6),
             ringDiameter: min(step.ring * scale, ringBudget)
         )
@@ -499,7 +509,7 @@ public final class AppearanceSettings: ObservableObject {
 
     /// The widest the dial may be drawn.
     ///
-    /// The leading column is the logo, a 7pt gap and the dial, all subtracted
+    /// The leading column is the logo, a 6pt gap and the dial, all subtracted
     /// from a panel that can be as narrow as 300pt. At a 40pt logo and 130%
     /// type that column reached 81pt of those 300, and what was left could not
     /// hold a service name and its percentage on the same line — the number ran
@@ -549,7 +559,7 @@ public final class AppearanceSettings: ObservableObject {
     /// gets one at every level; second-guessing that here would be this
     /// function overruling the setting it is standing next to.
     ///
-    /// The unit tick beside the figure is not this colour. It is `Ink.idle` in
+    /// The unit tick beside the figure is not this colour. It stays muted in
     /// every band and under every ramp, because it annotates the number rather
     /// than being part of the reading, and a neutral unit is what keeps the
     /// digits the only coloured column.
@@ -851,9 +861,10 @@ public final class AppearanceSettings: ObservableObject {
         public var summary: String {
             switch self {
             case .comfortable:
-                // No longer "everything on": the plan pill is off by default,
-                // and a summary that overstates its preset is how a user comes
-                // to distrust the other four.
+                // Named for what it turns on rather than "everything on": the
+                // pane has a dozen switches this preset leaves off, and a summary
+                // that overstates its preset is how a user comes to distrust the
+                // other four.
                 return "The shipped look. Amounts and countdowns on, urgency order, connected services first with the rest folded away."
             case .compact:
                 return "Every service on screen at once. Keeps the bars and the numbers, drops the prose."
@@ -862,7 +873,11 @@ public final class AppearanceSettings: ObservableObject {
             case .dashboard:
                 return "Every window, every account, every service, grouped by how close to the cap they are."
             case .monochrome:
-                return "Greyscale rings and no brand tiles. Colour returns only above the warning threshold."
+                // No longer "no brand tiles": no preset draws a brand colour any
+                // more, so the tiles are not what makes this one greyscale. What
+                // does is the ramp — every meter grey at every level, right up to
+                // the warning.
+                return "Greyscale rings on a bare list. Colour returns only above the warning threshold."
             }
         }
 
@@ -888,7 +903,11 @@ public final class AppearanceSettings: ObservableObject {
                     showsPercentage: true, showsAmounts: false, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: false,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
-                    meterStyle: .bar, meterThickness: 4, colorRamp: .usage,
+                    // The bar is the shipped 5pt even here. Compact buys its
+                    // density from line-height, and a preset that fits every
+                    // service on screen is the last one that can afford a meter
+                    // too thin to show a single-digit reading.
+                    meterStyle: .bar, meterThickness: 5, colorRamp: .usage,
                     cautionThreshold: 0.80, warningThreshold: 0.95,
                     sortOrder: .urgency, grouping: .flat, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
@@ -1008,8 +1027,10 @@ public final class AppearanceSettings: ObservableObject {
             showsPercentage: Bool = true,
             showsAmounts: Bool = true,
             showsCountdowns: Bool = true,
-            // A filled capsule on every row is chrome, and the plan is the one
-            // thing on the line that never changes. Still one click away.
+            // On, because the plan no longer costs a shape to say. It used to be
+            // a filled capsule — chrome, on every row, around the one word on
+            // the line that never changes — and it is now the tail of the same
+            // muted run as the account: `ada@example.com · Pro`.
             showsPlanNames: Bool = true,
             showsAccountLabels: Bool = true,
             // The windows fold onto the trailing half of the caption line. A
@@ -1019,7 +1040,13 @@ public final class AppearanceSettings: ObservableObject {
             secondaryWindowLimit: Int = 4,
             rowActions: RowActionVisibility = .onHover,
             meterStyle: MeterStyle = .bar,
-            meterThickness: Double = 4,
+            // 5 and not 4. A one-digit reading is the case that decides this: at
+            // 4pt, 7% of a 278pt track is 19.5 × 4pt of resting grey, which has
+            // no mass and reads as an empty track — the meter stops measuring at
+            // exactly the readings only the meter can show. A point buys the
+            // stub presence, costs the row nothing that density does not already
+            // spend, and lands the secondary bar on a clean 3pt.
+            meterThickness: Double = 5,
             colorRamp: ColorRamp = .usage,
             // The industry breakpoints, and the reason the panel stops being
             // amber: at 0.60 a perfectly healthy weekly window at 61% read as a
@@ -1183,7 +1210,15 @@ public final class AppearanceSettings: ObservableObject {
         case menuBarColour = "aibars.appearance.menuBarColour"
         case menuBarGlyphHeight = "aibars.appearance.menuBarGlyphHeight"
         case didMigrate = "aibars.appearance.didMigrateFromAppState"
-        case didAdoptSecondGeneration = "aibars.appearance.didAdoptSecondGeneration"
+        /// Which generation of the look the values in this store belong to. An Int
+        /// rather than a Bool per generation, because the next pass that moves a
+        /// default has to bump one number instead of inventing a fourth key and
+        /// remembering to exempt it from the wipe below.
+        case adoptedLookGeneration = "aibars.appearance.adoptedLookGeneration"
+
+        /// Generation two's stamp, when the generation was spelled as a Bool.
+        /// Read once, to place an existing install on the ladder, then deleted.
+        case legacyDidAdoptSecondGeneration = "aibars.appearance.didAdoptSecondGeneration"
 
         /// Retired with the four abstract bars. Read once in `init` so a user who
         /// set a bar count keeps a service count near it, and never written.
@@ -1193,9 +1228,27 @@ public final class AppearanceSettings: ObservableObject {
         /// figure rail and the pace notch are both built on. Named only so
         /// `migrateLegacyKeys` can delete it.
         case legacyGradientFill = "aibars.appearance.usesGradientFill"
+
+        /// What the look adoption below leaves alone: the stamp itself, and the
+        /// record that the one-time import from AppState has already run. Clearing
+        /// that record would re-run the import, and a key written by a version two
+        /// generations back would then overwrite exactly the defaults the wipe
+        /// exists to deliver.
+        var survivesLookAdoption: Bool {
+            self == .adoptedLookGeneration || self == .didMigrate
+        }
     }
 
-    /// Takes an existing install to the new look, once.
+    /// The look this build ships, and the only thing to change when a DEFAULT
+    /// moves.
+    ///
+    /// 3: the bar went from 4pt to 5pt so a single-digit reading has mass, and the
+    /// colour rule became "chroma means measurement or state" — which is carried by
+    /// tokens for everybody, but only reaches a stored `meterThickness` of 4
+    /// through the adoption below.
+    private static let lookGeneration = 3
+
+    /// Takes an existing install to the current look, once per generation.
     ///
     /// This exists because a redesign that only changes DEFAULTS changes nothing
     /// for anybody who has already run the app. Every setting is written to the
@@ -1205,26 +1258,36 @@ public final class AppearanceSettings: ObservableObject {
     /// structural half of it did not move at all: logos still in their old
     /// coloured tiles, a second full-width meter still on every row, the amber
     /// band still starting at 0.60. It looked like nothing had happened, because
-    /// for the settings that were pinned, nothing had.
+    /// for the settings that were pinned, nothing had. It happened a second time
+    /// with the bar: a 4pt meter written to the store two versions ago is a 4pt
+    /// meter for ever, and the fix for an invisible one-digit reading would have
+    /// shipped to new installs only.
     ///
-    /// So the appearance domain is cleared once and allowed to fall back to the
-    /// new defaults. Deliberately blunt: there is no way to tell a value the user
-    /// chose from a value the first launch happened to write, so preserving
-    /// "customisations" would mean preserving the old design under a new name.
-    /// Scoped tightly in return — only `aibars.appearance.*`, so sessions,
-    /// budgets, alert rules, per-provider switches and account names are all
-    /// untouched.
-    private static func adoptSecondGenerationLook(in store: UserDefaults) {
+    /// So the appearance domain is cleared once per generation and allowed to fall
+    /// back to the new defaults. Deliberately blunt: there is no way to tell a
+    /// value the user chose from a value the first launch happened to write, so
+    /// preserving "customisations" would mean preserving the old design under a
+    /// new name. Scoped tightly in return — only `aibars.appearance.*`, so
+    /// sessions, budgets, alert rules, per-provider switches and account names are
+    /// all untouched, and `customOrder` is the one appearance key that is a
+    /// decision rather than a look, so it comes back empty and sorts in declared
+    /// order rather than losing a row.
+    private static func adoptCurrentLook(in store: UserDefaults) {
         // Only the real domain. A scratch domain is one a test or a preview
         // authored deliberately — several tests seed malformed values precisely
         // to prove a bad store cannot break the layout — and clearing those would
         // be this migration deciding it knows better than the fixture.
         guard store === UserDefaults.standard else { return }
-        guard !store.bool(forKey: Key.didAdoptSecondGeneration.rawValue) else { return }
-        for key in Key.allCases where key != .didAdoptSecondGeneration {
+        // Generation two stamped a Bool under its own key, so an install that has
+        // already adopted that look counts as two rather than as never adopted;
+        // anything else is generation zero and is about to get the lot anyway.
+        let stamped = store.object(forKey: Key.adoptedLookGeneration.rawValue) as? Int
+            ?? (store.bool(forKey: Key.legacyDidAdoptSecondGeneration.rawValue) ? 2 : 0)
+        guard stamped < lookGeneration else { return }
+        for key in Key.allCases where !key.survivesLookAdoption {
             store.removeObject(forKey: key.rawValue)
         }
-        store.set(true, forKey: Key.didAdoptSecondGeneration.rawValue)
+        store.set(lookGeneration, forKey: Key.adoptedLookGeneration.rawValue)
     }
 
     private let store: UserDefaults

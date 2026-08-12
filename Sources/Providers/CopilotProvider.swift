@@ -13,7 +13,6 @@ public final class CopilotProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "copilot" }
     public let displayName = "GitHub Copilot"
     public let iconName = "chevron.left.slash.chevron.right"
-    public let accentColor: Color = Color(red: 0.10, green: 0.10, blue: 0.10)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

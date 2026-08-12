@@ -96,8 +96,13 @@ public struct AlertsPane: View {
     private var permissionLine: some View {
         if center.rules.isEnabled, let explanation = center.permission.explanation {
             HStack(spacing: Tokens.Space.gutter) {
+                // Regular, said out loud rather than inherited. The app runs on
+                // two weights and one of them is a decision — a name or a figure
+                // is `titleWeight`, everything that is context around it is
+                // regular — and a caption that only happens to be regular because
+                // that is today's default is a weight nobody chose.
                 Text(explanation)
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .foregroundStyle(permissionInk)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -119,20 +124,22 @@ public struct AlertsPane: View {
         }
     }
 
-    /// Amber where the user can do something about it, red where they cannot.
+    /// Amber where the user can do something about it, quiet where they cannot.
     ///
-    /// The same split `SettingsView` makes on a connection's last error — a
-    /// failure that wants the user is `Ink.attention`, one that is simply broken
-    /// is `Ink.failure` — so the two windows do not disagree about what red
-    /// means. A refusal is fixable, and the button beside this sentence is where
-    /// it gets fixed; a build macOS will not deliver notifications for at all has
-    /// nothing to fix, and drawing that in the ink that means "do something"
-    /// sends the reader looking for a switch that is not there.
+    /// There is no red left to reach for, and that is deliberate: red means one
+    /// thing in this app now — a window at or over its cap — so a red sentence in
+    /// here would be the same ink as a service that has run out. A build macOS
+    /// will not deliver notifications for at all has nothing to fix and no button
+    /// beside it, so it goes to the caption ink and stops asking for a decision
+    /// that cannot be made. A refusal does want the user, and the button next to
+    /// it is where it gets fixed, so that one keeps `Ink.attention` — the split
+    /// `SettingsView` makes on a connection's last error, so the two windows
+    /// still agree about which failures want you.
     ///
     /// Only reached for the two states that say anything: `.unknown` and
     /// `.granted` have no explanation and draw no row.
     private var permissionInk: Color {
-        center.permission == .denied ? Tokens.Ink.attention : Tokens.Ink.failure
+        center.permission == .denied ? Tokens.Ink.attention : Tokens.Ink.muted
     }
 
     // MARK: - Thresholds
@@ -245,17 +252,18 @@ public struct AlertsPane: View {
             Toggle("Show a pace line on each row", isOn: $trend.showsPaceInPanel)
             if paceNeedsFasterRefresh {
                 // The third note in this pane that says a switch cannot do what
-                // it claims, and the other two are amber: a toggle sitting on
-                // over something that cannot work is exactly what
-                // `Ink.attention` means, and it is fixable in General. On the
-                // ramp at `Ramp.caption` like every other note here rather than
-                // `.callout`, which was a system size a point over the pane's
-                // own title and agreed with nothing beside it.
+                // it claims, and amber like every one of them the user can act
+                // on: a toggle sitting on over something that cannot work is
+                // exactly what `Ink.attention` means, and it is fixable in
+                // General — which is the test, not the fact that it is bad
+                // news. On the ramp at `Ramp.caption` like every other note here
+                // rather than `.callout`, which was a system size a point over
+                // the pane's own title and agreed with nothing beside it.
                 //
                 // Prose with an interval in it, so SF Pro with tabular digits
                 // rather than the figure face.
                 Text("No pace can be shown while the refresh interval is \(refreshIntervalName). The fit reads the last half hour and ignores anything older than fifteen minutes, so readings this far apart never make three inside the window. Set it to 5 minutes or less in General.")
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Tokens.Ink.attention)
                     .fixedSize(horizontal: false, vertical: true)
@@ -298,7 +306,7 @@ public struct AlertsPane: View {
                 Text(center.rules.isEnabled
                      ? "Nothing has crossed a level yet."
                      : "Alerts are off, so there is nothing here.")
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .foregroundStyle(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -359,8 +367,14 @@ private struct AlertLogRow: View {
             Image(systemName: delivered ? "bell" : "bell.slash")
                 .foregroundStyle(delivered ? Tokens.Ink.idle : Tokens.Ink.attention)
                 // The column a provider logo occupies, so every row in this
-                // window starts its text at one x instead of several.
-                .frame(width: Tokens.Control.settingsLogo)
+                // window starts its text at one x instead of several. Square and
+                // centred rather than merely wide enough, because the two glyphs
+                // that go in it are different sizes — `bell.slash` carries a
+                // stroke across it and draws taller and wider than `bell` — and a
+                // slot that only pins the width lets the mark that means bad news
+                // sit a point off the axis the good one sits on.
+                .frame(width: Tokens.Control.settingsLogo,
+                       height: Tokens.Control.settingsLogo)
 
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
                 // A run with words in it, so SF Pro with tabular digits rather
@@ -375,8 +389,14 @@ private struct AlertLogRow: View {
                 // toggle and `LabeledContent` labels the system draws, and one
                 // custom row title a shade off the labels above and below it is
                 // the mismatch, not the fix.
+                //
+                // `titleWeight`, which is the weight this line has always drawn:
+                // `emphasisWeight` was a second name for the same `.medium` and
+                // is gone. The app has two weights now — this one for the thing a
+                // row is about, regular for everything around it — and a name for
+                // a weight that resolved to another name is how they drift.
                 Text(alert.title)
-                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                     .monospacedDigit()
                     .lineLimit(1)
                     .frame(height: Tokens.lineBox(Tokens.Ramp.title), alignment: .leading)
@@ -387,7 +407,7 @@ private struct AlertLogRow: View {
                 // height depended on how long a provider's window label is, and
                 // the whole sentence is in the row's tooltip either way.
                 Text(alert.body)
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Tokens.Ink.muted)
                     .lineLimit(1)
@@ -398,7 +418,7 @@ private struct AlertLogRow: View {
                 // says nothing when they are leaves the reader to infer it from
                 // the shape of an icon.
                 Text(delivered ? "delivered" : "macOS didn't show it")
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .foregroundStyle(delivered ? Tokens.Ink.idle : Tokens.Ink.attention)
                     .lineLimit(1)
                     .frame(height: Tokens.lineBox(Tokens.Ramp.caption), alignment: .leading)
@@ -411,8 +431,14 @@ private struct AlertLogRow: View {
             // figure face — which is also why the "ago" it used to carry is
             // gone: a word in the rail would be a word in SF Mono, and the
             // column it sits in beside a log of past events says it anyway.
+            // Regular, not the weight a figure takes. It reads as a figure and it
+            // is set in the figure face, but what it reports is a countdown — how
+            // long ago, the same run `Countdown.short` writes under a bar — and a
+            // countdown is context. The row's subject is the sentence to its left.
             Text(age)
-                .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
+                .font(.system(size: Tokens.Ramp.caption,
+                              weight: .regular,
+                              design: Tokens.Ramp.figureDesign))
                 .foregroundStyle(Tokens.Ink.muted)
                 .lineLimit(1)
                 .frame(width: AlertColumn.age, alignment: .trailing)
@@ -468,7 +494,13 @@ private struct PercentStepper: View {
                     // the reason the Appearance pane's readouts keep it: it costs
                     // nothing and does not depend on `figureDesign` staying
                     // monospaced.
-                    .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
+                    // Regular, though it is a figure: it sits inches from a
+                    // system `LabeledContent` label and a stepper's own glyphs,
+                    // and a readout drawn heavier than the label naming it is the
+                    // wrong thing emphasised in a settings row.
+                    .font(.system(size: Tokens.Ramp.caption,
+                                  weight: .regular,
+                                  design: Tokens.Ramp.figureDesign))
                     .monospacedDigit()
                     .foregroundStyle(Tokens.Ink.muted)
                     // A readout wide enough to wrap would take the row's height
@@ -526,7 +558,7 @@ public struct LaunchAtLoginSection: View {
             if let note = item.state.note {
                 HStack(spacing: Tokens.Space.gutter) {
                     Text(note)
-                        .font(.system(size: Tokens.Ramp.caption))
+                        .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                         .foregroundStyle(Tokens.Ink.attention)
                         .fixedSize(horizontal: false, vertical: true)
 

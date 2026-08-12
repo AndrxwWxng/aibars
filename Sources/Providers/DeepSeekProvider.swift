@@ -21,7 +21,6 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "deepseek" }
     public let displayName = "DeepSeek"
     public let iconName = "water.waves"
-    public let accentColor: Color = Color(red: 0.30, green: 0.42, blue: 1.00)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

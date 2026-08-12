@@ -93,6 +93,7 @@ public struct RowGeometry: Equatable {
         logoStyle: AppearanceSettings.LogoStyle,
         logoSize: CGFloat,
         panelWidth: CGFloat,
+        rowActions: AppearanceSettings.RowActionVisibility = .onHover,
         lines: Lines
     ) {
         // The two settings that arrive as `Double` and are clamped on write, but
@@ -125,17 +126,25 @@ public struct RowGeometry: Equatable {
         headlineRail = showsFigure ? metrics.headlineRail : 0
         secondaryRail = showsFigure ? metrics.secondaryRail : 0
 
-        // The leading column is as tall as the taller of the two things in it,
-        // plus the 1pt nudge that drops it onto the title's cap-height band.
-        let leadingHeight = hasLeading ? max(logo, ring) + Tokens.Space.hairline : 0
+        // The leading column is as tall as the taller of the two things in it.
+        // No nudge: the mark box and the title box are the same 18pt at the
+        // defaults, and a 1pt lift onto a band it is already on was a 1pt lie
+        // told in two files at once.
+        let leadingHeight = hasLeading ? max(logo, ring) : 0
 
         // The title line is one box holding the name, the figure and the action
         // buttons, and it is as tall as the tallest of the three whichever of
-        // them a given row happens to draw.
-        let titleHeight = max(
+        // them a given row happens to draw. The buttons count only when the
+        // setting can ever draw them: with `.never` they are neither drawn nor
+        // reserved, so reserving their height there was 2pt of dead air on
+        // every row of the panel.
+        var titleHeight = max(
             Tokens.lineBox(metrics.titleSize),
-            max(Tokens.lineBox(metrics.figureSize), Tokens.Control.rowIconButton)
+            Tokens.lineBox(metrics.figureSize)
         )
+        if rowActions != .never {
+            titleHeight = max(titleHeight, Tokens.Control.rowIconButton)
+        }
 
         // Under the ring the meter is the dial, which the leading column has
         // already paid for; the text column keeps its slot only under the bar

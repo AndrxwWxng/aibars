@@ -23,9 +23,14 @@ import SwiftUI
 
 /// One line on the chart: a service's usage over the window being shown.
 ///
-/// The colour arrives from the caller rather than being derived here. Which
-/// service is which is the history view's decision — it may paint by brand or
-/// by the usage ramp, and this has no business having an opinion about either.
+/// The colour arrives from the caller rather than being derived here, and under
+/// the app's one colour rule — chroma means measurement or state, identity is
+/// drawn in ink — what arrives is a reading and not a badge: the caller hands
+/// over the usage ramp's tint for this window, or, where the user has opted into
+/// provider colour, that provider's banded ink. Either way the hue on this plot
+/// belongs to the trace. Nothing else in the chart may carry any: the grid, the
+/// two reference rules, the axis, the stamps and every figure are neutral, so
+/// the one coloured thing on the plot is the line being read.
 public struct HistoryChartSeries: Identifiable, Equatable {
     /// The row's id — "claude#2", not "claude". Two accounts of one service
     /// have their own histories and are drawn as two lines.
@@ -119,14 +124,19 @@ public enum HistoryChartLayout {
 /// over what window; it does not choose how tall the plot is, because the
 /// gridline spacing and the axis strip are tuned against each other.
 ///
-/// Two rules the chart is held to, both of them the app's rather than this
+/// Four rules the chart is held to, every one of them the app's rather than this
 /// view's. Every number in here is SF Mono inside a reserved rail — the axis
 /// gutter, the threshold label and the hover readout are three fixed columns, and
 /// nothing mono is set outside one; the legend, the series names and the time
-/// stamps are prose and are SF Pro with tabular digits. And nothing in here is
+/// stamps are prose and are SF Pro with tabular digits. Nothing in here is
 /// translucent: the plot is an opaque well, because a contrast ratio measured
 /// against a named ground is a statement and the same ink over a material with
-/// someone's wallpaper behind it is a hope.
+/// someone's wallpaper behind it is a hope. The trace is the only thing on the
+/// plot allowed a hue, because chroma means measurement and everything else here
+/// is frame. And there are two weights: a reading, and everything that labels
+/// one, a step lighter — a reading at or over the warning threshold takes the
+/// third, which is the panel's own way of saying near-cap without saying it in
+/// colour alone.
 public struct HistoryChart: View {
     public let series: [HistoryChartSeries]
     /// The window being shown, and the whole of the x axis. Given rather than
@@ -153,6 +163,13 @@ public struct HistoryChart: View {
     /// rule — and a hairline is the first thing a low-contrast display loses, so
     /// each is stepped up rather than drawn at its resting weight.
     @Environment(\.colorSchemeContrast) private var contrast
+
+    /// Read for the same reason, and used for every line on the plot: a grid is
+    /// nine hairlines, and a hairline whose position falls between two device
+    /// pixels is resampled across both at half strength. That is what turns four
+    /// quarter lines into grey fog and it is why the grid used to read as
+    /// hatching. Every rule in here is snapped through `Tokens.Control.snap`.
+    @Environment(\.displayScale) private var displayScale
 
     public init(series: [HistoryChartSeries], range: ClosedRange<Date>, warningThreshold: Double) {
         self.series = series
@@ -218,6 +235,10 @@ public struct HistoryChart: View {
     private static let lineWidth: CGFloat = 1.5
     /// The dot marking a series' sample under the pointer.
     private static let dotRadius: CGFloat = 2.5
+    /// The ground the hover dot is ringed with, so it clears the trace and the
+    /// rule it is always sitting on. One point: half of it and the ring is a
+    /// resampled smudge, twice it and the dot is a badge.
+    private static let dotRing: CGFloat = 1
     /// The ink both reference rules take — the threshold and the pointer.
     ///
     /// `notchColour(increased:)` used to answer this. The pace riser it was named
@@ -231,6 +252,20 @@ public struct HistoryChart: View {
     private var ruleWidth: CGFloat {
         contrast == .increased ? 2 : Tokens.Control.hairline
     }
+
+    /// A line's centre moved so that the line itself lands on whole pixels.
+    ///
+    /// The edge is what has to be snapped, not the centre: a `Rectangle` is
+    /// filled from its edges outward, so snapping the middle of a one-point line
+    /// puts both edges on half pixels — the blur this is meant to remove. The
+    /// thickness stays a point rather than dropping to `Control.hair`: the grid
+    /// is drawn in `Meter.track`, which is the quietest ink in the app on the
+    /// quietest ground in it, and halving the line would halve what is already
+    /// only just a line.
+    private func snapped(_ centre: CGFloat, thickness: CGFloat) -> CGFloat {
+        Tokens.Control.snap(centre - thickness / 2, scale: displayScale) + thickness / 2
+    }
+
     /// Quarters. Five lines, four gaps — enough to read a height off without
     /// the grid becoming the picture.
     private static let gridStops: [Double] = [0, 0.25, 0.5, 0.75, 1]
@@ -262,46 +297,29 @@ public struct HistoryChart: View {
             readoutLine
             plot
         }
-        .padding(Tokens.Space.large)
-        // One stroke, no shadow and no inner highlight, like every other edge in
-        // the app. Read through `borderOpacity(increased:)` rather than off
-        // `Fill.border`: the border steps up under increased contrast, and a
-        // direct read is a border that quietly doesn't.
-        .overlay(
-            Tokens.surface(Tokens.Radius.panel)
-                .strokeBorder(
-                    Tokens.quiet(Tokens.borderOpacity(increased: contrast == .increased)),
-                    lineWidth: Tokens.Control.hairline
-                )
-        )
+        // The stroked panel that used to be around all of this is gone, and the
+        // palette's own rule is why: a well is a recess and `raised` is the one
+        // plane that takes a border. What was drawn was two concentric rounded
+        // rectangles — a 10pt stroked box holding a 6pt filled well twelve points
+        // inside it — for one object, which is the surest sign of a chart
+        // assembled out of parts. One recess, no edge. What is left is vertical
+        // air, so the legend does not sit on the picker above it and the grain
+        // note does not sit on the plot; the horizontal margin is the form row's,
+        // which is also what puts the axis rail on the same left edge as the
+        // labels of the controls above it.
+        .padding(.vertical, Tokens.Space.small)
     }
 
     private var plot: some View {
         GeometryReader { geo in
             let rect = Self.plotRect(in: geo.size)
+            // Two layers: the plot, cut to its own recess, and the axis, which is
+            // the frame around it rather than anything in it and is drawn in the
+            // gutter and the strip where no clip reaches.
             ZStack(alignment: .topLeading) {
-                // The plot is one of the three wells the palette names, and it is
-                // opaque. The panel's own material is the only translucency in the
-                // application, and this chart carries numbers: an axis figure and
-                // a readout have to sit on a ground whose contrast can be
-                // measured rather than on one that borrows whatever wallpaper is
-                // behind the window.
-                Tokens.surface(Tokens.Radius.chip)
-                    .fill(Tokens.Surface.well)
-                    .frame(width: rect.width, height: rect.height)
-                    .position(x: rect.midX, y: rect.midY)
-
-                gridlines(in: rect)
+                plotLayer(in: rect)
                 axisFigures(in: rect)
                 timeLabels(in: rect)
-
-                if plotted.isEmpty {
-                    emptyState(in: rect)
-                } else {
-                    thresholdRule(in: rect)
-                    lines(in: rect)
-                    hoverMarks(in: rect)
-                }
             }
             // The whole plot is the hover target, gutter included, or the
             // pointer stops reading the moment it crosses a gridline label.
@@ -329,25 +347,77 @@ public struct HistoryChart: View {
         .accessibilityLabel("Usage history")
     }
 
-    // MARK: - The grid
+    // MARK: - The plot's ground and grid
+
+    /// The plot: its ground, its grid, its two reference rules and the traces, all
+    /// cut to the recess they belong to.
+    ///
+    /// The plot is one of the three wells the palette names, and it is opaque. The
+    /// panel's own material is the only translucency in the application, and this
+    /// chart carries numbers: an axis figure and a readout have to sit on a ground
+    /// whose contrast can be measured rather than on one that borrows whatever
+    /// wallpaper is behind the window. It takes no border either — a well is a
+    /// recess and `raised` is the one plane in the palette that has an edge.
+    ///
+    /// Everything in here runs to the plot's edges, and the corners curve away from
+    /// them, so unclipped it all leaked: the 0% and 100% gridlines left four grey
+    /// whiskers past the recess, a trace at the cap ran six points out over the
+    /// corner on the ground outside, and the hover rule did the same at the first
+    /// and last bucket. One clip for the lot, including the markers — a marker
+    /// carries a ring of the ground and a ring that escaped the recess would be a
+    /// pale blob on the pane. A reading at 0% is cut by the same edge that cuts its
+    /// own trace's vertex, which is the only way the two can agree.
+    private func plotLayer(in rect: CGRect) -> some View {
+        let shape = WellShape(rect: rect, radius: Tokens.Radius.chip)
+        return ZStack(alignment: .topLeading) {
+            shape.fill(Tokens.Surface.well)
+            gridlines(in: rect)
+
+            if plotted.isEmpty {
+                emptyState(in: rect)
+            } else {
+                thresholdRule(in: rect)
+                lines(in: rect)
+                hoverRule(in: rect)
+                markers(in: rect)
+            }
+        }
+        .clipShape(shape)
+    }
 
     private func gridlines(in rect: CGRect) -> some View {
-        ForEach(Self.gridStops, id: \.self) { stop in
+        let thickness = Tokens.Control.hairline
+        return ForEach(Self.gridStops, id: \.self) { stop in
             Rectangle()
                 .fill(Tokens.Meter.track)
-                .frame(width: rect.width, height: Tokens.Control.hairline)
-                .position(x: rect.midX, y: HistoryChartLayout.y(for: stop, in: rect))
+                .frame(width: rect.width, height: thickness)
+                .position(x: rect.midX, y: gridY(for: stop, in: rect, thickness: thickness))
         }
+    }
+
+    /// Where a gridline goes: on the pixel grid, and wholly inside the well.
+    ///
+    /// The 0% and 100% stops are the plot's own edges. Drawn on their exact y,
+    /// half of each line hangs outside the well and is cut by its rounded corners,
+    /// so the two lines that frame the plot are the two that look frayed. They are
+    /// pulled in by half their own thickness — the only place the grid is not
+    /// mathematically on its stop, and half a point is not a reading anybody takes
+    /// off a gridline.
+    private func gridY(for stop: Double, in rect: CGRect, thickness: CGFloat) -> CGFloat {
+        let y = HistoryChartLayout.y(for: stop, in: rect)
+        let inset = min(max(y, rect.minY + thickness / 2), rect.maxY - thickness / 2)
+        return snapped(inset, thickness: thickness)
     }
 
     /// The panel's warning level, as a reference.
     ///
-    /// Dashed, and drawn in the neutral ink rather than in the ramp's red: colour
-    /// on this chart says which service a line belongs to, so a second red thing
-    /// running across the plot would read as one more service. It is a mark on the
-    /// frame rather than a reading, so it takes the frame's ink.
+    /// Dashed, and drawn in the neutral ink rather than in the ramp's red. Red is
+    /// the ramp's, and the ramp is what the trace is drawn in: a red rule across
+    /// this plot would read as a second trace sitting at a constant 85%. A mark on
+    /// the frame takes the frame's ink, and what says this rule is not a gridline
+    /// is that it is dashed, a point heavier, and labelled.
     private func thresholdRule(in rect: CGRect) -> some View {
-        let y = HistoryChartLayout.y(for: warningThreshold, in: rect)
+        let y = snapped(HistoryChartLayout.y(for: warningThreshold, in: rect), thickness: ruleWidth)
         let labelHeight = Tokens.lineBox(Tokens.Ramp.caption)
         // Above its own rule by default, and under it when the threshold sits so
         // high that the label would go off the ceiling — a threshold of 100% is
@@ -369,7 +439,12 @@ public struct HistoryChart: View {
                 style: StrokeStyle(lineWidth: ruleWidth, dash: [3, 3])
             )
 
-            figure(warningThreshold, size: Tokens.Ramp.caption, tint: Tokens.Ink.muted)
+            figure(
+                warningThreshold,
+                size: Tokens.Ramp.caption,
+                tint: Tokens.Ink.muted,
+                weight: .regular
+            )
                 // The same recipe as an axis figure, so the same rail. A
                 // threshold of 9% and one of 100% are one column, and mono
                 // outside a reserved rail is a font choice rather than a column.
@@ -399,35 +474,62 @@ public struct HistoryChart: View {
                 entry.colour,
                 style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round, lineJoin: .round)
             )
-            // One bucket has no line in it, so it is drawn as the dot it is.
-            // Without this a service with a single reading looks like a service
-            // with none, which is the one thing this chart must not say.
-            .overlay(singlePointMark(entry, in: rect))
+            // A one-bucket series has no line in it and is drawn as the dot it is —
+            // in `markers(in:)`, with the pointer's dots, because both are one
+            // reading drawn as a point and a clip must not bite either. The shape
+            // here still carries the series' voice: it is the accessibility element
+            // for the line whether or not there is a path in it.
             .accessibilityElement()
             .accessibilityLabel(entry.title)
             .accessibilityValue(Self.summary(of: entry))
         }
     }
 
+    // MARK: - Markers
+
+    /// Every sample this chart draws as a point rather than as part of a line: the
+    /// single reading a one-bucket series is, and whatever the pointer is over.
+    ///
+    /// Drawn last, so a marker is over its own trace, over the hover rule and over
+    /// the threshold — it is the answer to the question the pointer asked and
+    /// nothing on the plot may cross it.
     @ViewBuilder
-    private func singlePointMark(_ entry: HistoryChartSeries, in rect: CGRect) -> some View {
-        if entry.points.count == 1, let only = entry.points.first {
-            Circle()
-                .fill(entry.colour)
-                .frame(width: Self.dotRadius * 2, height: Self.dotRadius * 2)
-                .position(HistoryChartLayout.point(for: only, in: rect, range: range))
+    private func markers(in rect: CGRect) -> some View {
+        ForEach(plotted) { entry in
+            if entry.points.count == 1, let only = entry.points.first {
+                marker(entry.colour, at: HistoryChartLayout.point(for: only, in: rect, range: range))
+            }
+            if let sample = self.sample(in: entry) {
+                marker(entry.colour, at: HistoryChartLayout.point(for: sample, in: rect, range: range))
+            }
         }
+    }
+
+    /// One sample, as a point.
+    ///
+    /// Ringed in the plot's own ground, so the marker reads where it is always
+    /// drawn: on the crossing of its own trace and the hover rule. Without the ring
+    /// a 5pt dot in the trace's colour sitting on the trace is a thickening of the
+    /// line rather than a point on it. The ground rather than an ink, because the
+    /// ring separates the dot from what is under it and is not a mark of its own.
+    private func marker(_ colour: Color, at point: CGPoint) -> some View {
+        Circle()
+            .fill(colour)
+            .frame(width: Self.dotRadius * 2, height: Self.dotRadius * 2)
+            .padding(Self.dotRing)
+            .background(Circle().fill(Tokens.Surface.well))
+            .position(point)
     }
 
     // MARK: - Hover
 
-    /// The rule and the dots under the pointer.
+    /// The rule under the pointer, on the bucket the readout is reading.
     ///
     /// Nothing is drawn when the pointer is off the plot, and nothing reserves
     /// space for it: the readout line above already holds its height with the
     /// legend, so the pane cannot resize under the pointer that summoned it.
     @ViewBuilder
-    private func hoverMarks(in rect: CGRect) -> some View {
+    private func hoverRule(in rect: CGRect) -> some View {
         if let rail, let slot = self.slot(in: rail) {
             let x = HistoryChartLayout.point(
                 for: rail.points[slot], in: rect, range: range
@@ -436,19 +538,13 @@ public struct HistoryChart: View {
             Rectangle()
                 // The same mark as the threshold rule, stepped up the same way:
                 // this is the line the reading on the readout belongs to, and a
-                // vertical hairline over a well is the frailest thing here.
+                // vertical hairline over a well is the frailest thing here. Snapped
+                // like every other line on the plot — this one moves with the
+                // pointer, so it is the one that would smear at every second
+                // bucket.
                 .fill(Self.ruleInk)
                 .frame(width: ruleWidth, height: rect.height)
-                .position(x: x, y: rect.midY)
-
-            ForEach(plotted) { entry in
-                if let sample = self.sample(in: entry) {
-                    Circle()
-                        .fill(entry.colour)
-                        .frame(width: Self.dotRadius * 2, height: Self.dotRadius * 2)
-                        .position(HistoryChartLayout.point(for: sample, in: rect, range: range))
-                }
-            }
+                .position(x: snapped(x, thickness: ruleWidth), y: rect.midY)
         }
     }
 
@@ -484,7 +580,13 @@ public struct HistoryChart: View {
                     // than mono: a run with a word in it is not a figure, and a
                     // run of unpredictable length could not be given the rail
                     // mono is only ever set inside.
-                    .font(.system(size: Tokens.Ramp.detail, weight: Tokens.Ramp.emphasisWeight))
+                    //
+                    // `.regular`, and written down rather than inherited: this is
+                    // the label on the reading beside it, and the panel's two
+                    // weights are a reading at `titleWeight` and everything that
+                    // annotates one a step lighter. It used to be set at the same
+                    // weight as the figure, which left the line with two subjects.
+                    .font(.system(size: Tokens.Ramp.detail, weight: .regular))
                     .monospacedDigit()
                     // `.foregroundColor` and never `.foregroundStyle` on a `Text`:
                     // with a `Text` receiver the compiler binds the macOS 14
@@ -515,25 +617,55 @@ public struct HistoryChart: View {
     /// noise nobody can act on; here the user has asked one bucket a specific
     /// question, and rounding the answer to a whole percent makes two
     /// neighbouring hours read as the same hour.
+    ///
+    /// The digits are `Ink.body` and never the trace's colour, which is a defect
+    /// as much as a rule: the colour handed over is the tint of the *window* —
+    /// the ramp read off its highest bucket — so hovering a quiet 2% bucket on a
+    /// window that peaked at 99% printed `2.0%` in warning red. A figure and the
+    /// measurement beside it may not disagree. What the reading carries instead is
+    /// the panel's own signal: `alertWeight` at or above the warning threshold,
+    /// which is a channel that survives being read by someone who cannot see the
+    /// difference between the ramp's two ends. The identity the tint used to carry
+    /// moves to the key beside it, which is the same mark the legend uses.
     @ViewBuilder
     private func hoveredFigure(for entry: HistoryChartSeries) -> some View {
         if let sample = sample(in: entry) {
-            figure(sample.percent, size: Tokens.Ramp.title, tint: entry.colour, fractionDigits: 1)
+            HStack(spacing: Tokens.Space.snug) {
+                seriesKey(for: entry)
+                figure(
+                    sample.percent,
+                    size: Tokens.Ramp.title,
+                    tint: Tokens.Ink.body,
+                    weight: sample.percent >= warningThreshold
+                        ? Tokens.Ramp.alertWeight
+                        : Tokens.Ramp.titleWeight,
+                    fractionDigits: 1
+                )
                 // Reserved, not measured: "9.4%" and "100.0%" must not walk the
                 // neighbouring service's figure sideways as the pointer moves.
                 .frame(width: Self.readoutWidth, alignment: .trailing)
+            }
         }
+    }
+
+    /// The one mark that says which line a run belongs to: a stub of the line
+    /// itself, at the line's own width. Drawn by the legend and by the readout, so
+    /// a reading is tied to its trace by the same shape in both states rather than
+    /// by a colour in one of them.
+    private func seriesKey(for entry: HistoryChartSeries) -> some View {
+        Capsule(style: Tokens.Radius.style)
+            .fill(entry.colour)
+            .frame(width: Tokens.Space.medium, height: Self.lineWidth)
     }
 
     private func legendKey(for entry: HistoryChartSeries) -> some View {
         HStack(spacing: Tokens.Space.snug) {
-            Capsule(style: Tokens.Radius.style)
-                .fill(entry.colour)
-                .frame(width: Tokens.Space.medium, height: Self.lineWidth)
+            seriesKey(for: entry)
             // A series name is a word, so SF Pro: the legend names lines and
-            // carries no reading.
+            // carries no reading, so it is set at `.regular` beside a reading's
+            // `titleWeight`.
             Text(entry.title)
-                .font(.system(size: Tokens.Ramp.detail))
+                .font(.system(size: Tokens.Ramp.detail, weight: .regular))
                 .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
         }
@@ -555,13 +687,18 @@ public struct HistoryChart: View {
 
     /// The y axis: mono figures, trailing-aligned in the reserved gutter, so 0, 50
     /// and 100 share one right edge and the plot beside them starts at one x.
+    ///
+    /// Set at `.regular` and centred on the gridline it names. An axis stop is a
+    /// label on the frame, and the frame being a weight lighter than the reading is
+    /// what leaves the readout as the heaviest run on the chart — the whole of the
+    /// hierarchy here, since every one of these is the same size and the same ink.
     private func axisFigures(in rect: CGRect) -> some View {
         ForEach(Self.labelledStops, id: \.self) { stop in
-            figure(stop, size: Tokens.Ramp.caption, tint: Tokens.Ink.muted)
+            figure(stop, size: Tokens.Ramp.caption, tint: Tokens.Ink.muted, weight: .regular)
                 .fixedSize()
                 .frame(width: Self.axisFigureWidth, alignment: .trailing)
                 .position(x: Self.axisFigureWidth / 2,
-                          y: HistoryChartLayout.y(for: stop, in: rect))
+                          y: gridY(for: stop, in: rect, thickness: Tokens.Control.hairline))
         }
     }
 
@@ -595,7 +732,7 @@ public struct HistoryChart: View {
     /// panel has no third ink to reach for in any case.
     private func timeLabel(_ date: Date) -> some View {
         Text(Self.stamp(for: date, span: rangeSpan))
-            .font(.system(size: Tokens.Ramp.caption))
+            .font(.system(size: Tokens.Ramp.caption, weight: .regular))
             .monospacedDigit()
             .foregroundColor(Tokens.Ink.muted)
             .lineLimit(1)
@@ -606,8 +743,14 @@ public struct HistoryChart: View {
     /// not the same as a service sitting at zero, and must not be drawn as one.
     private func emptyState(in rect: CGRect) -> some View {
         Text("No history yet")
-            .font(.system(size: Tokens.Ramp.title))
+            .font(.system(size: Tokens.Ramp.title, weight: .regular))
             .foregroundColor(Tokens.Ink.muted)
+            // The plot's centre is also where the 50% gridline is, so the sentence
+            // was being struck through by it. It carries the ground with it and the
+            // grid passes behind, which is the same trick every axis label in a
+            // chart uses and cheaper than moving the sentence off centre.
+            .padding(.horizontal, Tokens.Space.small)
+            .background(Tokens.Surface.well)
             .position(x: rect.midX, y: rect.midY)
     }
 
@@ -635,17 +778,25 @@ public struct HistoryChart: View {
     /// the whole app follows: the unit annotates the number rather than being part
     /// of the reading, and holding it neutral is what leaves the digits as the only
     /// run that can gain a colour.
+    ///
+    /// The weight is the caller's, and it is the panel's two-weight rule reaching
+    /// the chart: a reading is set at `titleWeight`, a reading at or over the
+    /// warning threshold at `alertWeight`, and a figure that labels the frame — the
+    /// axis stops, the threshold's own value — at `.regular`, because it is a label
+    /// and not a reading. Mono advances do not move with weight, so nothing set in
+    /// a reserved rail changes width when the weight changes.
     private func figure(
         _ ratio: Double,
         size: CGFloat,
         tint: Color,
+        weight: Font.Weight = Tokens.Ramp.titleWeight,
         fractionDigits: Int = 0
     ) -> some View {
         let value = (ratio.isFinite ? min(max(ratio, 0), 1) : 0) * 100
         return HStack(spacing: 0) {
             Text(value, format: .number.precision(.fractionLength(fractionDigits)))
                 .font(.system(size: size,
-                              weight: Tokens.Ramp.emphasisWeight,
+                              weight: weight,
                               design: Tokens.Ramp.figureDesign))
                 .foregroundColor(tint)
             // Verbatim: this is a unit, not a word to be looked up, and a
@@ -696,6 +847,22 @@ public struct HistoryChart: View {
     }
 
     // MARK: - Shapes
+
+    /// The plot's recess, in the chart's own coordinates.
+    ///
+    /// Ignores the rect it is handed, for the same reason `Polyline` does: this
+    /// shape is placed over the whole chart while the plot is a region inside it,
+    /// so the geometry comes from `plotRect(in:)` rather than from whatever frame
+    /// the layout gave the shape. One definition, both filled with and clipped to,
+    /// so the ground and the edge the grid is cut against cannot disagree.
+    private struct WellShape: Shape {
+        let rect: CGRect
+        let radius: CGFloat
+
+        func path(in _: CGRect) -> Path {
+            Path(roundedRect: rect, cornerRadius: radius, style: Tokens.Radius.style)
+        }
+    }
 
     /// The line through a series' samples, in the chart's own coordinates.
     ///

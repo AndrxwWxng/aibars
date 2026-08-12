@@ -21,7 +21,6 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "gemini" }
     public let displayName = "Gemini"
     public let iconName = "sparkle"
-    public let accentColor: Color = Color(red: 0.26, green: 0.52, blue: 0.96)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

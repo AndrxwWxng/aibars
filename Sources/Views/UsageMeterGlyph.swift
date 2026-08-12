@@ -127,8 +127,23 @@ public enum UsageTint {
         // teal→amber→red for deuteranomaly and protanopia, which collapse hues
         // towards each other but never towards grey.
         case ..<0.80: return Tokens.dynamic(light: 0x5F636B, dark: 0x8A8F98)   // resting grey
-        case ..<0.95: return Tokens.dynamic(light: 0xB45309, dark: 0xF5A623)   // amber
-        default:      return Tokens.dynamic(light: 0xC62A2F, dark: 0xFF6B6E)   // red
+        // One amber, and it is `Ink.attention` itself rather than a second copy
+        // of its pair. The light stop used to be 0xB45309, which is a different
+        // amber from the one "this needs you" is drawn in — two ambers a user has
+        // to learn — and it measured 3.87:1 on a hovered `.always` card, which is
+        // the worst ground in the panel and is shipped by three of the five
+        // presets. A figure below the 4.5:1 floor is not a reading.
+        //
+        // Referenced, not repeated. Written out here as 0x8A5A00 / 0xF5A623 it
+        // was byte-identical to the token by hand, in a second file, which is the
+        // arrangement that produced the two ambers in the first place: one of the
+        // two gets re-cut for contrast and the other does not.
+        case ..<0.95: return Tokens.Ink.attention                              // amber
+        // Re-cut for that same card: 0xC62A2F measured 4.29:1 on it. This is
+        // 5.97 on the base surface, 4.90 on the card and 4.50 against
+        // `Meter.track`, so the top of the ramp is legal as a figure and not
+        // merely as a bar.
+        default:      return Tokens.dynamic(light: 0xB92126, dark: 0xFF6B6E)   // red
         }
     }
 

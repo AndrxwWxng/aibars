@@ -14,7 +14,6 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "minimax" }
     public let displayName = "MiniMax"
     public let iconName = "hexagon.fill"
-    public let accentColor: Color = Color(red: 0.45, green: 0.30, blue: 0.85)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

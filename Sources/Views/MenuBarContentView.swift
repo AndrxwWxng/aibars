@@ -30,6 +30,11 @@ public struct MenuBarContentView: View {
     /// The rules this file draws are hairlines, which are the first thing a
     /// low-contrast display loses.
     @Environment(\.colorSchemeContrast) private var contrast
+    /// A hairline is one device pixel, not one point: at 2x a 1pt rule is two
+    /// rows of half-covered pixels, which reads as a soft grey band rather than
+    /// a line. `Control.hairline` stays the system's own 1pt for the places that
+    /// mean the system value; the panel's one rule opts out of it.
+    @Environment(\.displayScale) private var displayScale
 
     private typealias PanelSection = AppearanceSettings.PanelSection
 
@@ -134,10 +139,15 @@ public struct MenuBarContentView: View {
     ///
     /// A `Rectangle` rather than a `Divider` because a `Divider` carries its own
     /// material and a second rule weight with it, and this app has one of each.
+    ///
+    /// One device pixel tall, which is what makes it land *on* the grid: every
+    /// gap above it is a whole point, so at any scale the line starts on a pixel
+    /// boundary and covers exactly one row of them. `BrowserLoginView` draws its
+    /// rule the same way and says so.
     private var headerRule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-            .frame(height: Tokens.Control.hairline)
+            .frame(height: 1 / displayScale)
     }
 
     /// What `adoptExpansion` watches: which blocks exist and which of them carry
@@ -284,6 +294,7 @@ public struct MenuBarContentView: View {
             onSignIn: { signIn(provider) },
             onOpenDashboard: { open(provider.dashboardURL) },
             onRefresh: { Task { await state.refresh(provider.id) } },
+            isRefreshing: state.refreshingRows.contains(provider.id),
             appearance: appearance
         )
     }
@@ -291,11 +302,15 @@ public struct MenuBarContentView: View {
     // MARK: - Header
 
     private func header(firstRow: AnyUsageProvider?) -> some View {
-        PanelHeader(
+        // Longest first, and the header draws the longest one that fits rather
+        // than cutting the tail off the only line it was handed.
+        let summaries = headerSummaries(firstRow: firstRow)
+        return PanelHeader(
             appearance: appearance,
             levels: state.usageLevels,
             topPercent: state.topUsagePercent,
-            summary: headerSubtitle(firstRow: firstRow)
+            summary: summaries.first,
+            alternates: Array(summaries.dropFirst())
         ) {
             // Refresh, history, settings and quit are never hideable: they are
             // the only way out of an app with no Dock icon and no window.
@@ -339,19 +354,26 @@ public struct MenuBarContentView: View {
         }
     }
 
-    /// The line under the title: what the panel most needs to say, and how old
-    /// the numbers beneath it are.
+    /// The line beside the title — what the panel most needs to say and how old
+    /// the numbers beneath it are — and every shorter way of saying it.
     ///
     /// `updatedText` is the only answer this app has to "when was this from?",
     /// which in a poller reading undocumented endpoints on a backoff schedule is
     /// the second question every number raises — and it lived exclusively inside
     /// the refresh button's tooltip, where nobody hovers until they have already
     /// decided to distrust the reading.
-    private func headerSubtitle(firstRow: AnyUsageProvider?) -> String {
+    ///
+    /// Three forms rather than one because a single string can only ever be cut:
+    /// the header used to show "Claude is nearly capped…" with 21pt of empty line
+    /// beside it, having spent the width on a `Spacer` before the summary was
+    /// measured. It picks a whole sentence now, and the shortest of the three is
+    /// short enough that no panel width can truncate it. `headlineSummary` is
+    /// untouched — this is which sentence gets drawn, not what it says.
+    private func headerSummaries(firstRow: AnyUsageProvider?) -> [String] {
         let summary = state.headlineSummary
         // Nothing has been fetched, so there is no age to report and the summary
         // is already saying so.
-        guard state.lastRefresh != nil else { return summary }
+        guard state.lastRefresh != nil else { return [summary, shortSummary] }
         // The default sort is by urgency, which puts the busiest service in row
         // one — so "claude is nearly capped — 92%, caps in 40m" is the row
         // directly beneath the header, its meter and its pace line, read back in
@@ -363,9 +385,31 @@ public struct MenuBarContentView: View {
         if let name = state.topProviderName,
            firstRow?.displayName == name,
            summary.hasPrefix(name) {
-            return updatedText
+            return [updatedText, shortSummary]
         }
-        return "\(summary) · \(updatedText)"
+        return ["\(summary) · \(updatedText)", summary, shortSummary]
+    }
+
+    /// The summary in fifteen characters or fewer: the last thing the header can
+    /// say before it would have to start cutting a sentence in half.
+    ///
+    /// A closed set, in `headlineSummary`'s own order so the two cannot disagree
+    /// about which fact matters most — the busiest service and its figure, else a
+    /// count, else why there is no count. It carries no clause: at this width the
+    /// pace, the failure count and the freshness are all things the rows beneath
+    /// and the refresh tooltip already answer.
+    private var shortSummary: String {
+        if state.isAdopting { return "checking…" }
+        let connected = state.rankedProviders.filter(\.isAuthenticated).count
+        guard connected > 0 else {
+            let locked = state.lockedAccounts.values.reduce(0, +)
+            return locked > 0 ? "\(locked) locked" : "no services"
+        }
+        if SessionStore.shared.isAccessDenied { return "keychain denied" }
+        if let name = state.topProviderName, let top = state.usageLevels.max() {
+            return "\(name) \(Int((top * 100).rounded()))%"
+        }
+        return "\(connected) connected"
     }
 
     private var updatedText: String {
@@ -390,8 +434,12 @@ public struct MenuBarContentView: View {
             Image(systemName: "square.dashed")
                 .font(.system(size: Self.emptyMarkSize))
                 .foregroundColor(Tokens.Ink.muted)
+            // A name, so it takes the weight every name in the panel takes.
+            // `emphasisWeight` is gone — it resolved to this same `.medium` under
+            // a name that promised a step up, which is how the panel came to have
+            // no weight contrast at all.
             Text(hasEnabledServices ? "Nothing to show" : "No services enabled")
-                .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.emphasisWeight))
+                .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.body)
             // An empty panel with services enabled means the appearance filters
             // ate them — say so, or the user goes looking in Services for a row
@@ -399,7 +447,9 @@ public struct MenuBarContentView: View {
             Text(hasEnabledServices
                  ? "Your Appearance settings are hiding every service."
                  : "Turn one on in Settings → Services.")
-                .font(.system(size: appearance.metrics.detailSize))
+                // Regular, said out loud rather than inherited: the panel has two
+                // weights and every caption in it is this one.
+                .font(.system(size: appearance.metrics.detailSize, weight: .regular))
                 .foregroundColor(Tokens.Ink.muted)
                 .multilineTextAlignment(.center)
         }
@@ -416,12 +466,12 @@ public struct MenuBarContentView: View {
     }
 
     private var hasNothingConnected: Bool {
-        // Locked sessions are excluded deliberately. The header already says
-        // "n sessions found but locked — unlock a browser in Settings", and
-        // telling someone in larger type directly beneath it that they need not
-        // sign in again contradicts the one instruction they do have to follow.
         !state.rankedProviders.contains(where: \.isAuthenticated)
-            && state.lockedAccounts.isEmpty
+    }
+
+    /// How many browser sessions were found and could not be read.
+    private var lockedSessionCount: Int {
+        state.lockedAccounts.values.reduce(0, +)
     }
 
     /// The one sentence a first launch gets.
@@ -432,9 +482,23 @@ public struct MenuBarContentView: View {
     /// that each say "connect" — which reads as eleven logins to go and find.
     /// This is the whole premise of the app, and it was written down nowhere the
     /// panel could show it.
+    ///
+    /// Two wordings, because there are two reasons a panel has nothing connected
+    /// and they ask for opposite things. A locked Chromium session is not "you
+    /// need not sign in again" — it is one instruction the user does have to
+    /// follow, and until now the locked panel showed neither sentence. The slot
+    /// was suppressed on the premise that the header says
+    /// "n sessions found but locked — unlock a browser in Settings"; measured at
+    /// the shipped 356pt that sentence wants 285pt against 161pt of header, so
+    /// `ViewThatFits` correctly falls to the fifteen-character `3 locked` and the
+    /// instruction reaches the screen nowhere at all. It goes here instead, in the
+    /// slot that exists for exactly this — a panel of fifteen identical rows and
+    /// no idea what to do about them.
     private var orientation: some View {
-        Text("aibars reads the sessions already open in your browsers. You don't need to sign in again.")
-            .font(.system(size: appearance.metrics.detailSize))
+        Text(lockedSessionCount > 0
+             ? "\(lockedSessionCount) browser \(lockedSessionCount == 1 ? "session was" : "sessions were") found but could not be read. Unlock a browser in Settings."
+             : "aibars reads the sessions already open in your browsers. You don't need to sign in again.")
+            .font(.system(size: appearance.metrics.detailSize, weight: .regular))
             .foregroundColor(Tokens.Ink.muted)
             // The sentence wraps at any panel width, and a wrapped Text inside a
             // stack whose height is being fixed from below gets truncated to one
@@ -489,9 +553,12 @@ public struct PanelHeader<Trailing: View>: View {
     public let topPercent: Double
     /// The status line beside the wordmark, drawn only while
     /// `showsHeaderSummary` is on. It used to sit under the title; it says the
-    /// same thing on the same line now, and yields its tail before anything else
-    /// on that line gives way.
+    /// same thing on the same line now.
     public let summary: String?
+    /// Shorter ways of saying `summary`, longest first. The header draws the
+    /// longest one that fits its own line, so a full sentence is dropped for a
+    /// shorter sentence rather than losing its tail to an ellipsis.
+    public let alternates: [String]
 
     private let trailing: Trailing
 
@@ -500,12 +567,14 @@ public struct PanelHeader<Trailing: View>: View {
         levels: [Double] = [],
         topPercent: Double = 0,
         summary: String?,
+        alternates: [String] = [],
         @ViewBuilder trailing: () -> Trailing
     ) {
         self._appearance = ObservedObject(wrappedValue: appearance)
         self.levels = levels
         self.topPercent = topPercent
         self.summary = summary
+        self.alternates = alternates
         self.trailing = trailing()
     }
 
@@ -539,35 +608,46 @@ public struct PanelHeader<Trailing: View>: View {
                 // A wrapped title grows the header, which pushes the rule and
                 // every row below it down and makes the window resize to follow.
                 .lineLimit(1)
+                // Measured, never squeezed. The name is the header; it is two
+                // words shorter than anything else on the line and there is no
+                // width at which shortening it to "aiba…" is the right answer.
+                .fixedSize()
 
-            if appearance.showsHeaderSummary, let summary {
-                // SF Pro with tabular digits, not SF Mono: "updated 12s ago" is
-                // a run with words in it, and the mono face is reserved for runs
-                // that are only digits and separators. The tabular figures still
-                // matter — this line counts up every second the panel is open.
-                Text(summary)
-                    .font(.system(size: appearance.metrics.detailSize).monospacedDigit())
-                    .foregroundColor(Tokens.Ink.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    // The one thing on this line that may be cut. Sharing a
-                    // baseline with the wordmark means the two are now competing
-                    // for the same width, and the answer has to be written down:
-                    // the name is the header, the summary is what it happens to
-                    // be saying, so the summary gives ground first and loses its
-                    // tail rather than shortening "aibars" to "aiba…".
-                    .layoutPriority(-1)
+            if appearance.showsHeaderSummary, !candidates.isEmpty {
+                // The line's only flexible element, which is the fix: the
+                // `Spacer` that used to sit here took its width at priority 0,
+                // before a summary at priority −1 was measured at all, so the
+                // sentence was cut 22pt early with the empty space sitting
+                // beside it. Nothing between the summary and the buttons now —
+                // the summary's own frame is the gap.
+                ViewThatFits(in: .horizontal) {
+                    summaryText(at: 0)
+                    summaryText(at: 1)
+                    summaryText(at: 2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                // With no summary there is nothing flexible left to push the
+                // cluster onto the panel's right edge.
+                Spacer(minLength: Tokens.Space.medium)
             }
 
-            Spacer(minLength: Tokens.Space.medium)
-
             // One cluster, tight enough to read as a set rather than as four
-            // unrelated controls scattered along the edge.
+            // unrelated controls scattered along the edge. Fixed, so a long
+            // sentence can never squeeze a control's hit area.
             HStack(spacing: Tokens.Space.tight) {
                 trailing
             }
+            .fixedSize()
         }
-        .padding(.horizontal, Tokens.Space.gutter)
+        // The rows' own padding and not the raw gutter, so the header's mark and
+        // its wordmark stand on the same two vertical axes as every row's mark
+        // and name. Measured before this: the header sat at 12 and 38 while the
+        // rows sat at 15 and 40 — four axes down a 356pt panel, straddling a
+        // rule that bleeds the full width. It also has to be the metric rather
+        // than a constant, because the rows' padding moves with density and a
+        // fixed header would come back out of line at every preset but one.
+        .padding(.horizontal, appearance.metrics.rowHorizontalPadding)
         // A point asymmetric: the rule beneath reads as the header's own bottom
         // edge rather than as the list's top one, so the gap down to it is the
         // smaller of the two.
@@ -575,6 +655,38 @@ public struct PanelHeader<Trailing: View>: View {
         .padding(.bottom, Tokens.Space.headerBottom)
     }
 
+    /// The lines the header may draw, longest first.
+    ///
+    /// Padded to three by repeating the last rather than assembled with `if`,
+    /// because every child of `ViewThatFits` counts as a candidate and a branch
+    /// that produces nothing produces an `EmptyView` — which fits any width, so
+    /// a narrow panel would answer with a blank line instead of a short one.
+    private var candidates: [String] {
+        let all = ([summary].compactMap { $0 } + alternates).filter { !$0.isEmpty }
+        guard let last = all.last else { return [] }
+        return all + Array(repeating: last, count: max(0, 3 - all.count))
+    }
+
+    /// One candidate, or the shortest one if the caller asks past the end.
+    ///
+    /// SF Pro with tabular digits, not SF Mono: "updated 12s ago" is a run with
+    /// words in it, and the mono face is reserved for runs that are only digits
+    /// and separators. The tabular figures still matter — this line counts up
+    /// every second the panel is open.
+    private func summaryText(at index: Int) -> some View {
+        let lines = candidates
+        let line = lines.indices.contains(index) ? lines[index] : (lines.last ?? "")
+        return Text(line)
+            .font(.system(
+                size: appearance.metrics.detailSize,
+                weight: .regular
+            ).monospacedDigit())
+            .foregroundColor(Tokens.Ink.muted)
+            .lineLimit(1)
+            // Reached only by the last candidate, and only if the panel is
+            // narrower than fifteen characters of caption.
+            .truncationMode(.tail)
+    }
 }
 
 /// The panel's masthead.
@@ -635,23 +747,24 @@ struct DisclosureHeader: View {
                     // The one thing on this header that moves, and the only
                     // motion the panel allows here: the rows themselves appear
                     // and disappear without animation, for the reason on the
-                    // toggle above.
-                    .animation(.easeOut(duration: 0.16), value: isExpanded)
+                    // toggle above. At the panel's one duration — a chevron
+                    // turning on a different clock from the plate under it is two
+                    // clocks in one gesture.
+                    .animation(Tokens.Motion.hover, value:isExpanded)
                 SectionLabel(title: title, count: count, fontSize: fontSize)
             }
             .padding(.leading, Tokens.Space.gutter)
             .contentShape(Rectangle())
-            .background(
-                Tokens.surface(Tokens.Radius.chip)
-                    .fill(Tokens.quiet(isHovered ? Tokens.Fill.controlHover : 0))
-                    // Held inside the gutter exactly as a row card is, so the
-                    // plate and the cards below it share one edge.
-                    .padding(.horizontal, Tokens.Space.cardInset)
-            )
         }
-        .buttonStyle(.plain)
+        // Held inside the gutter exactly as a row card is, so the plate and the
+        // cards below it share one edge.
+        .buttonStyle(ControlPlate(
+            radius: Tokens.Radius.chip,
+            inset: Tokens.Space.cardInset,
+            isHovered: isHovered
+        ))
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(Tokens.Motion.hover, value:isHovered)
         .help(isExpanded ? "Hide" : "Show \(count) more")
     }
 }
@@ -675,8 +788,11 @@ struct SectionLabel: View {
             // and both of them badly: it is locale-sensitive on a string that is
             // sometimes a service's own word, and an all-caps run needs tracking
             // to stay legible, which is the tracking this panel no longer has.
+            // `titleWeight`: a group header is the name of a block, and it is the
+            // one thing on this line that is a name — the count beside it is
+            // regular, which is the whole of the contrast between them.
             Text(title)
-                .font(.system(size: fontSize, weight: Tokens.Ramp.emphasisWeight))
+                .font(.system(size: fontSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
             // A run that is only digits, so it takes the mono face like every
@@ -729,24 +845,63 @@ struct HoverIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: Tokens.Control.iconGlyph, weight: Tokens.Ramp.emphasisWeight))
-                // The same ink as every caption in the panel. A control glyph is
-                // a label until it is pointed at, and `.secondary` resolved
-                // lighter than the words beside it in one appearance and heavier
-                // in the other.
-                .foregroundColor(Tokens.Ink.muted)
+                .font(.system(size: Tokens.Control.iconGlyph, weight: Tokens.Ramp.titleWeight))
                 .frame(width: size, height: size)
-                .background(
-                    Tokens.surface(Tokens.Radius.control)
-                        .fill(Tokens.quiet(isHovered ? Tokens.Fill.controlHover : 0))
-                )
         }
-        .buttonStyle(.plain)
+        // The plate and the glyph's ink both come from here, because a press is
+        // only reported to a `ButtonStyle`. `Ink.muted` at rest — the same ink as
+        // every caption in the panel — stepping to `Ink.body` under the pointer:
+        // the plate says "this is a control" and the ink says "this one", which is
+        // the second channel hover was missing.
+        .buttonStyle(ControlPlate(
+            radius: Tokens.Radius.control,
+            isHovered: isHovered,
+            litInk: Tokens.Ink.body
+        ))
         .onHover { isHovered = $0 }
         // The plate arrives rather than appearing. One of the five things in the
-        // panel that animate, and at the same 0.12s as a row card's own fill.
-        .animation(.easeOut(duration: 0.12), value: isHovered)
+        // panel that animate, and at the same duration as a row card's own fill.
+        .animation(Tokens.Motion.hover, value: isHovered)
         .help(help)
+    }
+}
+
+/// The panel's control plate: nothing at rest, a fill under the pointer, a
+/// heavier fill while the pointer is down.
+///
+/// A `ButtonStyle` because that is the only place SwiftUI reports a press, and
+/// both of the panel's own controls — the header cluster and a section's
+/// disclosure — used to answer a click with nothing at all. The press is a fill
+/// and only a fill: no scale, no shadow, no geometry, because a control that
+/// moves under the pointer moves the thing being clicked.
+private struct ControlPlate: ButtonStyle {
+    let radius: CGFloat
+    /// How far the plate is held inside its own bounds. A section header's plate
+    /// stops at the card edge the rows below it share; an icon button's plate is
+    /// the button.
+    var inset: CGFloat = 0
+    let isHovered: Bool
+    /// What the label's ink becomes once the pointer is over or on it, or nil
+    /// where the label already carries its own colours.
+    var litInk: Color?
+
+    func makeBody(configuration: Configuration) -> some View {
+        let isLit = isHovered || configuration.isPressed
+        return configuration.label
+            .foregroundColor(litInk.map { isLit ? $0 : Tokens.Ink.muted })
+            .background(
+                Tokens.surface(radius)
+                    .fill(Tokens.quiet(fill(isPressed: configuration.isPressed)))
+                    .padding(.horizontal, inset)
+            )
+            // Down with the click, back on a fade. Only the press is timed here;
+            // hover is animated by the button that owns the hover state.
+            .animation(Tokens.Motion.press(configuration.isPressed), value: configuration.isPressed)
+    }
+
+    private func fill(isPressed: Bool) -> Double {
+        if isPressed { return Tokens.Fill.pressed }
+        return isHovered ? Tokens.Fill.controlHover : 0
     }
 }
 

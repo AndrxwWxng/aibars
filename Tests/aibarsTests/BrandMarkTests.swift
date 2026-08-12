@@ -195,93 +195,97 @@ final class BrandMarkTests: XCTestCase {
     /// the range it lands in; a mark that clears both clears what is between.
     private static let menuBar: (light: UInt32, dark: UInt32) = (0xF5F5F5, 0x1C1C1C)
 
-    /// Deliberately not the 4.5:1 body text owes. A filled glyph is found by its
-    /// silhouette, and a brand's colour is the brand's, not ours to correct —
-    /// the tightest thing shipping is Perplexity's cyan at ~2.2:1 on a light
-    /// bar. What this catches is a mark that disappears outright, which is every
-    /// near-black brand on a dark bar and the whole reason the ink functions
-    /// have a low band at all.
-    private static let inkFloor = 2.0
+    /// The floor a mark owes now, which is body text's own.
+    ///
+    /// It used to be 2.0, and the comment justifying it said "a brand's colour
+    /// is the brand's, not ours to correct". That premise is gone: identity is a
+    /// silhouette in one ink, so there is no brand colour left to protect and no
+    /// reason to accept Perplexity's cyan at 2.2:1 on a light bar. Every mark
+    /// draws `Tokens.Ink.mark`, which clears 4.5:1 everywhere it lands.
+    private static let inkFloor = 4.5
 
-    /// The ink measured is `foreground(dark:)` and not `menuBarInk(dark:)`,
-    /// because `MenuBarStripRenderer.markColour` draws the first one: measuring
-    /// the second would report the contrast of a colour the strip never asks
-    /// for. Where the two can differ is pinned separately, below.
-    func testEveryMarkClearsTheInkFloorOnTheMenuBar() throws {
-        for mark in BrandMark.all {
-            for dark in [false, true] {
-                let ground = Color(hex: dark ? Self.menuBar.dark : Self.menuBar.light)
-                let ratio = try XCTUnwrap(
-                    contrast(mark.foreground(dark: dark), on: ground, dark: dark),
-                    "\(mark.providerID) could not be resolved in sRGB"
-                )
-                XCTAssertGreaterThanOrEqual(
-                    ratio, Self.inkFloor,
-                    "\(mark.providerID) measures \(ratio):1 on the \(dark ? "dark" : "light") menu bar"
-                )
-            }
-        }
-    }
+    /// The worst ground any ink in the panel lands on: a hovered `.always` row
+    /// card, which is the base surface plus the hover wash.
+    private static let hoveredCard: (light: UInt32, dark: UInt32) = (0xE1E2E4, 0x262629)
 
-    /// The two ink functions differ on exactly one branch: a mark too pale for a
-    /// light ground is damped to 0.85 for the panel, which is an opaque surface
-    /// that can be seen through the alpha, and substituted outright for the menu
-    /// bar, which is translucent and would show the desktop through it instead.
-    /// Nothing published is that pale, so the branch is unreached and the strip
-    /// drawing `foreground(dark:)` costs nothing today. This is the test that
-    /// fires the day a near-white brand arrives and the strip has to pick.
-    func testTheInkFunctionsAgreeOnEveryShippingMark() {
+    /// One ink, every mark, both appearances. This is the colour rule as a test:
+    /// nothing about a mark's ink varies with the brand.
+    func testEveryMarkDrawsTheOneMarkInk() {
         for mark in BrandMark.all {
-            XCTAssertLessThanOrEqual(
-                mark.luminance, 0.78,
-                "\(mark.providerID) reaches the pale branch — the strip needs menuBarInk now"
-            )
             for dark in [false, true] {
                 XCTAssertEqual(
-                    mark.foreground(dark: dark), mark.menuBarInk(dark: dark),
-                    "\(mark.providerID) inks differently in the panel and on the bar"
+                    ProviderLogo.markInk(isLive: true), Tokens.Ink.mark,
+                    "\(mark.providerID) does not draw the one mark ink"
                 )
+                _ = dark
             }
         }
     }
 
-    /// The same floor in the panel, where the ground is known rather than
-    /// guessed at, so this one is exact. `Surface.base` is the ground the untiled
-    /// logo style draws on; under `.tile` the mark sits on a 15% wash of its own
-    /// hex, which moves the ground toward the ink — and the brands dark enough to
-    /// vanish into that wash are the ones `tile(dark:)` already substitutes a
-    /// neutral for, so the tightest case in the panel is still this one.
-    func testEveryMarkClearsTheInkFloorOnThePanel() throws {
-        for mark in BrandMark.all {
-            for dark in [false, true] {
-                let ratio = try XCTUnwrap(
-                    contrast(mark.foreground(dark: dark), on: Tokens.Surface.base, dark: dark),
-                    "\(mark.providerID) could not be resolved in sRGB"
-                )
+    /// The mark ink on the menu bar, on the panel, and on the worst card.
+    func testTheMarkInkClearsBodyContrastEverywhereItLands() throws {
+        let grounds: [(String, Color, Bool)] = [
+            ("light menu bar", Color(hex: Self.menuBar.light), false),
+            ("dark menu bar", Color(hex: Self.menuBar.dark), true),
+            ("light panel", Tokens.Surface.base, false),
+            ("dark panel", Tokens.Surface.base, true),
+            ("light hovered card", Color(hex: Self.hoveredCard.light), false),
+            ("dark hovered card", Color(hex: Self.hoveredCard.dark), true)
+        ]
+        for (name, ground, dark) in grounds {
+            let ratio = try XCTUnwrap(contrast(Tokens.Ink.mark, on: ground, dark: dark))
+            XCTAssertGreaterThanOrEqual(
+                ratio, Self.inkFloor,
+                "the mark ink measures \(ratio):1 on the \(name)"
+            )
+        }
+    }
+
+    /// A mark that is not reporting is drawn in a different ink, not a fade.
+    /// `Dim.disconnected` composited Gemini at 1.92:1 in light, across a whole
+    /// first-run panel; `Ink.muted` at full opacity measures this.
+    func testTheNotReportingInkClearsBodyContrastToo() throws {
+        for dark in [false, true] {
+            let card = Color(hex: dark ? Self.hoveredCard.dark : Self.hoveredCard.light)
+            for (name, ground) in [("panel", Tokens.Surface.base), ("hovered card", card)] {
+                let ratio = try XCTUnwrap(contrast(ProviderLogo.markInk(isLive: false), on: ground, dark: dark))
                 XCTAssertGreaterThanOrEqual(
                     ratio, Self.inkFloor,
-                    "\(mark.providerID) measures \(ratio):1 on the \(dark ? "dark" : "light") panel"
+                    "the not-reporting mark ink measures \(ratio):1 on the \(dark ? "dark" : "light") \(name)"
                 )
             }
         }
     }
 
-    func testNearBlackMarksFlipToLightOnDarkBackgrounds() throws {
-        let openAI = try XCTUnwrap(BrandMark.mark(for: "chatgpt"))
-        XCTAssertLessThan(openAI.luminance, 0.22)
-        XCTAssertNotEqual(openAI.foreground(dark: true), Color(hex: openAI.hex))
-        XCTAssertEqual(openAI.foreground(dark: false), Color(hex: openAI.hex))
+    /// The two surfaces that still ask for brand hue — the strip under `.perBar`
+    /// and meters and figures under `ColorRamp.provider` — take the banded pair,
+    /// and the band is cut so it is legal as a *figure* and not merely as a bar.
+    func testEveryBandedBrandInkIsLegalAsAFigure() throws {
+        for mark in BrandMark.all {
+            for dark in [false, true] {
+                let card = Color(hex: dark ? Self.hoveredCard.dark : Self.hoveredCard.light)
+                for (name, ground) in [("panel", Tokens.Surface.base), ("hovered card", card)] {
+                    let ratio = try XCTUnwrap(
+                        contrast(mark.brandInk(dark: dark), on: ground, dark: dark),
+                        "\(mark.providerID) could not be resolved in sRGB"
+                    )
+                    XCTAssertGreaterThanOrEqual(
+                        ratio, 4.5,
+                        "\(mark.providerID) banded ink measures \(ratio):1 on the "
+                        + "\(dark ? "dark" : "light") \(name)"
+                    )
+                }
+            }
+        }
+    }
 
-        let claude = try XCTUnwrap(BrandMark.mark(for: "claude"))
-        XCTAssertEqual(claude.foreground(dark: true), Color(hex: claude.hex))
-
-        // The three marks the pass added that are near black. OpenCode's
-        // published hex is pure black, which is the extreme case: on a dark bar
-        // it is the background.
-        for id in ["codex", "zai", "opencode"] {
-            let mark = try XCTUnwrap(BrandMark.mark(for: id))
-            XCTAssertLessThan(mark.luminance, 0.22, "\(id) no longer needs the dark-appearance flip")
-            XCTAssertNotEqual(mark.foreground(dark: true), Color(hex: mark.hex), "\(id) stayed black on dark")
+    /// Optical mass, not hue, is the other half of the "row of stickers"
+    /// complaint: coverage across the set varies 2.7×. Every entry carries a
+    /// scale, and it lands the set inside a narrow band.
+    func testEveryMarkCarriesAnOpticalScaleInRange() {
+        for mark in BrandMark.all {
+            XCTAssertGreaterThanOrEqual(mark.opticalScale, 0.80, "\(mark.providerID)")
+            XCTAssertLessThanOrEqual(mark.opticalScale, 1.10, "\(mark.providerID)")
         }
     }
 

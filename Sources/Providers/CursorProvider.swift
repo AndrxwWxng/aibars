@@ -10,7 +10,6 @@ public final class CursorProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "cursor" }
     public let displayName = "Cursor"
     public let iconName = "chevron.left.forwardslash.chevron.right"
-    public let accentColor: Color = Color(red: 0.20, green: 0.20, blue: 0.20)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

@@ -45,15 +45,21 @@ final class UsageRampContrastTests: XCTestCase {
         let expected: [(name: String, percent: Double, light: Double, dark: Double)] = [
             // Measured against Surface.base in each appearance. The resting
             // stop is no longer teal: a healthy row carries no hue, so the
-            // lowest band is grey and the recorded pair moved with it. Amber's
-            // light stop is #B45309 rather than a darker #8A5A00 — the earlier
-            // value cleared contrast as type and drew a brown smear when the
-            // same colour filled 200pt of bar, which is the one place in the
-            // panel where a legibility figure and a legibility judgement came
-            // apart. All three still clear 4.5:1, which is what this guards.
+            // lowest band is grey and the recorded pair moved with it.
+            //
+            // Both alarm stops were re-cut for the ground `Surface.base` is not:
+            // a hovered `.always` row card, light #E1E2E4 / dark #262629, which
+            // three of the five presets ship and which is the worst ground any
+            // ink in the panel lands on. Amber's light stop was #B45309, which
+            // measured 3.87:1 there — a figure under the floor — and was also a
+            // second amber beside `Ink.attention`'s. It is now `Ink.attention`'s
+            // own #8A5A00, so the panel has one amber. Red's was #C62A2F at
+            // 4.29:1 on the same card and is now #B92126. Both went up here as a
+            // consequence, which is what these numbers are for: a stop moving
+            // shows up as a number rather than as "still above 4.5".
             ("grey", 0.10, 5.67, 5.81),
-            ("amber", 0.85, 4.73, 9.32),
-            ("red", 0.95, 5.24, 6.81)
+            ("amber", 0.85, 5.58, 6.19),
+            ("red", 0.95, 5.97, 6.81)
         ]
         for stop in expected {
             let light = try XCTUnwrap(

@@ -9,10 +9,10 @@ import SwiftUI
 /// instead of read.
 ///
 /// The sample is assembled from the panel's own parts — `PanelHeader`,
-/// `MeterSlot`, `UsageFigure`, `UsageRing`, `MetricCaption`, `SecondaryChip`,
-/// `OverflowChip`, `RowActions` — measured by the panel's own `RowGeometry`, and
-/// topped by the status item's own `MenuBarStripView`. Nothing here is a copy of
-/// any of them. `ProviderRow` itself needs an `AnyUsageProvider`, which only
+/// `MeterSlot`, `UsageFigure`, `UsageRing`, `MetricCaption`,
+/// `SecondaryChipRun`, `RowActions` — measured by the panel's own `RowGeometry`,
+/// and topped by the status item's own `MenuBarStripView`. Nothing here is a copy
+/// of any of them. `ProviderRow` itself needs an `AnyUsageProvider`, which only
 /// exists wrapped around a Keychain lookup and a network fetch, but everything
 /// below that row takes a plain `UsageMetric`.
 ///
@@ -23,7 +23,10 @@ import SwiftUI
 /// drew a track where the panel draws a track with a line of context under it.
 /// The last of those made every preset's preview shorter than the row it
 /// previewed. So the rule is not "keep the copies in step" — it is that there are
-/// no copies.
+/// no copies. Two more went this pass: the chip run, which had its own HStack of
+/// the panel's chips and therefore its own bargain with the caption beside it, and
+/// the sample's brand colours, which were two hand-mixed literals standing in for
+/// a banded ink the panel reads from `BrandMark`.
 public struct AppearancePane: View {
     @ObservedObject private var appearance: AppearanceSettings
 
@@ -423,7 +426,9 @@ public struct AppearancePane: View {
             // and a caption naming the one thing in this window you are meant to
             // look at should not be the faintest text on screen.
             Text("Preview — hovers like the real panel")
-                .font(.system(size: Tokens.Ramp.caption))
+                // `.regular` out loud: two weights and an alert, and a label on a
+                // preview is context.
+                .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                 .foregroundColor(Tokens.Ink.muted)
 
             // Both axes scroll: the panel can be wider than this column and
@@ -431,12 +436,25 @@ public struct AppearancePane: View {
             // tuning a setting whose effect is off-screen. Indicators stay on — a
             // comfortable row with six windows is three times this strip, and
             // with no scroller the rest of it reads as missing rather than below.
-            ScrollView([.horizontal, .vertical]) {
-                SamplePanel(appearance: appearance)
-                    // The pane inset is on the column, not in here, so one number
-                    // places the caption and the sample.
-                    .frame(minWidth: Self.sampleViewportWidth, alignment: .leading)
-                    .padding(.bottom, Tokens.Space.large)
+            // The viewport, read rather than assumed, for the one thing the
+            // scroller will not do on its own: hold the sample at the top.
+            //
+            // A two-axis `ScrollView` centres content shorter than its clip view,
+            // and the sample is shorter than this column at every preset — so it
+            // sat some 250pt beneath the caption that names it, in the middle of
+            // an empty well, and crept upward as a setting made the panel taller.
+            // Filling the viewport with the content leaves the scroller nothing to
+            // centre; a sample taller than the column still grows past it and
+            // still scrolls.
+            GeometryReader { viewport in
+                ScrollView([.horizontal, .vertical]) {
+                    SamplePanel(appearance: appearance)
+                        // The pane inset is on the column, not in here, so one
+                        // number places the caption and the sample.
+                        .frame(minWidth: Self.sampleViewportWidth, alignment: .leading)
+                        .padding(.bottom, Tokens.Space.large)
+                        .frame(minHeight: viewport.size.height, alignment: .top)
+                }
             }
         }
         .padding(.top, Tokens.Space.paneMargin)
@@ -505,9 +523,15 @@ private struct TunerRow: View {
                     // stays for the same reason it does at every other figure
                     // site — it costs nothing and does not depend on the design
                     // token staying monospaced.
-                    .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
+                    //
+                    // `.regular` out loud rather than inherited: the app has two
+                    // weights and an alert, and a readout beside a slider is
+                    // context — the same weight the label on its left is set in.
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular, design: Tokens.Ramp.figureDesign))
                     .monospacedDigit()
-                    .foregroundStyle(Tokens.Ink.muted)
+                    // `.foregroundColor` on a `Text`, which is the app's floor:
+                    // `Text.foregroundStyle` is macOS 14.
+                    .foregroundColor(Tokens.Ink.muted)
                     // A readout wide enough to wrap would take the row's height
                     // with it, and every slider below it would shift down half a
                     // line as the value passed 100.
@@ -531,9 +555,9 @@ private struct CountStepper: View {
         LabeledContent(title) {
             Stepper(value: $value, in: range) {
                 Text("\(value)")
-                    .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular, design: Tokens.Ramp.figureDesign))
                     .monospacedDigit()
-                    .foregroundStyle(Tokens.Ink.muted)
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     .frame(width: Tokens.Control.readoutWidth, alignment: .trailing)
             }
@@ -622,6 +646,9 @@ private struct SamplePanel: View {
     /// hairlines, which a low-contrast display loses first.
     @Environment(\.colorSchemeContrast) private var contrast
 
+    /// What one device pixel is worth here, for the one rule the panel draws.
+    @Environment(\.displayScale) private var scale
+
     /// Recomputed on each access rather than stored, so the countdowns inside
     /// them stay plausible in a settings window that has been left open. One
     /// list, so the summary above the rows cannot end up describing a different
@@ -643,7 +670,13 @@ private struct SamplePanel: View {
                 appearance: appearance,
                 levels: SampleService.menuBarLevels,
                 topPercent: worst?.primary.percent ?? 0,
-                summary: summary
+                summary: summary,
+                // The panel hands its header shorter ways of saying the same
+                // thing, longest first, and draws the longest one that fits — so
+                // a 300pt panel says "Claude 92%" rather than cutting a sentence
+                // in half. A preview handed one line would be the one place in
+                // the app where the summary still shows an ellipsis.
+                alternates: [shortSummary]
             ) {
                 // Images, not buttons: these four controls can never be
                 // configured away, so the preview shows them without offering to
@@ -653,7 +686,11 @@ private struct SamplePanel: View {
                 // wordmark and the summary beside it in the wrong place.
                 ForEach(["arrow.clockwise", "chart.xyaxis.line", "gearshape", "power"], id: \.self) { symbol in
                     Image(systemName: symbol)
-                        .font(.system(size: Tokens.Control.iconGlyph, weight: Tokens.Ramp.emphasisWeight))
+                        // `titleWeight`, like every glyph in the app: an icon is
+                        // an answer rather than context, and the token that used
+                        // to be asked for here promised a step up and resolved to
+                        // this same weight.
+                        .font(.system(size: Tokens.Control.iconGlyph, weight: Tokens.Ramp.titleWeight))
                         .foregroundColor(Tokens.Ink.muted)
                         .frame(width: Tokens.Control.iconButton, height: Tokens.Control.iconButton)
                 }
@@ -712,16 +749,33 @@ private struct SamplePanel: View {
     /// service, so there is nothing to act on. It also put hue on the one
     /// element that stays on screen while the list is scrolled, so it shouted for
     /// as long as the panel was left open.
+    ///
+    /// One device pixel tall, not one point: `Control.hairline` is the system's
+    /// separator *thickness*, and drawn literally on a 2× display it lays down
+    /// twice the ink AppKit's own separator does and reads as a soft grey band
+    /// rather than as an edge. The panel's rule takes the same treatment, and the
+    /// preview has to draw the rule the panel draws.
     private var headerRule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-            .frame(height: Tokens.Control.hairline)
+            .frame(height: Tokens.Control.hairline / max(scale, 1))
     }
 
     /// The figure is read off the sample rather than typed into the sentence, so
     /// the summary cannot end up claiming a percentage no row in the preview shows.
     private var summary: String {
         "Claude is nearly capped — \(percentLabel(SampleService.claude.primary.percent))"
+    }
+
+    /// The same fact in fifteen characters or fewer, in the panel's own short
+    /// form: the busiest service and its figure, with no clause on it.
+    ///
+    /// No freshness clause in front of either line, which is where this and the
+    /// panel's ladder differ on purpose — the preview has fetched nothing, and
+    /// "updated just now" under a settings window that has been open an hour is
+    /// the one sentence a sample must not say.
+    private var shortSummary: String {
+        "\(SampleService.claude.displayName) \(percentLabel(SampleService.claude.primary.percent))"
     }
 }
 
@@ -770,6 +824,7 @@ struct SampleRow: View {
             logoStyle: appearance.logoStyle,
             logoSize: CGFloat(appearance.logoSize),
             panelWidth: CGFloat(appearance.panelWidth),
+            rowActions: appearance.rowActions,
             lines: lines
         )
     }
@@ -818,6 +873,11 @@ struct SampleRow: View {
             // 49pt comfortable row and eats the corners of a 27pt compact one.
             Tokens.surface(geometry.cardRadius)
                 .fill(Tokens.quiet(Tokens.rowBackground(appearance.rowBackground, isHovered: isHovered)))
+                // The panel's own hover, transition included: short enough to read
+                // as the card lighting up rather than as a fade. The preview said
+                // "hovers like the real panel" while lighting instantly, which is
+                // the one difference a user can see in this window.
+                .animation(.easeOut(duration: 0.12), value: isHovered)
                 // Held inside the gutter so a hovered card floats rather than
                 // touching the panel edge.
                 .padding(.horizontal, Tokens.Space.cardInset)
@@ -849,6 +909,13 @@ struct SampleRow: View {
         return appearance.secondaryWindows != .hidden && !service.secondary.isEmpty
     }
 
+    /// The mark, and the dial when the meter is one.
+    ///
+    /// No nudge onto the title's band any more, here or in the panel: the mark
+    /// box and the title box are both 18pt at the defaults, so the two already
+    /// sit on one band and the 1pt drop was a lie written in two files —
+    /// `RowGeometry` reserved it as well, which made every row a point taller
+    /// than the row it drew.
     @ViewBuilder
     private var leading: some View {
         if hasLeading {
@@ -884,7 +951,6 @@ struct SampleRow: View {
                     )
                 }
             }
-            .padding(.top, Tokens.Space.hairline)
         }
     }
 
@@ -907,37 +973,11 @@ struct SampleRow: View {
                 .font(.system(size: metrics.titleSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.body)
                 .lineLimit(1)
-                // The name takes its width before the account label and the
-                // pill, which is the panel's own rule for a 300pt row.
+                // The name takes its width before the run that says which
+                // account, which is the panel's own rule for a 300pt row.
                 .layoutPriority(1)
 
-            if appearance.showsAccountLabels {
-                // Caption type, which is `detailSize` — the 10pt step is the pace
-                // sentence's alone, and a second caption size on the row is a
-                // rank the panel does not have.
-                Text(service.account)
-                    .font(.system(size: metrics.detailSize))
-                    .foregroundColor(Tokens.Ink.muted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(-1)
-            }
-
-            if appearance.showsPlanNames {
-                // The one pill left in the panel, and the only thing `Fill.pill`
-                // still paints. Cornered at `Radius.chip` rather than run through
-                // a capsule: nothing in the chrome is rounder than 10 any more,
-                // and a fully round pill beside an 8pt card was the loudest
-                // corner on the row.
-                Text(service.plan)
-                    .font(.system(size: metrics.detailSize))
-                    // A pill that wraps to a second line stops being a pill.
-                    .lineLimit(1)
-                    .padding(.horizontal, Tokens.Space.small)
-                    .padding(.vertical, Tokens.Space.hairline)
-                    .background(Tokens.surface(Tokens.Radius.chip).fill(Tokens.quiet(Tokens.Fill.pill)))
-                    .foregroundColor(Tokens.Ink.muted)
-            }
+            identityRun
 
             // `Space.medium`, which is the panel's own minimum between the name
             // and the buttons. It was `snug` here, and a preview that lets its
@@ -967,6 +1007,67 @@ struct SampleRow: View {
 
             trailingValue
         }
+    }
+
+    /// Which account, and what plan it is on: one muted run rather than a label
+    /// and a filled pill.
+    ///
+    /// The pill is deleted from the panel and from here together. It had
+    /// `lineLimit(1)` and no floor while the name took the width first, so at
+    /// 300pt and 130% type it squeezed to nothing and still drew its fill — a
+    /// bare grey blob after a truncated name — and the account label beside it,
+    /// which is the part that says *which* Claude this row is, was given zero
+    /// width and vanished. Both parts are text now, joined by the panel's own
+    /// middle dot, and the run gives ground as a whole.
+    private var identityParts: [String] {
+        var parts: [String] = []
+        if appearance.showsAccountLabels { parts.append(service.account) }
+        if appearance.showsPlanNames { parts.append(service.plan) }
+        return parts
+    }
+
+    /// The run, and what it gives up first.
+    ///
+    /// `ViewThatFits` drops it whole rather than truncating it away: the account
+    /// and the plan, then the account alone, then nothing at all. A very long
+    /// service name therefore takes the line and this run leaves it, which is
+    /// the panel's own order — the name is what the row cannot be read without.
+    @ViewBuilder
+    private var identityRun: some View {
+        let parts = identityParts
+        if !parts.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                // The separator is the panel's own, and it is spelled here rather
+                // than composed from two `Text`s so the whole run gives way as one.
+                identityText(parts.joined(separator: " · "))
+                // The plan is the half that goes: "Max 20×" is the same word on
+                // every row of one service, and the address is not.
+                if parts.count > 1, let first = parts.first {
+                    identityText(first)
+                }
+                // The candidate `ViewThatFits` can always fall back on, which has
+                // to be something that fits any width: the run drops out whole and
+                // the name keeps the line.
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+    }
+
+    /// Caption type, which is `detailSize` — the 10pt step is the pace sentence's
+    /// alone, and a second caption size on the row is a rank the panel does not
+    /// have. `.regular` out loud, because this is context beside a name set in
+    /// `titleWeight` and a caption that inherits a weight is a weight nobody chose.
+    ///
+    /// Middle truncation: the tail of an address is the part that tells two
+    /// accounts of one service apart, and its head is the part that tells the
+    /// person apart. No `layoutPriority` at all — at −1 it was sized after the
+    /// spacer beside it and given nothing.
+    private func identityText(_ run: String) -> some View {
+        Text(run)
+            .font(.system(size: metrics.detailSize, weight: .regular))
+            .foregroundColor(Tokens.Ink.muted)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     /// The figure rail, held whether or not there is a figure in it.
@@ -1044,8 +1145,12 @@ struct SampleRow: View {
         VStack(alignment: .leading, spacing: metrics.captionGap) {
             // Under the ring the dial in the leading column is the meter, so the
             // text column holds only the line of context. Under the bar and the
-            // bare number the slot stands either way: a track for one, the
-            // hairline that stands in for it for the other.
+            // bare number the slot stands either way — it is the same height in
+            // both, which is what the row is squared against — and it has exactly
+            // two drawings now: a track with its fill, or nothing. The hairline
+            // that used to stand in for a meter is gone from the panel and from
+            // here: a full-width rule under every title, with nothing beneath it,
+            // reads as a table rule rather than as "no quota".
             if appearance.meterStyle != .ring {
                 MeterSlot(
                     metric: primary,
@@ -1151,27 +1256,20 @@ struct SampleRow: View {
 
     /// The further windows folded onto the trailing half of the caption line.
     ///
-    /// A full step of the spacing scale between chips, and the same step again
-    /// between the caption and the first of them: with no capsule around a chip
-    /// any more, the gap is the only thing telling one window from the next.
+    /// The panel's own run, not a second HStack of the panel's own chips. This
+    /// was the last copy left in the file: the chips, their spacing and how the
+    /// run bargains with the caption beside it were written out here as well as
+    /// in `SecondaryChipRun`, so how much of "5h session · resets in 1h 19m"
+    /// survived depended on which of the two you were looking at. One view, and
+    /// the width it reserves is whatever the panel reserves.
     private var chips: some View {
         let split = chipSplit(service.secondary.count)
-        return HStack(spacing: Tokens.Space.medium) {
-            ForEach(numbered(split.shown), id: \.offset) { window in
-                SecondaryChip(
-                    metric: window.element,
-                    accent: service.accent,
-                    appearance: appearance
-                )
-            }
-            if split.hidden > 0 {
-                OverflowChip(count: split.hidden, appearance: appearance)
-            }
-        }
-        // The run takes the width it needs and the caption beside it gives, which
-        // is the same bargain a chip strikes inside itself: the label truncates,
-        // the reading does not.
-        .fixedSize()
+        return SecondaryChipRun(
+            chips: Array(service.secondary.prefix(split.shown)),
+            overflow: split.hidden,
+            accent: service.accent,
+            appearance: appearance
+        )
     }
 
     /// Keyed on position rather than on the window's name: a service can report
@@ -1198,23 +1296,36 @@ struct SampleRow: View {
 // MARK: - Sample data
 
 /// Fixed stand-ins for two connected services, deliberately near the worst case
-/// the layout has to survive: an email address, a plan pill, six usage windows
+/// the layout has to survive: an email address, a plan name, six usage windows
 /// and a headline metric past the warning threshold. The user's own accounts
 /// would make a prettier preview and a less informative one.
 ///
-/// That last figure does double duty and is why it is not tuned down. Past the
-/// warning threshold at every preset, it is the only reading that shows the
-/// square-capped fill and the heavier figure — and the second service,
-/// mid-window, is what makes those legible as a state rather than as decoration.
-/// It is also the one coloured thing in the sample, which is the panel's own new
-/// rule shown rather than described: a preview where every row is tinted teaches
-/// that colour means nothing.
+/// That last figure does double duty and is why it is not tuned down. It sits in
+/// the caution band at the shipped thresholds — above 80%, under 95% — which puts
+/// it a short drag of the warning slider away from the square-capped fill and the
+/// heavier figure, so the two channels that carry near-cap can be seen arriving
+/// rather than described in a footer. (It used to be *past* the shipped warning
+/// threshold, and the comment here went on saying so after the default moved.)
+/// The second service, mid-window, is what makes the first legible as a state
+/// rather than as decoration: it is the one coloured thing in the sample, which is
+/// the panel's own rule shown rather than described — a preview where every row is
+/// tinted teaches that colour means nothing.
 ///
 /// Internal for the same reason `SampleRow` is: the row cannot be measured
 /// against a real one without the metrics it is drawn from.
 struct SampleService {
     let serviceID: String
     let displayName: String
+    /// What `ColorRamp.provider` paints this service's meter and figure with,
+    /// which is the panel's own banded brand ink and never a literal.
+    ///
+    /// It used to be a hand-mixed orange and a hand-mixed green written here —
+    /// two saturated colours belonging to no system, in the one window whose job
+    /// is to show what the panel looks like, and neither of them the colour the
+    /// panel would have drawn. `BrandMark.brandInk` is the banded pair the row
+    /// itself reads, so the provider ramp previews as the provider ramp; a
+    /// service with no mark falls back to the system accent, exactly as the row
+    /// does.
     let accent: Color
     let account: String
     let plan: String
@@ -1227,7 +1338,7 @@ struct SampleService {
         SampleService(
             serviceID: "claude",
             displayName: "Claude",
-            accent: Color(red: 0.85, green: 0.45, blue: 0.30),
+            accent: brandInk("claude"),
             account: "you@example.com",
             plan: "Max 20×",
             primary: UsageMetric(
@@ -1252,7 +1363,7 @@ struct SampleService {
         SampleService(
             serviceID: "chatgpt",
             displayName: "ChatGPT",
-            accent: Color(red: 0.10, green: 0.55, blue: 0.40),
+            accent: brandInk("chatgpt"),
             account: "Chrome · Profile 1",
             plan: "Plus",
             primary: UsageMetric(
@@ -1291,5 +1402,12 @@ struct SampleService {
 
     private static func soon(hours: Int, minutes: Int = 0) -> Date {
         Date().addingTimeInterval(TimeInterval(hours * 3600 + minutes * 60))
+    }
+
+    /// The banded brand ink for a service, or the system accent for a service
+    /// with no mark — the same fallback `AnyUsageProvider.accentColor` takes, so
+    /// the sample cannot be tinted by something the panel would not use.
+    private static func brandInk(_ providerID: String) -> Color {
+        BrandMark.mark(for: providerID)?.brandInk ?? .accentColor
     }
 }

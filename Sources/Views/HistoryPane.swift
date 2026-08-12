@@ -161,7 +161,13 @@ public struct HistoryPane: View {
                         // text in a settings row, which is `Ramp.title`. The 12pt
                         // it used to take is retired: it sat a point under every
                         // native form beside it.
-                        .font(.system(size: Tokens.Ramp.title))
+                        //
+                        // The weight is written down rather than inherited. The app
+                        // has two weights now — `titleWeight` for a subject or a
+                        // figure, `.regular` for everything that explains one — and
+                        // prose that leaves it to the default is prose that changes
+                        // weight if anything above it ever sets a font.
+                        .font(.system(size: Tokens.Ramp.title, weight: .regular))
                         // `Ink.muted` rather than `.secondary`: the ink ladder is
                         // explicit now, so a sentence that explains a state reads
                         // the same here as a caption does in the panel.
@@ -243,8 +249,8 @@ private struct HistoryPaneContent: View {
                     // Body text, the same size as the message the pane shows when
                     // it has no store at all: both are a section saying what state
                     // it is in, and two sizes for one role is how a form starts
-                    // looking assembled from parts.
-                    .font(.system(size: Tokens.Ramp.title))
+                    // looking assembled from parts. One weight for one role too.
+                    .font(.system(size: Tokens.Ramp.title, weight: .regular))
                     .foregroundStyle(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -271,7 +277,7 @@ private struct HistoryPaneContent: View {
                     )
 
                     Text(grainNote(interval))
-                        .font(.system(size: Tokens.Ramp.caption))
+                        .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                         // Was `.tertiary`. There is no tertiary ink any more: a
                         // line either clears 4.5:1 on its own ground or it is not
                         // worth drawing, and a note explaining what a point on the
@@ -473,19 +479,20 @@ private struct HistoryPaneContent: View {
                 Text(current == nil
                      ? "Nothing to summarise yet."
                      : "Nothing was recorded in the last \(range.title).")
-                    .font(.system(size: Tokens.Ramp.title))
+                    .font(.system(size: Tokens.Ramp.title, weight: .regular))
                     .foregroundStyle(Tokens.Ink.muted)
             } else {
                 DayHeaderRow()
                 ForEach(ordered.prefix(Self.dayLimit), id: \.day) { day in
                     DayRow(
                         day: day,
-                        peakTint: peakTint(day, of: current)
+                        peakTint: peakTint(day, of: current),
+                        peakWeight: peakWeight(day)
                     )
                 }
                 if ordered.count > Self.dayLimit {
                     Text("\(ordered.count - Self.dayLimit) more days in this range. The CSV has all of them.")
-                        .font(.system(size: Tokens.Ramp.caption))
+                        .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                         .foregroundStyle(Tokens.Ink.muted)
                 }
             }
@@ -515,6 +522,25 @@ private struct HistoryPaneContent: View {
         return appearance.figureTint(for: day.peak, providerAccent: accent)
     }
 
+    /// The peak's weight, which is the second channel the tint above cannot
+    /// supply on its own.
+    ///
+    /// A day at or over the warning line steps to `alertWeight`, the same step
+    /// the panel's own figures take, because the tint is not always available to
+    /// say it: under the `.mono` ramp `figureTint` returns one muted grey at every
+    /// level, so a monochrome table announced a day that hit the wall with
+    /// nothing at all, and under every other ramp it announced it with colour
+    /// alone. Weight is free of both problems.
+    ///
+    /// It costs no layout. SF's cap height is the same at regular, medium and
+    /// semibold, so the row's baseline cannot move, and the figure face is
+    /// monospaced, so the reserved column cannot either.
+    private func peakWeight(_ day: HistoryDay) -> Font.Weight {
+        day.peak >= appearance.warningThreshold
+            ? Tokens.Ramp.alertWeight
+            : Tokens.Ramp.titleWeight
+    }
+
     // MARK: - The archive
 
     private func archiveSection(all: [HistorySeriesID], interval: DateInterval) -> some View {
@@ -536,7 +562,7 @@ private struct HistoryPaneContent: View {
 
             if let exportNote {
                 Text(exportNote)
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .foregroundStyle(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -640,7 +666,7 @@ private enum DayColumn {
 }
 
 /// The headings over the table, in the one recipe this app heads a group with:
-/// sentence case, `.medium`, `Ink.muted`, no tracking, unscaled. `SectionLabel`'s
+/// sentence case, `titleWeight`, `Ink.muted`, no tracking, unscaled. `SectionLabel`'s
 /// recipe in the panel, at this table's size, because a label over a group of
 /// rows and a label over a column of figures are the same object.
 ///
@@ -679,7 +705,10 @@ private struct DayHeaderRow: View {
                 Text("N")
                     .frame(width: DayColumn.figure, alignment: .trailing)
             }
-            .font(.system(size: Tokens.Ramp.caption, weight: Tokens.Ramp.emphasisWeight))
+            // `titleWeight`, which is what `emphasisWeight` resolved to before it
+            // was deleted: a column head names its column, and naming is the job
+            // `titleWeight` does everywhere else in the app.
+            .font(.system(size: Tokens.Ramp.caption, weight: Tokens.Ramp.titleWeight))
             .foregroundStyle(Tokens.Ink.muted)
             // A heading that wraps takes the row's height with it and stops lining
             // up with the column it names. The scale floor is there for a locale
@@ -710,13 +739,21 @@ private struct DayRow: View {
     /// settings — a row has no business holding a second opinion about what 92%
     /// looks like.
     let peakTint: Color
+    /// And its weight, from the same place and for the same reason.
+    let peakWeight: Font.Weight
 
     var body: some View {
         HStack(spacing: Tokens.Space.gutter) {
             // A run with a word in it, so SF Pro with tabular digits rather than
             // the figure face: "Mon 11 Aug" is not a number.
             Text(day.day, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
-                .font(.system(size: Tokens.Ramp.title))
+                // `titleWeight`, because this is the row's name and that is the
+                // weight a name takes everywhere in the app. It is also what buys
+                // the table its hierarchy: the day and its peak are set in the
+                // heavier of the two weights, and the mean, the cap count and the
+                // reading count in the lighter one — which is the order they are
+                // read in, and the only contrast a table of figures gets to have.
+                .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                 .monospacedDigit()
                 .lineLimit(1)
                 // The row's subject, so `Ink.body` — which is the point of having
@@ -726,7 +763,7 @@ private struct DayRow: View {
                 .foregroundStyle(Tokens.Ink.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            percentCell(day.peak, weight: Tokens.Ramp.emphasisWeight)
+            percentCell(day.peak, weight: peakWeight)
                 .foregroundStyle(peakTint)
 
             percentCell(day.mean, weight: .regular)
@@ -779,7 +816,9 @@ private struct DayRow: View {
 
     private func countCell(_ value: Int) -> some View {
         Text(value, format: .number)
-            .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
+            // `.regular`, said rather than inherited: a count is context for the
+            // two figures beside it, not a reading in its own right.
+            .font(.system(size: Tokens.Ramp.caption, weight: .regular, design: Tokens.Ramp.figureDesign))
             .lineLimit(1)
             .frame(width: DayColumn.figure, alignment: .trailing)
     }

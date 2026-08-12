@@ -376,7 +376,7 @@ public struct MenuBarStripView: View {
     /// warning, and then only the figure that crossed it does.
     private func markColour(_ brand: BrandMark) -> Color {
         guard coloured, colour == .perBar else { return neutral }
-        return brand.foreground(dark: isDark)
+        return brand.brandInk(dark: isDark)
     }
 
     /// The colour a figure is set in.

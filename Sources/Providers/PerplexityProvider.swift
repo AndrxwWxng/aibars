@@ -18,7 +18,6 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "perplexity" }
     public let displayName = "Perplexity"
     public let iconName = "magnifyingglass.circle.fill"
-    public let accentColor: Color = Color(red: 0.13, green: 0.50, blue: 0.55)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

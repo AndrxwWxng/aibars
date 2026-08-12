@@ -21,7 +21,6 @@ public final class GrokProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "grok" }
     public let displayName = "Grok"
     public let iconName = "x.circle"
-    public let accentColor: Color = Color(red: 0.20, green: 0.22, blue: 0.26)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

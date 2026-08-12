@@ -10,7 +10,6 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "chatgpt" }
     public let displayName = "ChatGPT"
     public let iconName = "bubble.left.and.bubble.right.fill"
-    public let accentColor: Color = Color(red: 0.10, green: 0.55, blue: 0.40)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

@@ -229,16 +229,45 @@ public enum ProviderError: LocalizedError {
     case unsupported
     case configuration(String)
 
+    /// What a row says when it cannot report.
+    ///
+    /// A closed set of eight sentences we wrote, every one of them ≤ 34
+    /// characters so it fits the panel's 278pt text column on one line. Two
+    /// things are deliberately gone from it.
+    ///
+    /// The enum case name: "Network error: The endpoint did not respond" put a
+    /// programmer's label in front of a sentence a user could already read.
+    ///
+    /// The associated value: `.network` and `.parse` interpolate whatever came
+    /// back off the wire, so the panel printed two lines of truncated JSON on
+    /// one row and a Cloudflare parameter name on another. The value has not
+    /// gone anywhere — it moved to `diagnostic`, which the row hangs in its
+    /// tooltip. No call site changes; the payload simply stops reaching the
+    /// screen.
     public var errorDescription: String? {
         switch self {
-        case .notAuthenticated: return "Not signed in. Open Settings to authenticate."
-        case .sessionExpired:   return "Session expired. Please re-authenticate."
-        case .blocked(let msg): return "Refused by the site's bot protection (\(msg)). Will retry."
-        case .rateLimited:      return "Rate limited by the provider. Will retry."
-        case .network(let msg): return "Network error: \(msg)"
-        case .parse(let msg):   return "Could not parse response: \(msg)"
-        case .unsupported:      return "This provider is not yet supported on your account type."
-        case .configuration(let msg): return "Configuration error: \(msg)"
+        case .notAuthenticated: return "Not connected"
+        case .sessionExpired:   return "Session expired — sign in again"
+        case .blocked:          return "Blocked by bot protection — will retry"
+        case .rateLimited:      return "Rate limited — will retry"
+        case .network:          return "No response — will retry"
+        case .parse:            return "Unreadable response — will retry"
+        case .unsupported:      return "Not supported on this plan"
+        case .configuration:    return "Needs setup in Settings"
+        }
+    }
+
+    /// The raw detail behind the sentence, for a tooltip and for a log.
+    ///
+    /// Already capped at 200 characters by `ProviderHTTP` before it ever gets
+    /// here. Nothing draws it in the panel.
+    public var diagnostic: String? {
+        switch self {
+        case .blocked(let msg), .network(let msg), .parse(let msg), .configuration(let msg):
+            let trimmed = msg.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        case .notAuthenticated, .sessionExpired, .rateLimited, .unsupported:
+            return nil
         }
     }
 

@@ -148,9 +148,14 @@ public final class ConnectionFlow: ObservableObject {
     ///
     /// Never the usage ramp and never `AppearanceSettings.tint`: a connection is
     /// not a reading, so nothing here walks grey to amber to red with a number
-    /// behind it. The two alarm hues are still the ramp's own amber and red
-    /// rather than a second pair the user has to learn — the ramp says "this is
-    /// nearly full", these say "this needs you", and one palette carries both.
+    /// behind it. One alarm hue is left, the ramp's own amber, and it means the
+    /// one thing worth a hue here: there is something for the user to do.
+    ///
+    /// Red is gone. `.failure` used to draw `Ink.failure`, which was
+    /// byte-identical to the ramp's warning stop, so "the request failed" and
+    /// "you are at your cap" were the same colour in an app whose whole premise
+    /// is that red means near-cap. A request that simply failed is `Ink.muted`
+    /// like any other line of context, and the words carry it.
     /// Never `Ink.arc` either: the app's own colour has a closed list of call
     /// sites and a state is not on it.
     ///
@@ -167,7 +172,7 @@ public final class ConnectionFlow: ObservableObject {
             switch self {
             case .ok:        return Tokens.Ink.ok
             case .attention: return Tokens.Ink.attention
-            case .failure:   return Tokens.Ink.failure
+            case .failure:   return Tokens.Ink.muted
             case .idle:      return Tokens.Ink.idle
             }
         }

@@ -340,29 +340,42 @@ final class RowStateLayoutTests: XCTestCase {
         }
     }
 
-    /// A row still waiting is the shortest row the panel has, and an error is a
-    /// row with something to say. They used to be the same height, and that is
-    /// the change: the loading row reserved a full line to hold a spinner and
-    /// the word "Loading", which on a fresh launch is eleven rows of nothing at
-    /// a full row's price. What is left is the name drawn muted, which is the
-    /// whole of the pending cue and costs no pixels.
+    /// The height law, as the one test that would catch it breaking.
     ///
-    /// Asserted as an ordering rather than as a number, because the gap between
-    /// them is a line box and a line box is a function of the density each
-    /// preset sets. What must hold at every preset is that the pending row is
-    /// the shorter one and that neither collapses.
+    /// A row's height is a function of the settings and of one bit — does this
+    /// row have a reading to report — and of nothing else. Not which error. Not
+    /// whether a spinner is turning. So a row waiting for its first fetch is
+    /// exactly as tall as the error it may turn into and as the reading it may
+    /// turn into, and the panel cannot resize under the pointer when either
+    /// arrives.
+    ///
+    /// This used to assert the opposite, on the argument that a loading row has
+    /// nothing to say and should cost nothing. It said nothing at all: `lines`
+    /// returned empty while loading and `detailContent` had no branch for it, so
+    /// four enabled services with no snapshot yet drew four rows containing a
+    /// service name and nothing else — no status, no spinner, no "Sign in" —
+    /// which is what a new user stares at for the app's first seconds. The row
+    /// says "Checking…" now, in the box it was already reserving.
     @MainActor
-    func testAPendingRowIsShorterThanTheErrorItMayBecome() throws {
+    func testAPendingRowIsExactlyAsTallAsTheErrorItMayBecome() throws {
         for preset in AppearanceSettings.Preset.allCases {
             let appearance = try presetSettings(preset)
             let loading = try rowHeight(.loading, appearance: appearance, name: "line.\(preset.rawValue)")
             let failed = try rowHeight(
                 .failed("timed out"), appearance: appearance, name: "line.\(preset.rawValue)"
             )
-            XCTAssertGreaterThan(
-                failed, loading,
+            let reading = try rowHeight(
+                .reading(0.42), appearance: appearance, name: "line.\(preset.rawValue)"
+            )
+            XCTAssertEqual(
+                failed, loading, accuracy: 0.5,
                 "\(preset.rawValue): the pending row is \(loading)pt and the error row \(failed)pt — "
-                + "a row with nothing to say is not shorter than one that has"
+                + "the panel resizes when a fetch fails"
+            )
+            XCTAssertEqual(
+                reading, loading, accuracy: 0.5,
+                "\(preset.rawValue): the pending row is \(loading)pt and the reporting row \(reading)pt — "
+                + "the panel resizes under the pointer when the first reading lands"
             )
             XCTAssertGreaterThan(loading, 0, "\(preset.rawValue): the pending row measured nothing")
         }

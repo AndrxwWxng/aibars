@@ -39,6 +39,23 @@ public protocol UsageProvider: AnyObject, Identifiable {
 
 public extension UsageProvider {
     var serviceID: String { id }
+
+    /// The brand colour, for the one ramp that asks for it.
+    ///
+    /// Sixteen providers each wrote this out as a `Color(red:green:blue:)`
+    /// literal, and sixteen hand-written opinions disagreed with
+    /// `BrandMark.hex` by up to 98° of hue — ChatGPT's was green, Gemini's and
+    /// Z.ai's were both Google blue, Grok's was slate. `ColorRamp.provider`
+    /// painted meters and figures from them, so Copilot's meter drew at 1.08:1
+    /// on a dark panel and Claude's percentage at 3.04:1 on a light one.
+    ///
+    /// One lookup now, against the one table, pre-banded to a lightness that is
+    /// legible as text in both appearances. A service with no published mark
+    /// falls back to the user's own accent colour rather than to a literal
+    /// somebody invented for it.
+    var accentColor: Color {
+        BrandMark.mark(for: serviceID)?.brandInk ?? .accentColor
+    }
     var accountID: String? { nil }
     var webLogin: WebLoginConfig? { nil }
     var dashboardURL: URL? { nil }

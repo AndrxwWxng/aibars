@@ -23,7 +23,6 @@ public final class OpenCodeProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "opencode" }
     public let displayName = "OpenCode"
     public let iconName = "terminal.fill"
-    public let accentColor: Color = Color(red: 0.13, green: 0.13, blue: 0.13)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

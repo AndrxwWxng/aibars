@@ -192,8 +192,15 @@ public struct BudgetPane: View {
                 // floor past the stated minimum. Same trap as `Text.monospaced`,
                 // documented on `Ramp.figureDesign`. On a shape or a glyph there
                 // is no such overload and `foregroundStyle` stays.
+                //
+                // And `.regular` said out loud, here and on every caption in
+                // this file. There are two weights in the app — `titleWeight`
+                // for a name, a figure or a glyph, `.regular` for the line under
+                // one — and a caption that leaves its weight to inheritance
+                // follows whatever a future container sets rather than stating
+                // the half of the contrast it is responsible for.
                 Text("No service is reporting what it has cost. Most publish usage but not spend, and a cap on a figure that is never reported would warn about nothing.")
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .foregroundColor(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -202,7 +209,7 @@ public struct BudgetPane: View {
                 }
                 if silent > 0 {
                     Text("\(silent) other services report usage but not spend, so there is nothing here to cap.")
-                        .font(.system(size: Tokens.Ramp.caption))
+                        .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                         .foregroundColor(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -349,7 +356,7 @@ public struct BudgetPane: View {
         return Section {
             if reports.isEmpty {
                 Text("Nothing to add up yet.")
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .foregroundColor(Tokens.Ink.muted)
             } else {
                 SpendRow(
@@ -700,11 +707,12 @@ private enum SpendColumn {
     static let amount = Tokens.moneyWidth(Tokens.Ramp.title)
     /// The lane the estimate qualifier sits in, *ahead* of the amount rail.
     ///
-    /// Ahead, and not after it as the panel's `SpendFigure` has it: that one
-    /// leads a caption line and can let the word trail the rail, while these
-    /// amounts are a column with the cap fields to their right. A qualifier
-    /// after the rail would move an estimated row's amount left by the width of
-    /// a word, and the whole point of a rail is that the digits do not move.
+    /// Ahead, and not after it as the panel's spend figure has it: that one is
+    /// the only figure on a caption line and has no column to hold, so it sizes
+    /// itself to its amount and lets the word trail. These amounts are a column
+    /// with the cap fields to their right, and a qualifier after the rail would
+    /// move an estimated row's amount left by the width of a word — the whole
+    /// point of a rail is that the digits do not move. Same word, two jobs.
     /// Three cells, which holds "est." at `Ramp.title` with room rather than
     /// exactly none.
     static let qualifier = Tokens.figureWidth(Tokens.Ramp.title, digits: 3)
@@ -773,13 +781,15 @@ private struct SpendRow: View {
             }
 
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
-                // Body ink rather than the inherited primary, and `.medium`
-                // rather than a heavier weight: the row's subject is told from
-                // the sentence under it by ink and weight, not by size, and
-                // pure white on the near-black ground is what made a panel of
-                // these read as shouting.
+                // Body ink rather than the inherited primary, and `titleWeight`
+                // rather than a heavier one: the row's subject is told from the
+                // sentence under it by ink and weight, not by size, and pure
+                // white on the near-black ground is what made a panel of these
+                // read as shouting. It asked for `emphasisWeight` before, which
+                // was the same `.medium` under a name that promised a step up —
+                // the step is the caption below saying `.regular`.
                 Text(name)
-                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                     .foregroundColor(Tokens.Ink.body)
                     .lineLimit(1)
 
@@ -787,7 +797,7 @@ private struct SpendRow: View {
                 // than the figure face: "66% of $50.00, $17.16 left" is a
                 // sentence that happens to contain numbers.
                 Text(detail)
-                    .font(.system(size: Tokens.Ramp.caption))
+                    .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                     .monospacedDigit()
                     .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(2)
@@ -829,11 +839,15 @@ private struct SpendRow: View {
                 // for the whole pane, and an empty `Text` keeps a baseline for
                 // the row to align on where a `Color.clear` would not.
                 //
-                // Caption ink, because it is a caption: `Ink.muted` is what
-                // every word attached to a figure is set in, and it keeps the
-                // qualifier from reading as one of the figure's own digits.
+                // Caption ink and caption weight, because it is a caption:
+                // `Ink.muted` at `.regular` is what every word attached to a
+                // figure is set in, and the pair of them keeps the qualifier
+                // from reading as one of the figure's own digits. Caption size
+                // is the one thing it does not take — it shares a baseline with
+                // the amount, and SF Pro and SF Mono are interchangeable at one
+                // size and not across two.
                 Text(confidence == .estimated ? "est." : "")
-                    .font(.system(size: Tokens.Ramp.title))
+                    .font(.system(size: Tokens.Ramp.title, weight: .regular))
                     .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     .frame(width: qualifierRail, alignment: .trailing)
@@ -866,9 +880,14 @@ private struct SpendRow: View {
     private var amountText: some View {
         if let amount {
             Text(amount)
+                // `titleWeight` under the alert line and `alertWeight` at it: one
+                // step, and the only one, so the crossing cannot be read as
+                // anything else. Cap height is the same at both weights, so the
+                // figure gains a stem without leaving the baseline it shares
+                // with the name and the field.
                 .font(.system(
                     size: Tokens.Ramp.title,
-                    weight: isAlert ? Tokens.Ramp.alertWeight : Tokens.Ramp.emphasisWeight,
+                    weight: isAlert ? Tokens.Ramp.alertWeight : Tokens.Ramp.titleWeight,
                     design: Tokens.Ramp.figureDesign
                 ))
                 .foregroundColor(tint)
@@ -887,7 +906,7 @@ private struct SpendRow: View {
             Text(verbatim: "—")
                 .font(.system(
                     size: Tokens.Ramp.title,
-                    weight: Tokens.Ramp.emphasisWeight,
+                    weight: Tokens.Ramp.titleWeight,
                     design: Tokens.Ramp.figureDesign
                 ))
                 .foregroundColor(Tokens.Ink.idle)
@@ -908,7 +927,10 @@ private struct SpendRow: View {
 /// anywhere, and nothing carrying a number is drawn on a material.
 ///
 /// One coloured element: the glyph. The sentence itself is `Ink.muted`, the way
-/// the browser banner's detail line is, so the ink says "attention" once.
+/// the browser banner's detail line is, so the ink says "attention" once. And it
+/// says it in the app's one amber — `Ink.attention` and the usage ramp's caution
+/// stop are the same pair now, so a note that wants the user and a bill that is
+/// nearly at its cap are not two nearly-identical yellows a room apart.
 private struct SpendCallout: View {
     let text: String
 
@@ -922,14 +944,18 @@ private struct SpendCallout: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Tokens.Space.medium) {
+            // `titleWeight`, like every other glyph in the app: an SF Symbol
+            // takes its stroke from the weight it is set at, and one left at
+            // regular beside names set at medium is a hairline lighter than
+            // everything around it for no reason anyone chose.
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: Tokens.Ramp.title))
+                .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                 .foregroundStyle(Tokens.Ink.attention)
                 // The sentence beside it already says what the glyph says, and
                 // "exclamation mark triangle" read out in front of it is noise.
                 .accessibilityHidden(true)
             Text(text)
-                .font(.system(size: Tokens.Ramp.caption))
+                .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                 .foregroundColor(Tokens.Ink.muted)
                 // Prose, so it wraps. A callout that cannot grow downward can
                 // only ever name one account.

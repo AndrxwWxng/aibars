@@ -65,8 +65,13 @@ final class RowGeometryTests: XCTestCase {
 
     /// The leading column's height: the taller of the logo and the dial, plus
     /// the 1pt nudge onto the title's cap-height band.
+    /// The leading column's height. No nudge: the mark box and the title box are
+    /// the same 18pt at the defaults, and the 1pt lift onto a band the mark was
+    /// already on was written into both `RowGeometry` and `ProviderRow` — a 1pt
+    /// lie told in two files, and 1pt of reserved height per row that nothing
+    /// drew.
     private func leadingLine(logo: CGFloat, ring: CGFloat) -> CGFloat {
-        max(logo, ring) + Tokens.Space.hairline
+        max(logo, ring)
     }
 
     /// Metrics built by hand, for the cases that have to reach a value no
@@ -149,9 +154,9 @@ final class RowGeometryTests: XCTestCase {
     /// must not keep paying for one.
     ///
     /// And at this height the row stops being sized by its text at all — a 30pt
-    /// logo plus its 1pt nudge is taller than a title line and a bar together,
-    /// so the leading column becomes the floor. That is the honest total, and
-    /// the term-by-term line below says which of the two won.
+    /// logo is taller than a title line and a bar together, so the leading column
+    /// becomes the floor. That is the honest total, and the term-by-term line
+    /// below says which of the two won.
     @MainActor
     func testDroppingTheCountdownLeavesTheLeadingColumnHoldingTheRow() {
         let appearance = settings("cozy-meter-only")
@@ -168,8 +173,8 @@ final class RowGeometryTests: XCTestCase {
 
         let row = geometry(appearance, lines: [.meter])
         XCTAssertEqual(row.height, max(leading, text) + 2 * metrics.rowVerticalPadding)
-        // 31 leading column, since 18 + 6 + 5 of text does not reach it, + 20 padding.
-        XCTAssertEqual(row.height, 51, "the meter-only row is \(row.height)pt, not 51")
+        // 30 leading column, since 18 + 6 + 5 of text does not reach it, + 20 padding.
+        XCTAssertEqual(row.height, 50, "the meter-only row is \(row.height)pt, not 50")
     }
 
     /// The same row with the mark switched off, which is the pure text stack

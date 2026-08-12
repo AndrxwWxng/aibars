@@ -13,6 +13,13 @@ public struct ProviderRow: View {
     public let showsAllWindows: Bool?
     /// Overrides `AppearanceSettings.showsPlanNames`. Nil follows the setting.
     public let showsPlanName: Bool?
+    /// A fetch this row asked for is in flight, and the row still holds the
+    /// reading it had. Drawn as the refresh glyph becoming a spinner inside the
+    /// box that button already occupies — nothing moves, nothing is discarded and
+    /// the row does not change height, which is what a refresh used to do to the
+    /// whole panel: the reading was dropped first, the row collapsed to its
+    /// loading height, and the window resized under the pointer.
+    public let isRefreshing: Bool
 
     /// The budgets, read plainly rather than observed — the reasoning
     /// `ForecastLine` writes down for the trend store applies unchanged here.
@@ -35,6 +42,7 @@ public struct ProviderRow: View {
         onRefresh: @escaping () -> Void = {},
         showsAllWindows: Bool? = nil,
         showsPlanName: Bool? = nil,
+        isRefreshing: Bool = false,
         appearance: AppearanceSettings? = nil,
         budgets: BudgetStore? = nil,
         trend: UsageTrendStore? = nil
@@ -46,6 +54,7 @@ public struct ProviderRow: View {
         self.onRefresh = onRefresh
         self.showsAllWindows = showsAllWindows
         self.showsPlanName = showsPlanName
+        self.isRefreshing = isRefreshing
         // Resolved here rather than as default arguments: a default argument is
         // evaluated at the call site, and all three shared objects are
         // main-actor isolated, so that would constrain who is allowed to build
@@ -86,6 +95,11 @@ public struct ProviderRow: View {
             logoStyle: appearance.logoStyle,
             logoSize: CGFloat(appearance.logoSize),
             panelWidth: CGFloat(appearance.panelWidth),
+            // The buttons are reserved space on the title line, so whether the
+            // user has them switched off is a measurement and not a drawing
+            // detail: reserved height has to equal drawn height under every
+            // setting, or the panel holds two points per row it never uses.
+            rowActions: appearance.rowActions,
             lines: lines
         )
     }
@@ -99,15 +113,23 @@ public struct ProviderRow: View {
     /// `cardRadius`, and a row carrying a pace caption is three lines tall — the
     /// radius has saturated at `Radius.row` long before that. The corners only
     /// need protecting on the short row, which is the row with no forecast.
+    /// A row's height is a function of the settings and of one bit: has this row
+    /// a reading to report. Not which error, not how many digits, not whether a
+    /// spinner is turning — and the bit flips at most once per row per launch,
+    /// because a refresh never discards the reading it already has.
+    ///
+    /// So an authenticated row reserves its meter slot and one line under it in
+    /// every state it can be in, and the two states that differ from a reporting
+    /// row by less than a line — loading, failed — occupy the same box with
+    /// different words in it. A row nobody has connected is the one short row:
+    /// its rail says `Sign in` and there is nothing under its name to draw.
     private var lines: RowGeometry.Lines {
-        // Still loading: nothing under the title at all. The name drawn muted is
-        // the whole of the pending cue and it costs no pixels, where a spinner
-        // and the word "Loading…" cost a reserved line — eleven of them on a
-        // fresh launch, which is a very tall panel of almost nothing.
-        if isLoading { return [] }
-        // Not connected, or an error: one line under the title, and no meter over
-        // it to report a window nobody has read yet.
-        guard provider.isAuthenticated, case .success(let data) = result else { return .window }
+        guard provider.isAuthenticated else { return [] }
+        // Loading and failed alike: the slot is reserved and draws nothing, and
+        // the line under it carries "Checking…" or the one sentence we wrote for
+        // this failure. Reserving nothing here is what made ⟳ shrink the window
+        // 26pt under the pointer.
+        guard case .success(let data) = result else { return [.meter, .window] }
         var lines: RowGeometry.Lines = .meter
         // A quotaless service says everything it has to say on its status line,
         // so that one is never absent; a metered window's caption can be
@@ -123,21 +145,69 @@ public struct ProviderRow: View {
     /// Connected, asked, and nothing back yet.
     private var isLoading: Bool { provider.isAuthenticated && result == nil }
 
-    /// Connected and answering: the one state whose brand mark is drawn at full
-    /// strength. Loading, an error and a locked session all dim it, which is the
-    /// leading column's share of "this row is not reporting right now".
+    /// Connected and answering: the one state whose brand mark is drawn in the
+    /// mark's own ink. Loading, an error, an expired session and a locked one all
+    /// draw it muted, which is the leading column's share of "this row is not
+    /// reporting right now".
     private var isLive: Bool {
         guard provider.isAuthenticated, case .success = result else { return false }
         return true
     }
 
+    /// Reporting a state rather than a quota — ChatGPT's and Copilot's case.
+    /// There is no figure for the rail and no track for the slot, so the rail
+    /// carries the one non-text proof of connection a row like this has.
+    private var isStatusOnly: Bool {
+        guard case .success(let data) = result else { return false }
+        return data.primary.limit <= 0
+    }
+
     /// A credential the user has to go and fix, as opposed to a request that
     /// simply failed. The two ask for different things and the row says so
-    /// differently: this one carries a lock in the figure rail and no glyph on
-    /// its message, the other a warning triangle in front of the message.
+    /// differently: this one puts the word `Sign in` in the figure rail, the
+    /// other a warning triangle in the same slot.
     private var needsUser: Bool { failure?.isAuth == true }
 
     public var body: some View {
+        // A row is a button in every state it can be in — it opens a usage page
+        // or it starts a sign-in — so it is written as one rather than as a
+        // rectangle with a tap gesture on it. That is where the pressed state
+        // comes from: a 66pt target that lights up on hover and then says nothing
+        // at all when it is clicked is the clearest "side project" tell the panel
+        // had. The buttons inside the row keep their own hits, exactly as they did
+        // under the tap gesture — the row's handler sits at the row's level, and
+        // the innermost control wins.
+        Button {
+            provider.isAuthenticated ? onOpenDashboard() : onSignIn()
+        } label: {
+            content
+        }
+        .buttonStyle(
+            RowButtonStyle(
+                radius: geometry.cardRadius,
+                style: appearance.rowBackground,
+                isHovered: isHovered
+            )
+        )
+        .onHover { isHovered = $0 }
+        .help(rowHelp)
+        // The panel is the only place a row can be dismissed from. A user who
+        // subscribes to two of eleven services otherwise has to find Settings →
+        // Services and switch nine of them off one at a time, and the row the
+        // panel is shouting at them offers no way to say "not this one". Off the
+        // provider's own flag, so it survives a relaunch and comes back from the
+        // same list it would have been switched off in.
+        .contextMenu {
+            Button("Hide \(provider.displayName)") { provider.setEnabled(false) }
+        }
+    }
+
+    // MARK: - The content
+
+    /// Everything the row draws, inside its own padding. The card behind it
+    /// belongs to `RowButtonStyle`, which is the only thing that knows whether the
+    /// row is currently held down.
+    private var content: some View {
         // Top alignment lines the brand mark up with the name rather than with
         // the middle of the block under it — but a row with nothing under its
         // title is one 13pt line beside that mark, and top alignment leaves it
@@ -153,45 +223,7 @@ public struct ProviderRow: View {
         }
         .padding(.horizontal, metrics.rowHorizontalPadding)
         .padding(.vertical, metrics.rowVerticalPadding)
-        .background(card)
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .onTapGesture {
-            provider.isAuthenticated ? onOpenDashboard() : onSignIn()
-        }
-        .help(rowHelp)
-        // The panel is the only place a row can be dismissed from. A user who
-        // subscribes to two of eleven services otherwise has to find Settings →
-        // Services and switch nine of them off one at a time, and the row the
-        // panel is shouting at them offers no way to say "not this one". Off the
-        // provider's own flag, so it survives a relaunch and comes back from the
-        // same list it would have been switched off in.
-        .contextMenu {
-            Button("Hide \(provider.displayName)") { provider.setEnabled(false) }
-        }
-    }
-
-    // MARK: - The card
-
-    /// The row's own plane, and the only thing drawn behind the content.
-    ///
-    /// Drawn at `RowGeometry.cardRadius` rather than at `Radius.row`: 8pt is
-    /// right for a 65pt cozy row and eats the corners of a 39pt loading one.
-    ///
-    /// The coloured spine that used to sit on this card is gone. It was the only
-    /// vertical coloured element in the panel and its meaning could not be read
-    /// without documentation; near-cap keeps three channels without it, and a row
-    /// that wants the user now says so on its own line, with a lock in the figure
-    /// rail.
-    private var card: some View {
-        Tokens.surface(geometry.cardRadius)
-            .fill(Tokens.quiet(Tokens.rowBackground(appearance.rowBackground, isHovered: isHovered)))
-            // The one thing in the row that animates on the pointer. Short enough
-            // to read as the card lighting up rather than as a fade.
-            .animation(.easeOut(duration: 0.12), value: isHovered)
-            // Held inside the gutter so a hovered card floats rather than touching
-            // the window edge.
-            .padding(.horizontal, Tokens.Space.cardInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var failure: ProviderError? {
@@ -208,11 +240,22 @@ public struct ProviderRow: View {
     /// decimals anywhere in the panel: a tenth on a five-hour window is noise
     /// you cannot act on, and it costs two of the four characters the figure
     /// rail holds on every row. Here it is asked for rather than scanned past.
+    ///
+    /// And it is the one place a failure's raw text is allowed to surface. The
+    /// row draws a sentence we wrote; what the server actually said — a truncated
+    /// JSON body, a Cloudflare challenge id — is diagnostic rather than
+    /// information, and it belongs where it is asked for rather than printed
+    /// across two lines of a 356pt panel.
     private var rowHelp: String {
         guard provider.isAuthenticated else { return "Sign in to \(provider.displayName)" }
         let action = provider.dashboardURL != nil
             ? "Open \(provider.displayName) usage page"
             : "\(provider.displayName) has no usage page"
+        if let failure {
+            return [failure.errorDescription, failure.diagnostic, action]
+                .compactMap { $0 }
+                .joined(separator: "\n")
+        }
         guard let reading = preciseReading else { return action }
         return "\(reading)\n\(action)"
     }
@@ -241,56 +284,67 @@ public struct ProviderRow: View {
         if hasLeading {
             HStack(spacing: Tokens.Space.leadingItems) {
                 if appearance.logoStyle != .hidden {
-                    ProviderLogo(
-                        providerID: provider.serviceID,
-                        fallbackName: provider.displayName,
-                        fallbackColor: provider.accentColor,
-                        size: appearance.logoSize,
-                        showsTile: appearance.logoStyle == .tile
-                    )
-                    // Full colour only while the row is actually reporting. A
-                    // loading, failed, locked or disconnected service is dimmed
-                    // the same amount, because from the reader's side those are
-                    // one state: this row is not telling me anything yet.
-                    .opacity(isLive ? 1 : Tokens.Dim.disconnected)
+                    mark
                 }
 
                 if appearance.meterStyle == .ring {
-                    // Drawn even with nothing to report, so the text column
-                    // starts at the same x on every row of the panel. Under the
-                    // ring this dial is also the row's occupied meter slot: it
-                    // is the one element every row draws whatever it has to say.
-                    UsageRing(
-                        percent: primaryPercent ?? 0,
-                        diameter: metrics.ringDiameter,
-                        thickness: metrics.barHeight,
-                        tint: tint(for: primaryPercent ?? 0),
-                        isNearCap: Self.isNearCap(
-                            percent: primaryPercent ?? 0,
-                            warning: appearance.warningThreshold
+                    // The dial is this row's meter, and a meter slot has exactly
+                    // two drawings: a track with a fill in it, or nothing. So the
+                    // dial appears where there is a quota to draw and the column
+                    // holds its width — never its ink — where there is not.
+                    // Drawn at full strength on a row that is loading, failed or
+                    // quotaless, an empty track reports "nothing is being used",
+                    // which is a reading this row does not have.
+                    if let percent = primaryPercent {
+                        UsageRing(
+                            percent: percent,
+                            diameter: metrics.ringDiameter,
+                            thickness: metrics.barHeight,
+                            tint: tint(for: percent),
+                            isNearCap: Self.isNearCap(
+                                percent: percent,
+                                warning: appearance.warningThreshold
+                            )
                         )
-                    )
-                    // Held to the same geometry, but dimmed to the logo's own
-                    // disconnected weight when it is only a placeholder. A dial
-                    // is the one element at the same x on every row, which is
-                    // what makes the panel scannable — drawn at full strength
-                    // with an empty track it reports "nothing is being used" for
-                    // a row that is disconnected, loading, failed or has no
-                    // quota at all. Opacity rather than a shorter column: the
-                    // text beside it must not shift as a reading arrives.
-                    .opacity(primaryPercent == nil ? Tokens.Dim.disconnected : 1)
-                    // A dial is a shape and says nothing on its own, so it is
-                    // made an element and given its reading — but only where
-                    // there is one. The placeholder above would otherwise
-                    // announce "0% used" on every disconnected row.
-                    .accessibilityElement()
-                    .accessibilityLabel("Usage")
-                    .accessibilityValue(ringValue)
-                    .accessibilityHidden(primaryPercent == nil)
+                        // A dial is a shape and says nothing on its own, so it is
+                        // made an element and given its reading.
+                        .accessibilityElement()
+                        .accessibilityLabel("Usage")
+                        .accessibilityValue(ringValue)
+                    } else {
+                        // The column's width, and nothing in it: the text beside
+                        // it must start at the same x on every row of the panel,
+                        // whether or not a reading has arrived.
+                        Color.clear
+                            .frame(width: metrics.ringDiameter, height: metrics.ringDiameter)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
-            .padding(.top, Tokens.Space.hairline)
         }
+    }
+
+    /// The brand mark, in the ink the row's state calls for.
+    ///
+    /// State is drawn in ink and never in opacity. A mark faded to 0.55 over the
+    /// panel's ground put two of the paler marks under 2:1 — a first run is
+    /// fifteen rows of "not reporting yet", so that was the whole panel below the
+    /// floor a meaningful graphic needs. Muted at full strength is the ink the
+    /// name and the caption take in the same state, which makes "this row is not
+    /// telling me anything" one statement rather than three treatments.
+    ///
+    /// Handed down rather than resolved in the mark, because the row is the only
+    /// thing that knows the state: nil is the mark's own ink, which is what a
+    /// reporting row draws.
+    private var mark: some View {
+        ProviderLogo(
+            providerID: provider.serviceID,
+            fallbackName: provider.displayName,
+            fallbackColor: provider.accentColor,
+            size: appearance.logoSize,
+            showsTile: appearance.logoStyle == .tile,
+            ink: ProviderLogo.markInk(isLive: isLive)
+        )
     }
 
     // MARK: - Title
@@ -302,8 +356,9 @@ public struct ProviderRow: View {
     /// figure is SF Mono, and the two faces put their cap heights in different
     /// places inside the same line box — centring lands them on two baselines a
     /// point apart, which is exactly the kind of thing that reads as sloppy
-    /// without being nameable. The leading column keeps its own 1pt nudge onto
-    /// the cap-height band.
+    /// without being nameable. Everything on the line that has no baseline of its
+    /// own — the buttons, a rail glyph, the status dot — is put on the band the
+    /// eye reads the line in by `controlBaseline`.
     ///
     /// One size and one weight for both now. The name was set a step heavier than
     /// everything else in the panel and the figure a step larger, which between
@@ -318,37 +373,13 @@ public struct ProviderRow: View {
                 // same weight, which is a divergence waiting for one of them to
                 // move.
                 .font(.system(size: metrics.titleSize, weight: Tokens.Ramp.titleWeight))
-                .foregroundStyle(nameTint)
+                .foregroundColor(nameTint)
                 .lineLimit(1)
                 // The name is the one thing the row cannot be read without, so
-                // it takes its width before the account label and the pill.
+                // it takes its width before the run that says which account.
                 .layoutPriority(1)
 
-            // With several accounts of one service, the name alone is the same
-            // word repeated — say which account it is.
-            if appearance.showsAccountLabels, let account = accountLabel {
-                Text(account)
-                    .font(.system(size: metrics.detailSize))
-                    .foregroundStyle(Tokens.Ink.muted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(-1)
-            }
-
-            if showsPlan, let plan = planName {
-                Text(plan)
-                    .font(.system(size: metrics.detailSize))
-                    // A pill that wraps to a second line stops being a pill.
-                    .lineLimit(1)
-                    .padding(.horizontal, Tokens.Space.small)
-                    .padding(.vertical, Tokens.Space.hairline)
-                    // The one pill left in the panel, and a rounded rectangle
-                    // rather than a capsule: nothing in the chrome is above 10pt
-                    // of radius, and a capsule on a 16pt box is 8 by accident
-                    // rather than by choice.
-                    .background(Tokens.surface(Tokens.Radius.chip).fill(Tokens.quiet(Tokens.Fill.pill)))
-                    .foregroundStyle(Tokens.Ink.muted)
-            }
+            identity
 
             Spacer(minLength: Tokens.Space.medium)
 
@@ -360,6 +391,7 @@ public struct ProviderRow: View {
                     visibility: appearance.rowActions,
                     isHovered: isHovered,
                     hasDashboard: provider.dashboardURL != nil,
+                    isRefreshing: isRefreshing,
                     refreshHelp: "Refresh \(provider.displayName)",
                     onRefresh: onRefresh,
                     onOpenDashboard: onOpenDashboard
@@ -369,6 +401,88 @@ public struct ProviderRow: View {
 
             trailingValue
         }
+    }
+
+    /// Which account this row is, and on what plan: one muted run, joined by the
+    /// panel's own middle dot.
+    ///
+    /// It was two things — a label and a filled pill — and at 300pt the pill
+    /// squeezed to nothing and still drew its own padding and fill, so the row
+    /// read `GitHub Copil…` followed by a bare grey blob, while the account label
+    /// beside it was given zero width and vanished entirely. That is the wrong way
+    /// round: which account this is, is the reason the line exists.
+    ///
+    /// So it is one run at one rank, and it gives way in whole steps rather than
+    /// by the character: account and plan, then account alone, then nothing. A
+    /// long service name simply takes the width, since it holds the priority.
+    @ViewBuilder
+    private var identity: some View {
+        let parts = identityParts
+        if !parts.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                identityRun(parts.joined(separator: " · "))
+                // The step that keeps the plan. A work address can be sixty
+                // characters — `ada.lovelace.engineering@verylongcompanyname.example.com`
+                // is a real shape — and dropping to "account alone" does not help,
+                // because the account is the part that did not fit. Elided in the
+                // string rather than left to `truncationMode`, so the candidate
+                // has an ideal width `ViewThatFits` can actually measure: a view
+                // that only truncates once it is squeezed reports its full width
+                // when asked and is rejected whole.
+                if parts.count > 1 {
+                    identityRun(Self.elided(parts))
+                }
+                if parts.count > 1, let first = parts.first {
+                    identityRun(first)
+                }
+                // The last candidate is the one `ViewThatFits` falls back on when
+                // none of the others fit, so it has to be something that always
+                // does: the run drops out whole, and the name keeps the line.
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+    }
+
+    /// The parts of that run, in the order they give way: the account first,
+    /// because it is the only one that tells two subscriptions to one service
+    /// apart. Whichever the settings switch on compose it.
+    private var identityParts: [String] {
+        var parts: [String] = []
+        if appearance.showsAccountLabels, let account = accountLabel { parts.append(account) }
+        if showsPlan, let plan = planName { parts.append(plan) }
+        return parts
+    }
+
+    /// The same run with the first part shortened from its middle.
+    ///
+    /// Only the first part is touched, because only the first part is unbounded:
+    /// a plan name is a word the provider chose ("Max 20x", "Pay as you go") and
+    /// an account label is whatever the user's employer put in front of an @.
+    /// Middle, for the same reason `identityRun` truncates that way — two
+    /// addresses at one company differ at the start and at the end, never in the
+    /// middle.
+    private static func elided(_ parts: [String]) -> String {
+        guard let first = parts.first else { return "" }
+        var head = first
+        // Eighteen characters is where an address stops being a shape you
+        // recognise and starts being an ellipsis with punctuation round it. Below
+        // that the whole run gives way instead.
+        let budget = 18
+        if head.count > budget {
+            let side = (budget - 1) / 2
+            head = head.prefix(side) + "…" + head.suffix(side)
+        }
+        return ([head] + parts.dropFirst()).joined(separator: " · ")
+    }
+
+    private func identityRun(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: metrics.detailSize, weight: .regular))
+            .foregroundColor(Tokens.Ink.muted)
+            .lineLimit(1)
+            // Middle, not tail: the end of an address is the part that identifies
+            // it — `ada@example.com` and `ada@work.example.com` differ at the end.
+            .truncationMode(.middle)
     }
 
     /// Where a control with no text in it sits on the title line's baseline.
@@ -407,62 +521,75 @@ public struct ProviderRow: View {
     /// The name's ink, which is the row's own quietest state channel.
     ///
     /// Muted while a row has nothing to report — loading, or not connected —
-    /// and full body ink the moment it does. A failed or locked row keeps the
+    /// and full body ink the moment it does. A failed or expired row keeps the
     /// body ink: it has something to say and is saying it on the line below.
     private var nameTint: Color {
         isLoading || !provider.isAuthenticated ? Tokens.Ink.muted : Tokens.Ink.body
     }
 
-    /// The figure rail, present in every state the row can be in: connected,
-    /// loading, failed, status-only and not connected at all.
+    /// The figure rail — which is the row's state column, and answers "what is
+    /// this row" in one of five ways: a figure, a green dot, a warning triangle,
+    /// the word `Sign in`, or nothing at all.
     ///
     /// This is the invariant the whole panel is squared against — tabular digits
     /// fix the width of a digit, not the length of a string, so "9%" still
     /// reflows to "92%" unless the column is reserved. Nothing shifts as
     /// readings arrive and drop out, and every reading in the panel ends at one
     /// x.
+    ///
+    /// It is where the row's state is drawn because it is the one place on the row
+    /// nothing else competes for, and because putting it here leaves every detail
+    /// line starting at the text column's own left edge. The glyphs it can hold
+    /// are different widths, so they share one fixed square: measured,
+    /// `exclamationmark.triangle.fill` at 11pt renders 14×13 and `lock.fill`
+    /// 11×13, and a slot sized to whichever glyph is in hand moves the rail's edge
+    /// by up to 3pt as the row changes state.
     @ViewBuilder
     private var trailingValue: some View {
-        if !provider.isAuthenticated {
-            Button(action: onSignIn) {
-                Text("Sign in")
-                    .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.emphasisWeight))
-                    // The app's own colour, which is where a link or an
-                    // invitation is allowed to carry hue. The chrome around it
-                    // stays monochrome.
-                    .foregroundStyle(Tokens.Ink.arc)
-                    // The one control on a disconnected row, so it is the last
-                    // thing that should give: a crowded title line otherwise
-                    // squeezes it to "Si…".
-                    .fixedSize()
-            }
-            // Plain, not bordered. First launch is eleven disconnected rows, and
-            // eleven bordered buttons is a wall rather than a call to action; one
-            // accent-coloured word per row is an invitation. The whole row is
-            // already a sign-in target with a tooltip saying so, and this is the
-            // second way to reach it, not the only one.
-            .buttonStyle(.plain)
-            // The rail is a floor here rather than a width: a word is wider than
-            // three digits, and this row has no reading to line up with anyway.
-            .frame(minWidth: geometry.headlineRail, alignment: .trailing)
-        } else if needsUser {
-            // The channel that makes "this one needs you" survive greyscale now
-            // that the spine is gone, and it names the row's own state on the
-            // row's own line rather than in a margin nobody can decode.
-            Image(systemName: "lock.fill")
-                .font(.system(size: metrics.detailSize))
-                .foregroundStyle(Tokens.Ink.attention)
-                .frame(width: geometry.headlineRail, alignment: .trailing)
-                .accessibilityLabel("Session expired")
+        if !provider.isAuthenticated || needsUser {
+            // One affordance for "this needs your credential", whether the
+            // session was never there or has expired: the word for the action,
+            // rather than a padlock the reader has to decode. It also takes the
+            // last saturated amber off a first-run panel.
+            signIn
+        } else if failure != nil {
+            // The request failed rather than the credential: shape, not colour.
+            // Red belongs to the ramp — a red triangle on a row whose whole
+            // premise is that red means near-cap says the wrong thing loudly.
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.titleWeight))
+                .foregroundColor(Tokens.Ink.muted)
+                .frame(width: Self.railGlyph, height: Self.railGlyph)
+                .frame(minWidth: geometry.headlineRail, alignment: .trailing)
+                .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
+                .accessibilityLabel("Not reporting")
+        } else if isStatusOnly {
+            // The one green dot the panel is allowed, and it is doing real work: a
+            // service with no quota has no meter and no figure to prove the
+            // connection is up, so the dot is the proof. In the rail rather than
+            // in front of its own line, so no glyph ever precedes text in the
+            // text column.
+            Circle()
+                .fill(Tokens.Ink.ok)
+                .frame(width: Tokens.Control.dot, height: Tokens.Control.dot)
+                // Trailing inside the shared square, not centred. The triangle
+                // fills its 14pt box and the digits fill theirs, so both land on
+                // the rail's own edge; a 6pt dot centred in the same box lands
+                // 4pt inside it — measured at 340.0pt against 344.0pt for every
+                // other thing the rail can hold, which is a visible step in the
+                // one column the eye scans down.
+                .frame(width: Self.railGlyph, height: Self.railGlyph, alignment: .trailing)
+                .frame(minWidth: geometry.headlineRail, alignment: .trailing)
+                .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
+                .accessibilityLabel("Connected")
         } else if appearance.showsUsageNumber, let percent = primaryPercent {
             UsageFigure(
                 percent: percent,
                 size: metrics.figureSize,
                 unitSize: metrics.unitSize,
-                // The weight channel of the near-cap contract. The only place in
-                // the panel that goes heavier than `emphasisWeight`, so the
-                // change is unambiguous — and it survives greyscale, which the
-                // tint below does not.
+                // The weight channel of the near-cap contract. The only weight in
+                // the app above `titleWeight`, so the change is unambiguous — and
+                // it survives greyscale, which the tint below does not.
                 weight: Self.figureWeight(percent: percent, warning: appearance.warningThreshold),
                 // Neutral until the reading is worth a colour. A panel of nine
                 // resting rows spends the eye's whole colour budget on the least
@@ -475,13 +602,40 @@ public struct ProviderRow: View {
             )
             .frame(width: geometry.headlineRail, alignment: .trailing)
         } else {
-            // Loading, failed, status-only, or the number switched off. The rail
-            // stands empty rather than closing up.
+            // Loading, or the number switched off. The rail stands empty rather
+            // than closing up: a row that is still checking must end on the same
+            // x as the row above it that already knows.
             Color.clear
                 .frame(width: geometry.headlineRail, height: 0)
                 .accessibilityHidden(true)
         }
     }
+
+    /// The invitation, in the rail, in the app's own colour — the one place hue
+    /// stands for the app rather than for a measurement.
+    ///
+    /// Plain, not bordered. First launch is fifteen unconnected rows, and fifteen
+    /// bordered buttons is a wall rather than a call to action; one word per row is
+    /// an invitation. The whole row is already a sign-in target with a tooltip
+    /// saying so, and this is the second way to reach it, not the only one.
+    private var signIn: some View {
+        Button(action: onSignIn) {
+            Text("Sign in")
+                .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.titleWeight))
+                .foregroundColor(Tokens.Ink.arc)
+                // The one control on a row with no reading, so it is the last
+                // thing that should give: a crowded title line otherwise squeezes
+                // it to "Si…".
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
+        // The rail is a floor here rather than a width: a word is wider than
+        // three digits, and this row has no reading to line up with anyway.
+        .frame(minWidth: geometry.headlineRail, alignment: .trailing)
+    }
+
+    /// The square every glyph in the rail is drawn in, whichever glyph it is.
+    private static let railGlyph: CGFloat = 14
 
     // MARK: - Body of the row
 
@@ -496,11 +650,13 @@ public struct ProviderRow: View {
     /// title; a row whose only detail is a single pace caption is two lines
     /// beside an 18pt mark, which is exactly the case centring is here for.
     private var drawsDetail: Bool {
-        // A loading row is a name and an empty rail beside a mark, which is
-        // exactly the one-line case centring is here for.
-        if isLoading { return false }
-        // "Not connected" and an error are each a line of their own.
-        guard provider.isAuthenticated, case .success(let data) = result else { return true }
+        // Nothing under the title on a row nobody has connected: the rail says
+        // `Sign in`, and that one line beside the mark is exactly the case
+        // centring is here for. It is also why the row is 38pt rather than 66 —
+        // vertical space in proportion to what the row has to say.
+        guard provider.isAuthenticated else { return false }
+        // Loading and failed each draw a reserved slot and a line under it.
+        guard case .success(let data) = result else { return true }
         // Every style but the ring draws its meter in the text column, and that
         // slot is now occupied on every row — a quota, a reading of zero and a
         // service that reports no quota at all each fill it with something.
@@ -517,18 +673,12 @@ public struct ProviderRow: View {
     @ViewBuilder
     private var detailContent: some View {
         if !provider.isAuthenticated {
-            // One prompt for both kinds of service. The branch for a provider
-            // with no web login used to read "Not connected — add a token in
-            // Settings", which was the longest line in the panel, wrapped to two
-            // and so made one row taller than its neighbours — to say something
-            // that stopped being true when the connect window learned to take a
-            // pasted key. Every disconnected row is reached the same way now, by
-            // the button beside this line.
-            Text("Not connected")
-                .font(.system(size: metrics.detailSize))
-                .foregroundStyle(Tokens.Ink.muted)
-                .lineLimit(1)
-                .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+            // Nothing. The line that used to read "Not connected" said what the
+            // rail beside it says in the word for the action, on a row that has no
+            // reading to explain — fifteen of them on a first run, each paying a
+            // reserved line and a reserved meter slot to repeat the one thing the
+            // row already makes obvious.
+            EmptyView()
         } else if let result {
             switch result {
             case .success(let data):
@@ -559,33 +709,53 @@ public struct ProviderRow: View {
                     )
                 }
             case .failure(let error):
-                HStack(alignment: .top, spacing: Tokens.Space.small) {
-                    // Only the request that failed outright gets a glyph. A
-                    // credential the user has to go and fix already carries its
-                    // mark in the figure rail, and two marks for one state is a
-                    // row shouting the same thing twice.
-                    if !error.isAuth {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            // Drawn at the size of the sentence it introduces
-                            // rather than at the caption scale under it. A glyph
-                            // smaller than its own text reads as a bullet.
-                            .font(.system(size: metrics.detailSize))
-                            .foregroundStyle(Tokens.Ink.failure)
-                    }
-                    Text(error.errorDescription ?? "Error")
-                        .font(.system(size: metrics.detailSize))
-                        .foregroundStyle(Tokens.Ink.muted)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+                // One sentence, on the same line every other row draws its
+                // caption on, and no glyph in front of it: the state is in the
+                // rail, so the text column has one left edge in every state the
+                // row can be in. One line and never two — the eight sentences the
+                // panel is allowed to print are each short enough to fit, and
+                // whatever the server actually said is in the row's tooltip.
+                stated(error.errorDescription ?? "Not reporting")
             }
+        } else {
+            // Loading, which is the state a real launch spends its first seconds
+            // in: connected, asked, nothing back yet. It used to draw a name and
+            // nothing else — four mystery rows with a service name in them — and
+            // it now occupies exactly the box it will occupy once it reports, so
+            // the row does not grow when the answer lands.
+            stated("Checking…")
         }
-        // Loading draws nothing at all. The word "Loading…" is not lost — the
-        // header summary already says what the panel is doing, which is where a
-        // quiet UI puts an indeterminate state, and the app's one spinner lives
-        // there too. What is lost is a reserved line and a reserved spinner box
-        // on every row of a fresh launch.
+    }
+
+    /// A row with no reading: its reserved meter slot, and one line saying why.
+    ///
+    /// The slot draws nothing at all. It is held open because the bit that decides
+    /// a row's height is whether the row has a reading, and it must not flip when
+    /// a fetch resolves — and because a rule drawn where a meter would go reads as
+    /// a table rule rather than as an absence.
+    private func stated(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: metrics.captionGap) {
+            reservedMeterSlot
+            Text(text)
+                .font(.system(size: metrics.detailSize, weight: .regular))
+                .foregroundColor(Tokens.Ink.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+        }
+    }
+
+    /// The meter slot with nothing in it.
+    ///
+    /// Not placed at all under the ring, where the dial in the leading column is
+    /// the meter and this space was never the row's to spend.
+    @ViewBuilder
+    private var reservedMeterSlot: some View {
+        if appearance.meterStyle != .ring {
+            Color.clear
+                .frame(height: metrics.barHeight)
+                .accessibilityHidden(true)
+        }
     }
 
     @ViewBuilder
@@ -597,8 +767,9 @@ public struct ProviderRow: View {
             case .bar, .numberOnly:
                 // One view for both, because the difference between them is what
                 // fills the meter slot rather than whether there is one: a bar
-                // draws a track, a bare number draws the hairline that stands in
-                // for it. Row height stops being a function of the setting.
+                // draws a track, and a bare number leaves the slot empty because
+                // the figure on the title line is the meter there. Row height
+                // stops being a function of the setting.
                 //
                 // The further windows ride down here rather than being drawn as a
                 // block of their own, which is what makes them cost no height at
@@ -620,9 +791,11 @@ public struct ProviderRow: View {
             }
         } else {
             // A service that reports a state rather than a quota. The slot is
-            // still occupied, by a hairline with no track behind it: "reports no
-            // quota" and "is at 0%" are different statements and the panel has
-            // to be able to tell them apart at a glance.
+            // reserved and empty, and the distinction the hairline used to attempt
+            // — "reports no quota" against "is at 0%" — is made in the rail
+            // instead: a figure means there is a quota, a dot means there is not.
+            // A rule drawn between a title and a caption was indistinguishable
+            // from a row divider, which is a poor way to make a fine distinction.
             slotted(metric) {
                 StatusLine(
                     metric: metric,
@@ -856,7 +1029,7 @@ extension ProviderRow {
     public static func figureWeight(percent: Double, warning: Double) -> Font.Weight {
         isNearCap(percent: percent, warning: warning)
             ? Tokens.Ramp.alertWeight
-            : Tokens.Ramp.emphasisWeight
+            : Tokens.Ramp.titleWeight
     }
 
     /// The two drawn channels of the near-cap contract, for one reading.
@@ -871,8 +1044,8 @@ extension ProviderRow {
     /// Two channels that used to be here are gone with the drawings they belonged
     /// to. The spine — an unexplained coloured bar down the row's leading edge —
     /// could not be read without documentation, and a row that wants the user now
-    /// says so with a lock in its own figure rail. The pace riser, and with it
-    /// "the fill has crossed the boundary", was one drawing standing in for a
+    /// says so in words — `Sign in` — in its own figure rail. The pace riser, and
+    /// with it "the fill has crossed the boundary", was one drawing standing in for a
     /// sentence `ForecastLine` already writes out.
     ///
     /// Colour is the third thing and is never asked to carry this alone. Convert
@@ -952,7 +1125,7 @@ public struct UsageFigure: View {
         percent: Double,
         size: CGFloat,
         unitSize: CGFloat,
-        weight: Font.Weight = Tokens.Ramp.emphasisWeight,
+        weight: Font.Weight = Tokens.Ramp.titleWeight,
         tint: Color,
         animatesDigits: Bool = false
     ) {
@@ -985,7 +1158,7 @@ public struct UsageFigure: View {
             // panel that colour ever arrives on.
             Text(verbatim: "%")
                 .font(.system(size: unitSize, weight: .regular, design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(Tokens.Ink.muted)
+                .foregroundColor(Tokens.Ink.muted)
         }
         .lineLimit(1)
         // A threshold crossing is an event, not a mood: the digits may roll, the
@@ -1013,7 +1186,7 @@ public struct UsageFigure: View {
         // cannot act on; the row's tooltip is where it survives.
         Text(scaled, format: .number.precision(.fractionLength(0)))
             .font(.system(size: size, weight: weight, design: Tokens.Ramp.figureDesign))
-            .foregroundStyle(tint)
+            .foregroundColor(tint)
     }
 
     /// A NaN would reach the formatter and print as "NaN" in the middle of a
@@ -1032,11 +1205,14 @@ public struct UsageFigure: View {
 /// presented that as the provider's own accounting would be lying about how
 /// much the number is worth.
 ///
-/// The amount holds a rail of its own, which is the one rail money is allowed:
-/// eight cells, `$1234.56`. It leads the caption line, so without it `$3.40` and
-/// `$32.84` on two rows would start the counts beside them at two different x —
-/// and money is the one figure in the panel that keeps its decimals, which is
-/// exactly the digit that ticks.
+/// The amount sizes itself, and that is a rail deliberately given up. It *leads*
+/// the caption line — it does not sit in a column of other amounts — so a
+/// trailing-aligned eight-cell frame around a short bill indented the whole
+/// caption by the slack: `$42.12 Credits · resets in 1h 19m` started 9pt right of
+/// the meter above it and of the captions on every other row, and the indent moved
+/// as the bill grew. There is at most one spend figure per row and never two above
+/// each other, so nothing here has decimals to line up with; the mono face and the
+/// two decimals stay, which is what the reading actually needed.
 struct SpendFigure: View {
     let spend: SpendReport
     let size: CGFloat
@@ -1045,25 +1221,20 @@ struct SpendFigure: View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.snug) {
             Text(spend.display)
                 .font(.system(size: size,
-                              weight: Tokens.Ramp.emphasisWeight,
+                              weight: Tokens.Ramp.titleWeight,
                               design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(Tokens.Ink.muted)
+                .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
-                // Trailing, like every other rail, so the decimals line up down
-                // the panel. A floor rather than a width, as the sign-in button
-                // takes the headline rail as a floor: eight cells hold every
-                // amount a subscription panel realistically reports, and a bill
-                // that needs a ninth gets it. Fixing the width instead would put
-                // an ellipsis in the middle of a figure, and "$1,23…" is not a
-                // smaller number, it is no number at all.
-                .frame(minWidth: Tokens.moneyWidth(size), alignment: .trailing)
+                // It never gives width: "$1,23…" is not a smaller number, it is no
+                // number at all.
+                .fixedSize()
             if spend.confidence == .estimated {
                 // The same ink as the amount it qualifies. A third grey below the
                 // caption grey was a rank the panel does not have, and `.tertiary`
                 // is off the ladder entirely now.
                 Text("est.")
-                    .font(.system(size: size))
-                    .foregroundStyle(Tokens.Ink.muted)
+                    .font(.system(size: size, weight: .regular))
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
             }
         }
@@ -1118,7 +1289,13 @@ public struct MeterTrack: View {
                 // reading too many for a meter.
                 MeterFill(squareTrailing: isNearCap)
                     .fill(tint)
-                    .frame(width: fillWidth(in: geo.size.width))
+                    .frame(
+                        width: MeterGeometry.fillWidth(
+                            percent: percent,
+                            track: geo.size.width,
+                            thickness: height
+                        )
+                    )
             }
         }
         .frame(height: height)
@@ -1126,30 +1303,31 @@ public struct MeterTrack: View {
         // is a threshold being crossed and is not. A bar that cross-faded grey to
         // amber over a third of a second would turn the one event the panel exists
         // to report into a mood.
-        .animation(.easeOut(duration: 0.30), value: percent)
+        .animation(Tokens.Motion.fill, value: percent)
         .animation(nil, value: tint)
     }
 
-    /// A nonzero value never rounds away to nothing, but the floor is the bar's
-    /// own height rather than a fixed 3pt — at 12pt thickness a 3pt fill is a
-    /// squashed sliver. Clamped to the track above, because a budget's fraction
-    /// can exceed 1 and a fill wider than its track is not a reading.
-    private func fillWidth(in width: CGFloat) -> CGFloat {
-        guard percent > 0, percent.isFinite, width > 0 else { return 0 }
-        return min(width, max(height, width * min(percent, 1)))
-    }
+    // Where the reading becomes a length is `MeterGeometry`, shared with the
+    // dial: a bar and a ring drawn from the same 7% may not disagree about how
+    // long that is, and a private copy of the arithmetic per view is how they
+    // would. The floor there is two thicknesses, because one thickness drew a
+    // round-capped fill exactly as wide as it was tall — a dot, identical at 0.5%
+    // and at 1%, and read as a bullet rather than as a small quantity.
 }
 
-/// The row's meter slot, which is always occupied.
+/// The row's meter slot, and it has exactly two drawings: a track with a fill in
+/// it, or nothing.
 ///
-/// Row height stops being a function of a setting and of whether a reading
-/// arrived: a quota draws its track, a reading of zero draws a full empty track,
-/// a bare-number panel draws the rule that stands in for a meter, and a service
-/// that publishes no quota at all draws the same rule with no track behind it.
+/// The rule it used to draw instead of nothing was one drawing standing in four
+/// unrelated situations — a bare-number panel, a quotaless service, a row still
+/// loading, a row that failed — so it could not distinguish any of them, and
+/// full-width between a title and a caption it read as a row divider. Under the
+/// **Minimal** preset every row in the panel drew one, with nothing beneath it and
+/// the last one dangling at the window's bottom edge.
 ///
-/// That last distinction is the whole point. A hairline says this service
-/// reports no quota; an empty track says it reports 0%. They are different
-/// statements and the panel has to be able to make both.
+/// The distinction it was attempting is made in the figure rail now: a figure means
+/// there is a quota, a dot means there is not. The slot keeps its height in both
+/// cases, which is what the row is squared against.
 public struct MeterSlot: View {
     @ObservedObject private var appearance: AppearanceSettings
     public let metric: UsageMetric
@@ -1171,8 +1349,8 @@ public struct MeterSlot: View {
 
     /// A track is drawn for a real quota under the bar. Under `numberOnly` the
     /// figure on the title line is the meter, and under the ring the dial in the
-    /// leading column is — a caller drawing one of those should not place a slot
-    /// here at all, and if it does, it gets the rule rather than a second meter.
+    /// leading column is — so the slot is held open and left empty there rather
+    /// than drawing a second meter or a rule that stands in for one.
     private var drawsTrack: Bool {
         metric.limit > 0 && appearance.meterStyle == .bar
     }
@@ -1190,16 +1368,11 @@ public struct MeterSlot: View {
                     )
                 )
             } else {
-                // Centred in the slot rather than filling it, so a status-only
-                // row's caption sits on the same baseline as a metered row's.
-                Rectangle()
-                    .fill(Tokens.Meter.hairline)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: Tokens.Control.hairline)
+                Color.clear
             }
         }
-        // The slot, whatever is in it. Both cases are the same height, which is
-        // what the row is squared against.
+        // The slot, whether or not there is anything in it. Both cases are the
+        // same height, which is what the row is squared against.
         .frame(height: height)
         // A shape says nothing out loud. Whoever wraps this owns the reading:
         // `UsageBar` speaks its fill, the title line speaks the figure.
@@ -1325,7 +1498,20 @@ public struct UsageRing: View {
     /// meter thickness, the ring keeps a hole a third of its width.
     private var stroke: CGFloat { min(thickness, diameter / 3) }
 
-    private var fill: Double { min(max(percent, 0), 1) }
+    /// How far round the dial the arc is painted, floored at two strokes so the
+    /// smallest reading is a stub with a direction rather than a dot. Off
+    /// `MeterGeometry`, shared with the bar, because a dial and a bar reading the
+    /// same number may not disagree about how much that is.
+    private var fill: Double {
+        MeterGeometry.ringTrim(percent: percent, diameter: diameter, stroke: stroke)
+    }
+
+    /// One stroke of arc as a share of the dial, which is exactly what a round
+    /// cap adds to the paint at each end of a trim — half at the start, half at
+    /// the finish.
+    private var capFraction: Double {
+        MeterGeometry.ringCapFraction(diameter: diameter, stroke: stroke)
+    }
 
     public var body: some View {
         ZStack {
@@ -1339,16 +1525,28 @@ public struct UsageRing: View {
         // The arc's length is the reading; its ink is a threshold. Same rule as
         // the bar, so a dial and a bar on the same number cannot behave
         // differently.
-        .animation(.easeOut(duration: 0.30), value: percent)
+        .animation(Tokens.Motion.fill, value: percent)
         .animation(nil, value: tint)
     }
 
     /// `strokeBorder` insets the track for us; a trimmed path has to be inset by
     /// hand or the arc overhangs it.
+    ///
+    /// `end` is where the paint has to stop, so the trim stops short of it: a
+    /// round cap is drawn *outside* the trim it caps, half a stroke at each end,
+    /// and a dial that ignored that painted every reading a full stroke long —
+    /// 9.4 points at the shipped size, against a figure on the same line that was
+    /// telling the truth. A butt cap adds nothing and is inset by nothing, which
+    /// is also what keeps the near-cap dial's square finish landing exactly on its
+    /// reading.
     private func arc(to end: Double, colour: Color, cap: CGLineCap) -> some View {
-        Circle()
+        // Never inverted, and never wider than the arc it is trimming: below the
+        // floor there is not a whole cap's room, and half of what there is at each
+        // end still paints exactly `end`.
+        let inset = cap == .round ? min(capFraction / 2, end / 2) : 0
+        return Circle()
             .inset(by: stroke / 2)
-            .trim(from: 0, to: end)
+            .trim(from: inset, to: max(inset, end - inset))
             .stroke(colour, style: StrokeStyle(lineWidth: stroke, lineCap: cap))
             .rotationEffect(.degrees(-90))
     }
@@ -1423,54 +1621,135 @@ public struct MetricCaption: View {
         // Left unconstrained, a Text narrower than its content wraps rather than
         // truncates, so at 300pt these would quietly become three lines and
         // shove the row apart.
-        HStack(spacing: Tokens.Space.snug) {
+        // The gap to the trailing half is the stack's own spacing and not a
+        // `Spacer`, and that is the same fix the header line needed. A `Spacer`
+        // sits at priority 0 with no ceiling, so it competes for slack with a
+        // sentence asking for `maxWidth: .infinity` and takes a share of it: the
+        // caption's sentence was offered 56pt of the 65.5pt actually going spare
+        // and clipped `5h session` to `5h sessi…` by three points. The sentence's
+        // own frame is what pushes the windows to the trailing edge; nothing else
+        // needs to.
+        HStack(spacing: Tokens.Space.medium) {
             if isSecondary {
                 Text(metric.label)
-                    .font(.system(size: size))
-                    .foregroundStyle(Tokens.Ink.muted)
+                    .font(.system(size: size, weight: .regular))
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                // Money leads the line when there is any. It is the one figure
-                // on the row nothing else says, and the counts behind it are
-                // what should truncate if the line runs out.
-                if let spend = shownSpend {
-                    SpendFigure(spend: spend, size: size)
-                        .layoutPriority(1)
+                // Each part is dropped whole rather than truncated, and that is
+                // the fix for a caption that used to read `5h sessi… · resets
+                // in…`: "resets in…" carries no information whatsoever, and the
+                // point it truncated at moved as the reading crossed 10 and 100.
+                //
+                // The count gives way after the countdown, and that is the third
+                // candidate rather than an ellipsis because a clipped figure is
+                // worse than an absent one. Measured at the shipped 356pt with two
+                // chips on the line, the second candidate is offered ~110pt and
+                // `3.2k / 5.0k` wants 74 — but the same row at `Max 20x` with a
+                // `Weekly Opus 180/300` chip beside it drew `3.2k / 5.…`, a figure
+                // cut mid-number, which reads as a different quantity. A dropped
+                // count costs nothing the row does not already say: the percentage
+                // in the rail is the same reading, and the window is named by the
+                // row itself.
+                //
+                // Money is in every candidate and never gives way — it is the one
+                // figure on the line that nothing else on the row reports.
+                //
+                // The last candidate names the window rather than saying nothing,
+                // and that is not a nicety. `includesAmount: false` on a counted
+                // window left an *empty* run, and an empty run took the slack and
+                // handed the line's whole left half to no one: at 356pt with two
+                // chips on it a `3.2k / 5.0k` row drew its caption starting at
+                // 112pt while the row directly above it started at 39.5pt — two
+                // adjacent detail lines 72pt out of register, in the panel and in
+                // the Appearance pane's own preview. A window's name is the
+                // cheapest thing that can hold that edge, and it is the one part
+                // of the line the row cannot say twice: the rail repeats the
+                // figure, nothing repeats "5h session".
+                ViewThatFits(in: .horizontal) {
+                    leadingRun(includesCountdown: true, reading: .amount)
+                    leadingRun(includesCountdown: false, reading: .amount)
+                    leadingRun(includesCountdown: false, reading: .name)
+                    leadingRun(includesCountdown: false, reading: .none)
                 }
-                if appearance.showsAmounts, !amountText.isEmpty {
-                    amount(amountText)
-                }
-
-                if appearance.showsCountdowns, let reset = resetText {
-                    // Two facts about one window, so they are separated the way
-                    // the panel separates everything else — a middle dot, in the
-                    // same ink. Without it "5h session resets in 1h 19m" reads as
-                    // one sentence with a word missing, which is what four points
-                    // of space says at 11pt.
-                    if leadsCountdown { separator }
-                    // A run with a word in it, so SF Pro with tabular digits
-                    // rather than the figure face. Full mono on "resets in 1h 20m"
-                    // is the terminal pastiche the direction rules out.
-                    //
-                    // The window line is one rank however many parts it has: the
-                    // counts and the countdown are both the provider stating a
-                    // fact about this window, and a third ink to separate two
-                    // facts of equal standing is a hierarchy the row does not
-                    // have.
-                    Text(reset)
-                        .font(.system(size: size))
-                        .monospacedDigit()
-                        .foregroundStyle(Tokens.Ink.muted)
-                        .lineLimit(1)
-                }
+                // The sentence takes the slack rather than the `Spacer` behind
+                // it, so it is offered the residual width rather than being
+                // handed none at all by a gap.
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Spacer(minLength: Tokens.Space.medium)
 
             trailing
         }
         .frame(minHeight: Tokens.lineBox(size))
+    }
+
+    /// How much of this window's own reading a candidate spells out.
+    ///
+    /// Three steps down, and never a shorter spelling of the same step — each one
+    /// is drawn whole or not offered. The last step really is nothing, and only
+    /// because the step above it may not be shaved: offered 10pt at a 300pt panel
+    /// with two windows on the line, `5h session` truncates to `5`, a lone digit
+    /// that reads as a reading. An absent sentence costs the line its left edge;
+    /// a one-character sentence costs the line its meaning, and that is worse.
+    fileprivate enum Reading {
+        /// `3.2k / 5.0k` — or, for a percentage, the window's name, because the
+        /// number is already in the rail.
+        case amount
+        /// The window's name alone: `5h session`.
+        case name
+        /// Nothing at all, for a line that has no room for a word.
+        case none
+    }
+
+    /// The sentence half of the line: money, then what this window is and how
+    /// much of it is gone, then when it comes back.
+    ///
+    /// The two parameters are how the candidates above differ, and they only ever
+    /// turn a part down — a run asked for without its countdown is the same run
+    /// with the countdown absent, never a shorter spelling of it. Nothing here
+    /// abbreviates, because abbreviating is what produced `3.2k / 5.…`.
+    private func leadingRun(includesCountdown: Bool, reading: Reading) -> some View {
+        HStack(spacing: Tokens.Space.snug) {
+            // Money leads the line when there is any. It is the one figure on the
+            // row nothing else says, and the counts behind it are what should give
+            // if the line runs out.
+            if let spend = shownSpend {
+                SpendFigure(spend: spend, size: size)
+                    .layoutPriority(1)
+            }
+            if let text = readingText(reading) {
+                amount(text)
+            }
+
+            if includesCountdown, appearance.showsCountdowns, let reset = resetText {
+                // Two facts about one window, so they are separated the way the
+                // panel separates everything else — a middle dot, in the same ink.
+                // Without it "5h session resets in 1h 19m" reads as one sentence
+                // with a word missing, which is what four points of space says at
+                // 11pt.
+                if leadsCountdown { separator }
+                // A run with a word in it, so SF Pro with tabular digits rather
+                // than the figure face. Full mono on "resets in 1h 20m" is the
+                // terminal pastiche the direction rules out.
+                //
+                // The window line is one rank however many parts it has: the
+                // counts and the countdown are both the provider stating a fact
+                // about this window, and a third ink to separate two facts of
+                // equal standing is a hierarchy the row does not have.
+                Text(reset)
+                    .font(.system(size: size, weight: .regular))
+                    .monospacedDigit()
+                    .foregroundColor(Tokens.Ink.muted)
+                    .lineLimit(1)
+            }
+        }
+        // No `fixedSize` here, deliberately: `ViewThatFits` compares each
+        // candidate's *ideal* width — the whole string — against the width it is
+        // offered, so the choice is already made on the untruncated run. Fixing
+        // the size as well would only stop the last candidate from truncating at
+        // 300pt, where an unabbreviated count is worth an ellipsis.
     }
 
     /// What sits at the trailing edge of the line: the further windows on the
@@ -1527,8 +1806,8 @@ public struct MetricCaption: View {
     /// reading "middle dot" between two phrases is noise where a pause is meant.
     private var separator: some View {
         Text(verbatim: "·")
-            .font(.system(size: size))
-            .foregroundStyle(Tokens.Ink.muted)
+            .font(.system(size: size, weight: .regular))
+            .foregroundColor(Tokens.Ink.muted)
             .accessibilityHidden(true)
     }
 
@@ -1536,15 +1815,36 @@ public struct MetricCaption: View {
     /// it is SF Pro with tabular digits — the rule is the run, not the number.
     private func amount(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: size))
+            .font(.system(size: size, weight: .regular))
             .monospacedDigit()
-            .foregroundStyle(Tokens.Ink.muted)
+            .foregroundColor(Tokens.Ink.muted)
             .lineLimit(1)
     }
 
     private var rail: CGFloat { appearance.metrics.secondaryRail }
 
     private var shownSpend: SpendReport? { isSecondary ? nil : spend }
+
+    /// What a candidate's reading step actually puts on the line, or nil when the
+    /// user has switched every text channel on this line off and the caption is
+    /// theirs to leave as money and chips.
+    ///
+    /// The name is offered under either text setting rather than under
+    /// `showsAmounts` alone, because the case it exists to catch is a line whose
+    /// countdown did not fit: dropping the countdown must not also drop the only
+    /// thing holding the line's left edge.
+    private func readingText(_ reading: Reading) -> String? {
+        guard appearance.showsAmounts || appearance.showsCountdowns else { return nil }
+        switch reading {
+        case .amount:
+            guard appearance.showsAmounts else { return nil }
+            return amountText.isEmpty ? nil : amountText
+        case .name:
+            return metric.label.isEmpty ? nil : metric.label
+        case .none:
+            return nil
+        }
+    }
 
     /// For percentage metrics the number is already in the trailing rail, so
     /// the line names the window instead of repeating "47 / 100".
@@ -1569,8 +1869,12 @@ public struct MetricCaption: View {
 /// For providers that report a state rather than a quota — there's no bar to
 /// draw, so show the state itself.
 ///
-/// Only ever placed inside a successful reading of a connected service, which is
-/// what entitles the dot below to be green.
+/// The green dot that used to lead this line is in the row's figure rail now. It
+/// is the same statement — a service with no meter and no figure needs one
+/// non-text proof that the connection is up — made in the column the row keeps for
+/// its state, which leaves this line starting at the same x as every other detail
+/// line in the panel. A glyph in front of one row's text and not the next is the
+/// two-indent defect the rail exists to close.
 public struct StatusLine: View {
     @ObservedObject private var appearance: AppearanceSettings
     public let metric: UsageMetric
@@ -1604,48 +1908,19 @@ public struct StatusLine: View {
     private var size: CGFloat { appearance.metrics.detailSize }
 
     public var body: some View {
-        HStack(spacing: Tokens.Space.small) {
-            // The one green dot the panel is allowed, and it is doing real work:
-            // a service with no quota has no meter to prove the connection is up,
-            // so the dot is the proof. A row carrying a percentage has already
-            // proved it, which is why there is no dot there — a green dot beside
-            // 92% is redundant ink.
-            //
-            // Unconditional, because this line is only ever reached inside a
-            // successful fetch for a connected service. Gating it on `used > 0`
-            // read the dot as a usage reading and drew Copilot's "Active" grey on
-            // a connection that is working perfectly.
-            Circle()
-                .fill(Tokens.Ink.ok)
-                .frame(width: Tokens.Control.dot, height: Tokens.Control.dot)
-            Text(text)
-                .font(.system(size: size))
-                .monospacedDigit()
-                .foregroundStyle(Tokens.Ink.muted)
-                .lineLimit(1)
-
-            if let spend {
-                SpendFigure(spend: spend, size: size)
-                    .layoutPriority(1)
+        // The gap is the stack's spacing rather than a `Spacer`, for the reason
+        // `MetricCaption` gives: a priority-0 `Spacer` takes a share of the slack
+        // a sentence at `maxWidth: .infinity` is asking for, and the sentence is
+        // then measured — and clipped — against less width than the line has.
+        HStack(spacing: Tokens.Space.medium) {
+            // The countdown is dropped whole rather than truncated, the same rule
+            // a metered row's caption keeps: `renew…` is a word cut in half to
+            // report nothing at all.
+            ViewThatFits(in: .horizontal) {
+                run(includesCountdown: true)
+                run(includesCountdown: false)
             }
-
-            // Trailing, like every other countdown in the panel, so a quotaless
-            // row's renewal date sits in the same column as the reset date on
-            // the metered row above it.
-            if appearance.showsCountdowns,
-               let reset = metric.resetDate,
-               let countdown = Countdown.short(until: reset) {
-                Text("renews in \(countdown)")
-                    .font(.system(size: size))
-                    .monospacedDigit()
-                    // One rank, like every other window line: it is the same
-                    // statement the metered row above makes, about a window with
-                    // no ceiling on it.
-                    .foregroundStyle(Tokens.Ink.muted)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: Tokens.Space.medium)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if !chips.isEmpty || overflow > 0 {
                 SecondaryChipRun(
@@ -1657,6 +1932,43 @@ public struct StatusLine: View {
             }
         }
         .frame(minHeight: Tokens.lineBox(size))
+    }
+
+    private func run(includesCountdown: Bool) -> some View {
+        HStack(spacing: Tokens.Space.snug) {
+            Text(text)
+                .font(.system(size: size, weight: .regular))
+                .monospacedDigit()
+                .foregroundColor(Tokens.Ink.muted)
+                .lineLimit(1)
+
+            if let spend {
+                SpendFigure(spend: spend, size: size)
+                    .layoutPriority(1)
+            }
+
+            if includesCountdown,
+               appearance.showsCountdowns,
+               let reset = metric.resetDate,
+               let countdown = Countdown.short(until: reset) {
+                // Two facts about one window, separated the way the panel
+                // separates every other pair of them: a middle dot in the same
+                // ink. `Active renews in 11d 23h` at four points of space is one
+                // sentence with a word missing.
+                Text(verbatim: "·")
+                    .font(.system(size: size, weight: .regular))
+                    .foregroundColor(Tokens.Ink.muted)
+                    .accessibilityHidden(true)
+                Text("renews in \(countdown)")
+                    .font(.system(size: size, weight: .regular))
+                    .monospacedDigit()
+                    // One rank, like every other window line: it is the same
+                    // statement the metered row above makes, about a window with
+                    // no ceiling on it.
+                    .foregroundColor(Tokens.Ink.muted)
+                    .lineLimit(1)
+            }
+        }
     }
 
     /// A unit is the provider saying "this is a count", so lead with the
@@ -1685,8 +1997,8 @@ public struct SecondaryValue: View {
     public var body: some View {
         HStack(spacing: Tokens.Space.snug) {
             Text(metric.label)
-                .font(.system(size: size))
-                .foregroundStyle(Tokens.Ink.muted)
+                .font(.system(size: size, weight: .regular))
+                .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: Tokens.Space.medium)
@@ -1696,9 +2008,9 @@ public struct SecondaryValue: View {
             if appearance.showsAmounts {
                 Text(value)
                     .font(.system(size: size,
-                                  weight: Tokens.Ramp.emphasisWeight,
+                                  weight: Tokens.Ramp.titleWeight,
                                   design: Tokens.Ramp.figureDesign))
-                    .foregroundStyle(Tokens.Ink.muted)
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     // A floor rather than a fixed width: this is a count with a
                     // unit on it rather than three digits and a sign, so it can
@@ -1763,15 +2075,21 @@ struct BudgetMeter: View {
 
             HStack(spacing: Tokens.Space.snug) {
                 Text("Budget")
-                    .font(.system(size: size))
-                    .foregroundStyle(Tokens.Ink.muted)
+                    .font(.system(size: size, weight: .regular))
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     .layoutPriority(1)
                 // A run with a word in it, so SF Pro with tabular digits.
+                //
+                // Muted whether or not the budget is over, because the figure at
+                // the other end of this line already carries the ramp: one
+                // coloured thing per line, ever. Amber on the words and amber on
+                // the number was the same statement made twice, and it made a
+                // line the user drew themselves as loud as the service's own cap.
                 Text(remainingText)
-                    .font(.system(size: size))
+                    .font(.system(size: size, weight: .regular))
                     .monospacedDigit()
-                    .foregroundStyle(status.isOver ? Tokens.Ink.attention : Tokens.Ink.muted)
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
 
                 Spacer(minLength: Tokens.Space.medium)
@@ -1781,8 +2099,8 @@ struct BudgetMeter: View {
                     // not on a bill. Saying so is the difference between a
                     // reading and a guess.
                     Text("est.")
-                        .font(.system(size: size))
-                        .foregroundStyle(Tokens.Ink.muted)
+                        .font(.system(size: size, weight: .regular))
+                        .foregroundColor(Tokens.Ink.muted)
                         .lineLimit(1)
                 }
 
@@ -1840,6 +2158,20 @@ struct NumberedMetric: Identifiable {
 /// `fixedSize` on the run, so the caption to its left is what truncates: which
 /// windows exist and how full they are is the reading, and the sentence beside it
 /// is context that can afford an ellipsis.
+///
+/// What must not depend on content is how much of the line the run *costs*: sized
+/// to what it currently says, the run grew as a reading crossed 10 and again at
+/// 100, so the truncation point of the sentence beside it moved as the data
+/// ticked — `Weekly 4%` and `Weekly 49%` charged the caption different amounts for
+/// nothing. That is fixed one level down, in the chip: each reading holds a rail of
+/// four cells, so a percentage chip is one width whatever the number in it.
+///
+/// Not by reserving `chips.count × RowGeometry.chipWidth` for the run, which was
+/// tried and measured: that estimate still counts a capsule's padding and a dot
+/// this chip no longer draws, so at 300pt two slots claimed 196pt of a 248pt text
+/// column — it pushed the row's own trailing edge past the panel edge and left the
+/// sentence beside it nothing whatsoever. A reservation wider than the thing
+/// reserved is not alignment.
 struct SecondaryChipRun: View {
     let chips: [UsageMetric]
     let overflow: Int
@@ -1855,6 +2187,11 @@ struct SecondaryChipRun: View {
                 OverflowChip(count: overflow, appearance: appearance)
             }
         }
+        // Fixed, and it has to be. Offered less than it wants, the run does not
+        // shorten one label — it starves every label to nothing and leaves a line
+        // of unlabelled figures: `3/25  12/50`, two readings of two windows the
+        // row can no longer name. The width it needs is the width it draws, and
+        // the line's other half is sized against that.
         .fixedSize()
     }
 
@@ -1893,19 +2230,45 @@ public struct SecondaryChip: View {
             // Two runs, not one: the window's name is a word and the reading
             // beside it is digits and separators, and each takes its own face.
             Text(metric.label)
-                .font(.system(size: size))
-                .foregroundStyle(Tokens.Ink.muted)
+                .font(.system(size: size, weight: .regular))
+                .foregroundColor(Tokens.Ink.muted)
                 // Four chips of a long-named window overflow a 300pt panel;
                 // truncating one label is better than pushing the last chip
                 // off the edge.
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Text(figure)
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(reading.digits)
+                    // A figure, so it takes the figures' rule and not the meter's:
+                    // neutral below caution, the ramp from there up. It was reading
+                    // `tint`, which is the one thing on the row entitled to carry a
+                    // colour at rest — a bar — so four resting chips arrived
+                    // coloured on a line of context.
+                    .foregroundColor(appearance.figureTint(for: metric.percent,
+                                                           providerAccent: accent))
+                if let unit = reading.unit {
+                    // The unit sits out of the ramp, here as everywhere: `UsageFigure`
+                    // holds its own `%` at `Ink.muted` in every band, and a chip
+                    // baking the sign into the tinted string put a red `%` on the
+                    // caption of a row whose headline figure had a grey one — one
+                    // glyph, two rules, 40pt apart on the same line.
+                    Text(verbatim: unit)
+                        .foregroundColor(Tokens.Ink.muted)
+                }
+            }
                 .font(.system(size: size,
-                              weight: Tokens.Ramp.emphasisWeight,
+                              weight: Tokens.Ramp.titleWeight,
                               design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(appearance.tint(for: metric.percent, providerAccent: accent))
                 .lineLimit(1)
+                // Four cells, trailing — the rail every other figure in the panel
+                // gets, at the one place a reading sits on a line that runs along
+                // the row instead of down the panel. It is not there to line the
+                // chips up with each other: it is there so the chip's width stops
+                // changing as its reading crosses 10 and 100, which is what used to
+                // move the truncation point of the caption beside it. A floor
+                // rather than a width, because "12/100" is a count and not a
+                // percentage and may be wider.
+                .frame(minWidth: Tokens.figureWidth(size, digits: 4), alignment: .trailing)
                 // The reading is why the chip is here, so it is the part that
                 // must not be abbreviated away.
                 //
@@ -1922,11 +2285,13 @@ public struct SecondaryChip: View {
         }
     }
 
-    private var figure: String {
+    /// The reading split where the panel splits every reading: the digits, which
+    /// the ramp may colour, and the unit, which it may not.
+    private var reading: (digits: String, unit: String?) {
         if metric.unit == "%" || metric.limit == 100 {
-            return "\(Int(metric.used.rounded()))%"
+            return ("\(Int(metric.used.rounded()))", "%")
         }
-        return "\(metric.displayUsed)/\(metric.displayLimit)"
+        return ("\(metric.displayUsed)/\(metric.displayLimit)", nil)
     }
 }
 
@@ -1949,8 +2314,9 @@ public struct OverflowChip: View {
     public var body: some View {
         Text("+\(count)")
             .font(.system(size: appearance.metrics.detailSize,
+                          weight: .regular,
                           design: Tokens.Ramp.figureDesign))
-            .foregroundStyle(Tokens.Ink.muted)
+            .foregroundColor(Tokens.Ink.muted)
             .lineLimit(1)
             // The one chip on the line that must never be truncated: an
             // ellipsis here says nothing about how much was dropped. No rail, for
@@ -1981,6 +2347,11 @@ public struct RowActions: View {
     /// A service with no usage page gets one button. The sample row passes true
     /// because the row it is drawing is a stand-in for any service.
     public let hasDashboard: Bool
+    /// A fetch for this row is in flight. The refresh glyph becomes a spinner in
+    /// the box it already occupies: same box, same width, nothing moves. It is the
+    /// whole of the in-flight cue on the row, which is all a refresh is worth —
+    /// the reading stays put and the row keeps its height.
+    public let isRefreshing: Bool
     public let refreshHelp: String
     public let onRefresh: () -> Void
     public let onOpenDashboard: () -> Void
@@ -1991,6 +2362,7 @@ public struct RowActions: View {
         visibility: AppearanceSettings.RowActionVisibility,
         isHovered: Bool,
         hasDashboard: Bool,
+        isRefreshing: Bool = false,
         refreshHelp: String = "Refresh",
         onRefresh: @escaping () -> Void = {},
         onOpenDashboard: @escaping () -> Void = {}
@@ -1998,12 +2370,16 @@ public struct RowActions: View {
         self.visibility = visibility
         self.isHovered = isHovered
         self.hasDashboard = hasDashboard
+        self.isRefreshing = isRefreshing
         self.refreshHelp = refreshHelp
         self.onRefresh = onRefresh
         self.onOpenDashboard = onOpenDashboard
     }
 
     private var isShown: Bool {
+        // A fetch in flight is worth saying whether or not the pointer is on the
+        // row: it is the answer to "did my click do anything".
+        if isRefreshing { return true }
         switch visibility {
         // A hover that never happens hides these buttons for good from anyone
         // driving the app by voice, and the space is reserved either way — so
@@ -2017,12 +2393,24 @@ public struct RowActions: View {
     public var body: some View {
         if visibility != .never {
             HStack(spacing: 0) {
-                HoverIconButton(
-                    systemName: "arrow.clockwise",
-                    help: refreshHelp,
-                    size: Tokens.Control.rowIconButton,
-                    action: onRefresh
-                )
+                if isRefreshing {
+                    // Indeterminate, because the row has no idea how long a
+                    // provider will take, and mini so the dial fits the glyph's own
+                    // box rather than the box growing to fit a spinner.
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.mini)
+                        .frame(width: Tokens.Control.rowIconButton,
+                               height: Tokens.Control.rowIconButton)
+                        .help(refreshHelp)
+                } else {
+                    HoverIconButton(
+                        systemName: "arrow.clockwise",
+                        help: refreshHelp,
+                        size: Tokens.Control.rowIconButton,
+                        action: onRefresh
+                    )
+                }
                 if hasDashboard {
                     HoverIconButton(
                         systemName: "arrow.up.right",
@@ -2033,9 +2421,57 @@ public struct RowActions: View {
                 }
             }
             .opacity(isShown ? 1 : Tokens.Dim.reserved)
+            // The panel's one pointer duration, so the buttons arrive with the
+            // card lighting up rather than a beat behind it. Opacity only: the
+            // space is reserved either way, so nothing here can move.
+            .animation(Tokens.Motion.hover, value: isShown)
             // Invisible buttons must not be clickable.
             .allowsHitTesting(isShown)
         }
+    }
+}
+
+/// The row's own card, and the row's press.
+///
+/// It is a `ButtonStyle` because `configuration.isPressed` is the only honest
+/// source of that state — a 66pt target that lights up under the pointer and then
+/// says nothing at all when it is clicked was the clearest "side project" tell the
+/// panel had. Fill only: no scale, no shadow, no geometry change on press, ever.
+/// The panel is nine of these in a column and a row that flinched would move its
+/// neighbours.
+struct RowButtonStyle: ButtonStyle {
+    let radius: CGFloat
+    /// The user's row-background setting and the pointer, handed straight through
+    /// to `Tokens.rowBackground` — which owns all three steps, so the panel and the
+    /// Appearance pane's sample cannot come to disagree about any of them.
+    let style: AppearanceSettings.RowBackground
+    let isHovered: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let resting = Tokens.rowBackground(style, isHovered: isHovered)
+        return configuration.label
+            .background(
+                Tokens.surface(radius)
+                    .fill(Tokens.quiet(Tokens.rowBackground(
+                        style,
+                        isHovered: isHovered,
+                        isPressed: configuration.isPressed
+                    )))
+                    // Down at once and up over 0.12s. A press is the user's own
+                    // action and has already happened by the time it is drawn;
+                    // fading into it feels like latency, and fading out of it is
+                    // what makes the release read as a release.
+                    .animation(Tokens.Motion.press(configuration.isPressed),
+                               value: configuration.isPressed)
+                    // And the hover step on the same duration, short enough to
+                    // read as the card lighting up rather than as a fade.
+                    .animation(Tokens.Motion.hover, value: resting)
+                    // Held inside the gutter so a hovered card floats rather than
+                    // touching the window edge.
+                    .padding(.horizontal, Tokens.Space.cardInset)
+            )
+            // The whole row is the target, including the gaps between its words.
+            .contentShape(Rectangle())
     }
 }
 

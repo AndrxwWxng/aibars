@@ -20,7 +20,6 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "claude" }
     public let displayName = "Claude"
     public let iconName = "sparkles"
-    public let accentColor: Color = Color(red: 0.85, green: 0.45, blue: 0.30)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

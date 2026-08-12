@@ -18,7 +18,6 @@ public final class ZaiProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "zai" }
     public let displayName = "Z.ai"
     public let iconName = "z.square.fill"
-    public let accentColor: Color = Color(red: 0.13, green: 0.53, blue: 0.93)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

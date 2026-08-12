@@ -29,7 +29,6 @@ public final class CodexProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "codex" }
     public let displayName = "Codex"
     public let iconName = "terminal"
-    public let accentColor: Color = Color(red: 0.42, green: 0.44, blue: 0.47)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

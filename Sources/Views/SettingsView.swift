@@ -28,26 +28,42 @@ private extension String {
 /// sessions ready · 1 locked", "Unlock 4", "v0.4" — which is the mixed case, so
 /// it is SF Pro with tabular figures. That still buys what the column needs:
 /// a count re-read by a background sweep no longer shifts the words beside it.
+///
+/// Both weights are named. `paneTitle` takes `titleWeight`, which is the weight
+/// a subject is set at everywhere in the app — it used to take `emphasisWeight`,
+/// a token that resolved to the same `.medium` and is gone. Everything else is
+/// `.regular`, written out rather than inherited: a font that leaves its weight
+/// unstated draws whatever the enclosing `Form` last set, which is how one
+/// pane's caption ends up a shade heavier than the next one's.
 private extension Font {
     /// A row's subject: a service, a browser, the app's own name.
     static var paneTitle: Font {
-        .system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight)
+        .system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight)
     }
     /// Prose, and whatever is typed into a field.
-    static var paneBody: Font { .system(size: Tokens.Ramp.title).monospacedDigit() }
+    static var paneBody: Font {
+        .system(size: Tokens.Ramp.title, weight: .regular).monospacedDigit()
+    }
     /// The line under a title, a status, and the profile lines under that. Prose
     /// under a section is not here: it goes through `SectionFooter`, which sets
     /// this same size in the one place the whole window shares.
-    static var paneCaption: Font { .system(size: Tokens.Ramp.caption).monospacedDigit() }
+    static var paneCaption: Font {
+        .system(size: Tokens.Ramp.caption, weight: .regular).monospacedDigit()
+    }
 }
 
-// Two inks in this window and no third, which is the panel's rule read across
-// the divider: `Ink.body` for a row's subject and the prose beside it,
-// `Ink.muted` for every line under one. `.secondary` and `.tertiary` are gone
-// from here for the reason they are gone from the panel — they are a fraction
-// of the label colour, so over a near-black ground the third rung lands around
-// 3:1 and a profile name stops being readable rather than becoming quieter.
-// `Ink.muted` is a stated pair on both grounds and clears 4.5:1 on each.
+// Two inks for text in this window and no third, which is the panel's rule read
+// across the divider: `Ink.body` for a row's subject and the prose beside it,
+// `Ink.muted` for every line under one. Marks are the one thing that is neither,
+// and they take the rung between: `Ink.mark`, at 10.22:1 light and 11.72:1 dark,
+// so the ladder down a row is name, then the thing that labels it, then the
+// context under it — three steps that cost no space and no weight.
+//
+// `.secondary` and `.tertiary` are gone from here for the reason they are gone
+// from the panel — they are a fraction of the label colour, so over a near-black
+// ground the third rung lands around 3:1 and a profile name stops being readable
+// rather than becoming quieter. `Ink.muted` is a stated pair on both grounds and
+// clears 4.5:1 on each.
 //
 // `Color.primary` is gone with them. On `Surface.base` dark it is pure white at
 // 19:1, which is the loudest thing either window can draw, and a settings row
@@ -477,8 +493,14 @@ public struct SettingsView: View {
                 Text("aibars")
                     .font(.paneTitle)
                     .foregroundStyle(Tokens.Ink.body)
+                // `paneCaption`, because this is the line under a subject and
+                // that is what every other line under a subject in this window
+                // is set at. It was `paneBody`, which put the version at the
+                // same size as the app's own name directly above it and as the
+                // prose directly below — three 13pt runs stacked, which is the
+                // wobble the type block at the top of this file exists to stop.
                 Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")")
-                    .font(.paneBody)
+                    .font(.paneCaption)
                     .foregroundStyle(Tokens.Ink.muted)
             }
 
@@ -528,10 +550,22 @@ private struct BrowserSourceRow: View {
     var body: some View {
         HStack(spacing: Tokens.Space.gutter) {
             Image(systemName: symbol)
-                .foregroundStyle(Tokens.Ink.muted)
-                // The same column a service logo occupies, so every row in this
-                // pane starts its text at one x instead of two.
-                .frame(width: Tokens.Control.settingsLogo)
+                // `mark`, not `muted`. A browser is this row's subject the way a
+                // service is the subject of the rows below it, and the two
+                // sections read as one list only if both put their mark on the
+                // same rung — a globe set in the caption's grey read as part of
+                // the line under the name rather than as the thing naming it.
+                .foregroundStyle(Tokens.Ink.mark)
+                // Stated rather than inherited from the `Form`, so the glyph is
+                // the same size in both appearances and under every control
+                // size the window can be handed.
+                .font(.system(size: Tokens.Ramp.title, weight: .regular))
+                // A square slot, and the same one a service logo occupies: every
+                // row in this pane starts its text at one x, and the glyph inside
+                // this one is swapped — `safari` and `globe` rasterise to
+                // different boxes, so a width with no height lets the row's first
+                // baseline move depending on which browser is installed.
+                .frame(width: Tokens.Control.settingsLogo, height: Tokens.Control.settingsLogo)
 
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
                 Text(source.name)
@@ -796,6 +830,12 @@ private struct ServiceRow: View {
                     fallbackColor: provider.accentColor,
                     size: Tokens.Control.settingsLogo
                 )
+                // The dim stops at the mark, and this is where it has to stop:
+                // `Dim.disabled` composites `Ink.muted` to 3.10:1 light and
+                // 4.08:1 dark, which is legal for a graphic and under the floor
+                // for a label. So a switched-off row keeps its name and its line
+                // at full ink and is told apart by its mark and by the switch
+                // that turned it off — never by unreadable text.
                 .opacity(provider.isEnabled ? 1 : Tokens.Dim.disabled)
 
                 VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
@@ -894,11 +934,19 @@ private struct ServiceRow: View {
     /// nothing yet is idle, not healthy, and a service that is connected and not
     /// answering wants the user rather than a tick.
     ///
-    /// Amber and red are two different asks and now say so. A sign-in that has
-    /// expired — or a Keychain the user declined — is `attention`: there is
-    /// something for them to do. A request that simply failed is `failure`:
-    /// there is not, and colouring it amber sent people looking for a dialog
-    /// that was never going to appear.
+    /// Red is not one of the answers. It was: a request that simply failed drew
+    /// `Ink.failure`, which was byte-identical to the usage ramp's warning stop,
+    /// so "the request failed" and "you are at your cap" were one colour across
+    /// two windows — and this pane could put ten of them down a list on a
+    /// morning when the network is out. Red has one owner now and it is
+    /// measurement, so it does not live in this window at all.
+    ///
+    /// What survives is the distinction that was worth having. A sign-in that
+    /// has expired — or a Keychain the user declined — is `attention`: there is
+    /// something for them to do. A request that simply failed is muted like any
+    /// other line under a name, because there is not, and the words say which:
+    /// "sign-in expired" against "not responding". Colouring the second one sent
+    /// people looking for a dialog that was never going to appear.
     ///
     /// And this is one of the only two places `Ink.ok` is allowed: a connection
     /// row here, and the status dot on a connected status-only service in the
@@ -909,8 +957,11 @@ private struct ServiceRow: View {
         guard provider.isAuthenticated else { return Tokens.Ink.idle }
         switch snapshot {
         case .success: return Tokens.Ink.ok
-        case .failure(let error): return wantsTheUser(error) ? Tokens.Ink.attention : Tokens.Ink.failure
-        case .none:    return Tokens.Ink.idle
+        case .failure(let error) where wantsTheUser(error): return Tokens.Ink.attention
+        // Both of these are "nothing to report and nothing to press": one has
+        // not answered yet, the other answered badly. `idle` *is* `Ink.muted`,
+        // so they read as the caption they are.
+        case .failure, .none: return Tokens.Ink.idle
         }
     }
 

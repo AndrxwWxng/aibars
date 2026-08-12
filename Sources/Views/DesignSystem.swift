@@ -24,10 +24,15 @@ public enum Tokens {
     /// what the panel had: its title line at 6, its chips at 5 and its captions
     /// at 4.
     public enum Space {
-        /// The 1pt that is not a gap: the nudge that drops the leading column
-        /// onto a cap-height title, the pill's own vertical padding, and the
-        /// space between a title and the caption directly under it — which is
-        /// one block of text set in two sizes, not two things beside each other.
+        /// The 1pt that is not a gap: the space between a title and the caption
+        /// directly under it, which is one block of text set in two sizes rather
+        /// than two things beside each other.
+        ///
+        /// Two of its jobs are gone. The nudge that dropped the leading column
+        /// onto a cap-height title went because there was nothing to nudge: the
+        /// mark box and the title box are both 18pt at defaults, so that 1pt was
+        /// a drawn row and a reserved height disagreeing by a point in two
+        /// files. The plan pill's vertical padding went with the pill.
         public static let hairline: CGFloat = 1
         public static let tight: CGFloat = 2
         public static let snug: CGFloat = 4
@@ -61,8 +66,15 @@ public enum Tokens {
         /// Logo to dial inside that column: the spacing of the `leading` stack
         /// in both rows, and the gap `AppearanceSettings.ringBudget` subtracts
         /// along with the logo when it decides how wide a dial may be — which is
-        /// why this one is not free to move either.
-        public static let leadingItems: CGFloat = 7
+        /// why this one is not free to move far.
+        ///
+        /// Six, and therefore `small`, rather than the 7 it was. Seven was the
+        /// last value in the file sitting between two steps of its own scale,
+        /// which is the thing this scale exists to stop; and it is cheap to fix
+        /// because only `.ring` puts two items in this column at all, so the
+        /// change moves `leadingWidth` by 1pt under one logo style and nothing
+        /// else in the panel.
+        public static let leadingItems: CGFloat = small
         /// Panel header: above the title line, and below it to the divider.
         /// Asymmetric because the divider reads as part of the bottom edge.
         ///
@@ -135,7 +147,8 @@ public enum Tokens {
         /// Prose footers, slider readouts, axis labels, and group headers.
         public static let caption: CGFloat = 10
 
-        /// A name, a heading, a figure that is the row's answer.
+        /// A name, a figure, the `Sign in` word, an icon glyph — anything that
+        /// is the answer rather than the context.
         ///
         /// Medium, not semibold. Nine semibold names down a 356pt panel is the
         /// panel shouting, and hierarchy in a quiet dark UI comes from colour
@@ -145,17 +158,40 @@ public enum Tokens {
         /// set a row title at `emphasisWeight` and the Appearance preview set
         /// the same title at `titleWeight`, so the preview drew heavier than the
         /// thing it was previewing. They resolve to one weight now.
+        ///
+        /// There are two weights in the app and an alert, and this is the whole
+        /// rule: subjects and figures take this, everything that is context —
+        /// captions, labels, countdowns, units, error sentences, `Checking…` —
+        /// is `.regular`, and a figure at or above the warning threshold is
+        /// `alertWeight`. `.regular` is deliberately not named here: it is the
+        /// system's own default and the weight this ramp is measured against, so
+        /// a token for it would only invite a fourth. It does have to be written
+        /// at the call site rather than inherited, because a caption that
+        /// inherits from a `.medium` container is a third weight nobody chose.
+        /// HIG: never lighter than Regular.
         public static let titleWeight: Font.Weight = .medium
-        /// A label that has to hold its own beside a figure.
-        public static let emphasisWeight: Font.Weight = .medium
-        /// A figure at or above `warningThreshold`. The only weight in the panel
-        /// heavier than `emphasisWeight`, so the change at the threshold cannot
+        /// A figure at or above `warningThreshold`. The only weight in the app
+        /// heavier than `titleWeight`, so the change at the threshold cannot
         /// be read as anything else — it is one of the three channels that carry
         /// near-cap, and one of the two that survive a greyscale screenshot. The
         /// other two are the fill's square trailing cap and a bar that is
         /// visibly full; the coloured spine that used to be a fourth is gone,
         /// and its share of the work is why this one cannot be softened.
+        ///
+        /// Safe to cross mid-line, and that is measured rather than assumed: SF
+        /// Pro's cap height at 13pt is 9.1597 at regular, medium, semibold *and*
+        /// bold, while x-height moves 6.843→6.989. A threshold crossing changes
+        /// the stem weight and cannot shift the axis the row is aligned on.
         public static let alertWeight: Font.Weight = .semibold
+
+        // `emphasisWeight` was here, at `.medium` — the same value as
+        // `titleWeight`, under a name that promised a step up and delivered
+        // nothing. Twenty-odd call sites across nine files were asking for
+        // emphasis and getting the title weight, which is why the panel read as
+        // one flat weight with no contrast in it: the contrast was supposed to
+        // come from a token that had quietly been flattened into its neighbour.
+        // They all take `titleWeight` now, and the captions beside them say
+        // `.regular` out loud, which is where the contrast actually was.
         /// Percentages and any figure the eye scans down a column.
         ///
         /// Monospaced, not rounded: tabular figures are the whole of the
@@ -204,9 +240,15 @@ public enum Tokens {
     /// column is therefore reserved, and this is the width to reserve it at.
     ///
     /// 0.6185 is SF Mono's measured advance ratio on this platform — "888"
-    /// measures 24.11pt at 13pt — so this is the real column rather than an
-    /// em-based guess with slack in it. It replaces the `(detailSize * 2.8)`
-    /// that `ProviderRow` was estimating with.
+    /// measures 24.11pt at 13pt, a ratio of 0.61816 — so this is the real column
+    /// rather than an em-based guess with slack in it. It replaces the
+    /// `(detailSize * 2.8)` that `ProviderRow` was estimating with.
+    ///
+    /// And the reason `Ramp.figureDesign` is not a taste: the widest reading a
+    /// row can carry, `"100%"`, measures 32.14pt in SF Mono at 13pt and fits the
+    /// 35pt rail this function reserves for it. The same string in SF Pro wants
+    /// 36.29pt and **overflows** — so anyone who ever "simplifies" the mono
+    /// design away breaks the rail rather than just changing the face.
     public static func figureWidth(_ size: CGFloat, digits: Int) -> CGFloat {
         (size * 0.6185 * CGFloat(digits)).rounded(.up)
     }
@@ -221,6 +263,14 @@ public enum Tokens {
     /// covers the currency mark, four digits and the point, and a budget past
     /// four digits truncates rather than widening the column it shares with
     /// three other rows.
+    ///
+    /// A column, though, and only a column. The Budget pane stacks four amounts
+    /// vertically and their decimals have to line up, so it reserves this. The
+    /// panel's row does not: there is at most one spend figure on a row and
+    /// nothing above or below it to line up with, so reserving the rail there
+    /// only indented the caption that follows it by whatever slack the current
+    /// amount left — an indent that moved as the bill grew. A rail is worth
+    /// paying for where there is a column, and nowhere else.
     public static func moneyWidth(_ size: CGFloat) -> CGFloat {
         figureWidth(size, digits: 8)
     }
@@ -262,6 +312,16 @@ public enum Tokens {
         public static let rowIconButton: CGFloat = 18
         /// The glyph inside either.
         public static let iconGlyph: CGFloat = 12
+        /// The square a row's figure rail draws a glyph in, when what the rail
+        /// has to say is not a number: the error triangle, the status dot.
+        ///
+        /// Fixed, and that is the whole reason it exists. Measured at 11pt,
+        /// `exclamationmark.triangle.fill` renders 14×13, `lock.fill` 11×13 and
+        /// `arrow.clockwise` 12×14 — so a rail sized to whichever symbol is
+        /// currently in it moves the row's right edge by up to 3pt as a service
+        /// changes state, and two rows six apart in the same list disagree about
+        /// where the rail is. One box, centred, whatever goes in it.
+        public static let railGlyph: CGFloat = 14
         /// The status-item mark as drawn in the panel header and the appearance
         /// sample. Not `menuBarGlyphHeight`: that setting sizes the mark in the
         /// menu bar, where the row height is the system's, and a header is not
@@ -279,7 +339,10 @@ public enum Tokens {
         public static let settingsLogo: CGFloat = 26
         /// A provider logo in a connect dialog's headline.
         public static let dialogLogo: CGFloat = 34
-        /// The dot in front of a status line.
+        /// The one green dot the panel draws: proof of connection on a service
+        /// that reports a state rather than a quota, in the figure rail. It used
+        /// to sit in front of the status line, which put a glyph ahead of text on
+        /// a detail line and indented that one line past every other.
         public static let dot: CGFloat = 6
         /// The dot on a chip, which sits beside caption type rather than body.
         public static let chipDot: CGFloat = 5
@@ -327,8 +390,39 @@ public enum Tokens {
         /// A slider and its readout in the Appearance pane.
         public static let sliderWidth: CGFloat = 168
         public static let readoutWidth: CGFloat = 42
-        /// A hairline rule drawn as a `Rectangle` rather than a `Divider`.
+        /// A hairline rule drawn as a `Rectangle` rather than a `Divider`, in
+        /// points, at the system's own weight: `NSBox(.separator)` reports an
+        /// intrinsic height of 1 and `NSSplitView.dividerThickness` is 1.0.
+        ///
+        /// A point, not a pixel — and on a Retina display those are not the same
+        /// rule. One point of grey at 2× lights two device pixels, which is
+        /// twice the ink the system's own separator lays down and reads as a soft
+        /// grey band rather than as a line. The one rule left in the app (under
+        /// the panel header) therefore opts into `hair(scale:)` below and snaps
+        /// its offset; this value stays for anything that genuinely wants a
+        /// point, and as the number to compare against.
         public static let hairline: CGFloat = 1
+
+        /// One device pixel at `displayScale`: 0.5pt at 2×, 1pt at 1×.
+        ///
+        /// The thinnest line the display can draw, which is what a hairline is
+        /// supposed to be. Read `@Environment(\.displayScale)` and pass it — a
+        /// view cannot be trusted to guess 2× and the app runs on 1× externals.
+        /// A scale of 0 (which nothing should report, but a stub or a snapshot
+        /// host can) answers `hairline` rather than dividing by zero.
+        public static func hair(scale: CGFloat) -> CGFloat {
+            scale > 0 ? 1 / scale : hairline
+        }
+
+        /// `value` moved to the nearest device pixel boundary at `displayScale`.
+        ///
+        /// A half-point rule drawn at a fractional offset is resampled across two
+        /// pixel rows at half strength each — the blur the previous rule had, and
+        /// the reason thinning it alone does not help. Snap the offset as well as
+        /// the thickness, or the line lands between pixels.
+        public static func snap(_ value: CGFloat, scale: CGFloat) -> CGFloat {
+            scale > 0 ? (value * scale).rounded() / scale : value.rounded()
+        }
         /// A connect dialog's width. One number, so the two dialogs stop being
         /// 440 and 460.
         public static let dialogWidth: CGFloat = 460
@@ -339,8 +433,11 @@ public enum Tokens {
         // coloured element in the panel, it meant two different things depending
         // on why it was there, and its meaning could not be recovered from
         // looking at it. Near-cap keeps three channels without it, and "this one
-        // needs you" is now a `lock.fill` in the row's own figure rail, which
-        // names the state on the line the state belongs to.
+        // needs you" is now the word `Sign in`, in the row's own figure rail,
+        // which names the action on the line the state belongs to. The amber
+        // `lock.fill` that briefly stood there is gone too, for the smaller
+        // version of the same reason: a padlock asks the user to decode a glyph
+        // where two words tell them what to click.
     }
 
     // MARK: - The menu bar strip
@@ -412,17 +509,30 @@ public enum Tokens {
         /// A control's hover plate: icon button, sidebar row, disclosure header,
         /// preset chip. One value, not 0.05/0.07/0.09/0.10.
         public static let controlHover: Double = 0.08
-        /// The plan pill, and nothing else. The section count and the secondary
-        /// chips both used to take this and both are now plain text: a filled
-        /// capsule around every small number is chrome, and nine of them down a
-        /// panel is a second list competing with the readings.
-        public static let pill: Double = 0.07
+        /// Any surface under a finger that is going down: a row card, an icon
+        /// button's plate. The step above every hover value here, in every row
+        /// background style, so "I am about to act on this" always reads as
+        /// darker than "I am pointing at this".
+        ///
+        /// The panel had no pressed state at all — a 66pt target that lit on
+        /// hover and then said nothing whatsoever when clicked, which is the
+        /// single clearest tell that software is a side project rather than a
+        /// shipped thing. Press feedback is a fill and only a fill: no scale, no
+        /// shadow, no geometry change, because a row that moves under the pointer
+        /// moves the thing being clicked.
+        public static let pressed: Double = 0.12
         /// The neutral container a brand mark sits in when `logoStyle` is
-        /// `.tile`. Named here rather than written into `BrandMark` because it
-        /// is the same plate as `pill` and has to stay the same plate: a tile is
-        /// a container or it is nothing, and the tinted version of it — brand
+        /// `.tile`. Named here rather than written into `BrandMark` because a
+        /// tile is a container or it is nothing: one neutral plane in every
+        /// appearance and for every brand, and the tinted version of it — brand
         /// hue, a tint floor and a hairline stroke — is what made the panel read
-        /// as 2015 iOS.
+        /// as 2015 iOS. It draws no stroke either. A fill *and* an edge is two
+        /// edges for one container.
+        ///
+        /// It kept the plan pill's 0.07 when the pill went, because the number
+        /// was never the pill's: 0.07 over `Surface.base` is a 1.165 step in
+        /// light and 1.186 in dark, which is the quietest plane that still reads
+        /// as a plane.
         public static let logoTile: Double = 0.07
         /// A hairline rule, and the border on a floating surface. Read them
         /// through `ruleOpacity(increased:)` and `borderOpacity(increased:)`
@@ -434,6 +544,16 @@ public enum Tokens {
         public static let rule: Double = 0.07
         public static let border: Double = 0.09
 
+        // `pill` (0.07) was here, for the plan capsule on a row's title line,
+        // and the pill is deleted. It was the last filled shape in the panel
+        // after the chips and the section count went to plain text, and it
+        // failed the way a fill with no width discipline does: `Text(plan)` had
+        // `lineLimit(1)` and no `fixedSize()` while the name beside it held
+        // `layoutPriority(1)`, so at 300pt the capsule squeezed to nothing and
+        // still drew its padding and its fill — a bare 12×22pt grey blob after a
+        // truncated name. The plan is a word in the caption's own run now, and
+        // `logoTile` inherited the number.
+        //
         // `track` and `gradientFloor` were here. The meter track is now
         // `Meter.track`, an explicit pair rather than an opacity, for the reason
         // written on that type; the gradient floor died with the gradient fill.
@@ -454,14 +574,25 @@ public enum Tokens {
         Color.primary.opacity(opacity)
     }
 
-    /// The row background opacity for a background setting and a hover state.
-    /// One switch for both callers: the panel's rows and the Appearance pane's
+    /// The row background opacity for a background setting, a hover state and a
+    /// press.
+    ///
+    /// One switch for all of it: the panel's rows and the Appearance pane's
     /// sample row each had their own copy, which is how a preview comes to
     /// disagree with the thing it is previewing.
+    ///
+    /// Pressed wins over both hover and style, and it is the same value under
+    /// all three settings. A row being clicked is one event, so it looks like one
+    /// thing — a `.plain` row that lights only on press still answers, and a
+    /// `.always` card does not need a fourth step to say the same word. It
+    /// defaults to `false` so a caller with no press to report reads exactly as
+    /// it did.
     public static func rowBackground(
         _ style: AppearanceSettings.RowBackground,
-        isHovered: Bool
+        isHovered: Bool,
+        isPressed: Bool = false
     ) -> Double {
+        if isPressed { return Fill.pressed }
         switch style {
         case .plain:  return 0
         case .hover:  return isHovered ? Fill.hover : 0
@@ -528,14 +659,84 @@ public enum Tokens {
 
     /// Opacity applied to a mark to say something about its subject rather than
     /// about the surface under it.
+    ///
+    /// There is one of these left, and that is the point. Opacity is the wrong
+    /// instrument for state: it says "less of this" to the eye and "under the
+    /// contrast floor" to the measurement, and it says both at once wherever it
+    /// is used. State in this panel is carried by *ink* — a mark that is not
+    /// reporting is drawn in `Ink.muted` at full opacity, which is a stronger
+    /// statement than a fade and still measures 5.93:1 light and 7.19:1 dark.
     public enum Dim {
-        /// A service switched off in Settings.
-        public static let disabled: Double = 0.4
-        /// A service that is not connected.
-        public static let disconnected: Double = 0.55
+        /// A service switched off in Settings — the one place a fade is still the
+        /// honest drawing, because the subject really is inactive and the lists
+        /// it appears in are outside the panel.
+        ///
+        /// Seventy, up from 0.40. At 0.40 `Ink.muted` composites to 1.81:1 in
+        /// light and 2.13:1 in dark: not quiet, illegible, in a settings list
+        /// whose whole job is to tell you which services you have switched off.
+        /// 0.70 measures 3.09:1 and 4.08:1 — read as off, still readable.
+        public static let disabled: Double = 0.70
         /// A reserved control that is not currently offered. Named because the
         /// value matters: the space stays, only this changes.
         public static let reserved: Double = 0
+
+        // `disconnected` (0.55) was here, applied to a brand mark on any row
+        // that was not reporting — loading, error, expired, locked, not
+        // connected. Composited it gave Gemini 1.92:1 and MiniMax 2.11:1 in
+        // light, under the 3:1 a meaningful non-text graphic needs, down an
+        // entire fifteen-row first-run panel: the state a new user stares at was
+        // the state drawn illegibly. "Not reporting" is now one ink for the whole
+        // row — mark, name and caption in `Ink.muted` — which says the same thing
+        // louder and passes.
+    }
+
+    // MARK: - Motion
+
+    /// Every animation in the application. There are three curves and five
+    /// places they are allowed, and the list is closed.
+    ///
+    /// Where they may appear, exhaustively: a meter fill's width (`fill`); a card
+    /// fill under the pointer, a released press, and a row's revealed action
+    /// buttons (`hover`); a press going down (`press`, which is instant). The
+    /// headline's digits use `.contentTransition(.numericText())` on macOS 14 and
+    /// carry their own timing. Nothing else moves — no row height, no mark
+    /// opacity, no colour, no insertion, no scale, no shadow.
+    ///
+    /// Two rules hold the whole thing together. **Geometry animates, ink does
+    /// not**: every tint is drawn under `.animation(nil, value: tint)`, because a
+    /// threshold crossing is an event and a colour easing into red over a third
+    /// of a second reads as a mood. And **frequent things are quick**: the panel
+    /// is a glance, and the pointer crosses nine rows on the way to one of them,
+    /// so a hover that takes as long as a meter fill turns the list into a wake
+    /// of fading plates. 0.12 is under the system's own 0.25
+    /// (`NSAnimationContext.duration`) on purpose; HIG says to generally avoid
+    /// adding motion to interactions that occur frequently, and hover is the most
+    /// frequent interaction there is.
+    public enum Motion {
+        /// A meter fill's width, animated on the reading rather than on the
+        /// view's appearance — the one place in the panel where something the
+        /// user cannot see happening is worth showing move.
+        public static let fillDuration: Double = 0.30
+        public static let fill: Animation = .easeOut(duration: fillDuration)
+
+        /// Anything that answers the pointer: a hover fill arriving or leaving, a
+        /// press releasing, a revealed control's opacity. One duration for all of
+        /// them, because they are all the same event from the user's side and
+        /// three timings on one row is a row that shears.
+        public static let hoverDuration: Double = 0.12
+        public static let hover: Animation = .easeOut(duration: hoverDuration)
+
+        /// A press: down in zero, back on the hover curve.
+        ///
+        /// Asymmetric deliberately. The point of a pressed fill is that it lands
+        /// with the click — eased in, it arrives after the user has already
+        /// decided, which is worse than nothing because it reads as lag in the
+        /// app rather than as feedback from it. Coming back it is a fade, since
+        /// nothing is waiting on it. `nil` is the "no animation" answer, applied
+        /// as `.animation(Motion.press(isPressed), value: isPressed)`.
+        public static func press(_ isPressed: Bool) -> Animation? {
+            isPressed ? nil : hover
+        }
     }
 
     // MARK: - Colour
@@ -566,11 +767,14 @@ public enum Tokens {
 
     /// WCAG relative luminance, 0 for black and 1 for white.
     ///
-    /// One implementation, because there were two: `BrandMark.luminance` decides
-    /// whether a near-black logo needs lifting off a dark menu, and `onAccent`
-    /// decides whether text on the user's accent is black or white. Those are
-    /// the same question and were being answered by two copies of the same
-    /// transfer function.
+    /// One implementation, because there were two: `BrandMark.luminance` decided
+    /// whether a near-black logo needed lifting off a dark menu, and `onAccent`
+    /// decides whether text on the user's accent is black or white. Those are the
+    /// same question and were being answered by two copies of the same transfer
+    /// function. The first of them is gone entirely now — a mark's ink is
+    /// `Ink.mark` and never a function of its own brand hex, so there is nothing
+    /// left to lift — which leaves this the only copy and `onAccent` its only
+    /// caller in the palette.
     ///
     /// Converts to sRGB first rather than trusting the caller: a colour that
     /// arrived from `NSColor(Color)` or from the colour picker can be in any
@@ -642,26 +846,34 @@ public enum Tokens {
         // It died with the cut it existed for. Nothing is drawn over a fill now.
     }
 
-    /// The parts of a meter that are not the fill. Which, now, is the track and
-    /// the hairline that stands in for one — there is nothing else left.
+    /// The parts of a meter that are not the fill. Which, now, is the track, and
+    /// nothing else at all.
     ///
     /// Explicit pairs rather than `Color.primary` opacities, which is the
     /// exception to how every other fill in this file works and is measured
     /// rather than preferred: the track is the ground every meter fill is read
     /// against, and a single opacity cannot hold the same ratio against a
     /// near-white panel and a near-black one. These are set from the fill down:
-    /// the resting grey stop clears the track by 4.28:1 light and 4.18:1 dark,
-    /// amber by 4.23 and 6.69, red by 3.90 and 4.90 — all past the 3:1 a
+    /// the resting grey stop clears the track by 4.27:1 light and 4.35:1 dark,
+    /// amber by 4.20 and 6.98, red by 4.50 and 5.10 — all past the 3:1 a
     /// non-text graphic needs, on both sides, at the *quietest* stop.
     public enum Meter {
-        /// An empty track — bar and ring both.
+        /// An empty track — bar and ring both. The meter slot has exactly two
+        /// drawings: this with a fill on it, or nothing.
         public static let track = dynamic(light: 0xD8D9DD, dark: 0x2A2B2F)
-        /// The slot-filler on a row with no meter at all. Same values as
-        /// `track`: a status-only service gets a hairline where the bar would
-        /// be, never a 0% track. "Reports no quota" and "is at 0%" are different
-        /// statements and must not draw the same.
-        public static let hairline = dynamic(light: 0xD8D9DD, dark: 0x2A2B2F)
 
+        // `hairline` was here, at the same values as `track`, for "the slot on a
+        // row with no meter at all". It was meant to distinguish "reports no
+        // quota" from "is at 0%", and it could not, because it appeared in four
+        // unrelated situations and looked like a table rule in all of them: under
+        // the shipped Minimal preset every row drew a full-width rule with
+        // nothing beneath it and the last one dangling at the window's bottom
+        // edge; under `.bar` a quotaless row drew that rule between its own title
+        // and caption, indistinguishable from a row divider. The distinction it
+        // was carrying moves to the figure rail, where the row already says what
+        // it is: a figure means there is a quota, a dot means there is not. The
+        // slot keeps its height, so no row moves.
+        //
         // `trackElapsed`, `notch`, `cutClearance` and `cutMinBarHeight` were
         // here. All four belonged to one drawing — a track shaded up to the
         // elapsed boundary, a riser standing on it, and a slit cut through the
@@ -673,8 +885,38 @@ public enum Tokens {
 
     // MARK: - Semantic colour
 
-    /// Every ink in the app: the two neutrals text is set in, and the colours
-    /// that mean a state.
+    /// Every ink in the app: the neutrals text and marks are set in, and the
+    /// colours that mean a state.
+    ///
+    /// **Chroma means measurement or state. Identity is drawn in ink. The app's
+    /// own colour appears once per window.** That is the whole colour rule, and
+    /// it closes a panel that was running three unrelated colour systems in
+    /// 356pt: fifteen brand marks at full brand saturation, a usage ramp with its
+    /// own amber and red, and a semantic green/amber/red beside them. Down a
+    /// nine-row list that reads as stickers on a grey wall, and worse than
+    /// untidy — the raw brand hexes out-chromaed every colour that meant
+    /// something (DeepSeek 0.220 and Mistral 0.214 OKLCh chroma against the
+    /// ramp's 0.146–0.192), so the panel's colour hierarchy was inverted and an
+    /// alert could not announce itself against the row's own logo.
+    ///
+    /// There are exactly three hue zones left, and nothing else in the panel may
+    /// carry hue at all:
+    ///
+    /// - **warm, 22–73°** — measurement and "needs you": the usage ramp at or
+    ///   above caution, and `attention`.
+    /// - **green, 140–165°** — connected and working: `ok`, one 6pt dot, in the
+    ///   figure rail of a row that reports no quota. Nowhere else.
+    /// - **indigo, 265–285°** — the app itself: `arc`, and only where its own
+    ///   comment says.
+    ///
+    /// A brand mark is therefore drawn in `mark`, a neutral, in both appearances
+    /// and in every window. Identity survives it, because identity was never the
+    /// hue: Simple Icons ships one path with no `fill` for exactly this reason,
+    /// the menu bar strip has always drawn monochrome by default, and normalising
+    /// the brand hexes to any chroma ceiling low enough to cohere collapses
+    /// Claude, Mistral and MiniMax onto one pink and DeepSeek and OpenRouter onto
+    /// one periwinkle anyway (OKLab ΔE 0.002–0.015). Brand hue bought nothing
+    /// here and cost the alert its voice.
     ///
     /// Usage colour is not here and must not come here: every meter, dot and
     /// percentage goes through `AppearanceSettings.tint(for:providerAccent:)`,
@@ -704,6 +946,27 @@ public enum Tokens {
         /// past any requirement, without the glare.
         public static let body = dynamic(light: 0x22242A, dark: 0xF2F3F5)
 
+        /// A brand mark, and every brand mark. Identity is a shape in one ink.
+        ///
+        /// One ink for all fifteen, in both appearances, in the panel, in
+        /// Settings and in the connect dialog — the finish of a rule the app was
+        /// already applying to 73% of its surfaces (the default strip is
+        /// monochrome; the dark panel already substituted a neutral for eleven of
+        /// the fifteen marks) and applying nowhere consistently.
+        ///
+        /// The value is chosen to make a ladder rather than to be a third grey:
+        /// `body` 14.60/17.00 → `mark` 10.22/11.72 → `muted` 5.93/7.19 on
+        /// `Surface.base`, and 8.38/9.37 on a hovered card, which is the worst
+        /// ground anything in the panel lands on. The name is the row's subject,
+        /// the mark labels it, the caption is context — three steps of luminance
+        /// that cost no space, no weight and no hue. On a `.tile` plate it
+        /// measures 8.77:1 light and 9.88:1 dark.
+        ///
+        /// `BrandMark.hex` stays, as data: the per-service menu bar colouring and
+        /// the opt-in `.provider` ramp still read it, through a banded lookup that
+        /// holds one luminance and a chroma ceiling. Nothing draws a raw brand hex.
+        public static let mark = dynamic(light: 0x3A3D45, dark: 0xC8CCD3)
+
         /// Everything that is context rather than answer: a caption, a
         /// countdown, a section label, a unit tick, an icon glyph, a secondary
         /// chip's label.
@@ -713,17 +976,31 @@ public enum Tokens {
         /// they cost no vertical space. 5.93:1 light, 7.19:1 dark — a caption is
         /// quiet, not unreadable, which is the difference between this and the
         /// `.secondary`/`.tertiary` pair it replaces.
+        ///
+        /// It has a second job now, and it is the one `Dim` used to do badly:
+        /// a row that is not reporting — loading, error, expired, locked, not
+        /// connected — is drawn in this, mark and name and caption together, at
+        /// full opacity. One ink for the whole row says "nothing here yet" more
+        /// plainly than a fade, and it is the only version of that statement that
+        /// measures. The error glyph takes it too, and carries its meaning by
+        /// shape rather than by colour.
         public static let muted = dynamic(light: 0x5C6069, dark: 0x9BA0A9)
 
         /// The app's own colour, and the only saturated thing in the chrome.
         ///
         /// Where it may appear, exhaustively: the app mark in the panel header,
         /// the app mark in the About pane, a text link ("open usage page",
-        /// "unlock a browser in Settings"), and the `Sign in` affordance on a
-        /// disconnected row — plain text there, and `.bordered` in the connect
-        /// dialog, never `.borderedProminent`. Nowhere else. Never a surface,
-        /// never a meter, never a row background, never a border, never a hover
-        /// state, never in the menu bar.
+        /// "unlock a browser in Settings"), and the word `Sign in` in a row's
+        /// figure rail — plain text there, and `.bordered` in the connect dialog,
+        /// never `.borderedProminent`. Nowhere else. Never a surface, never a
+        /// meter, never a row background, never a border, never a hover state,
+        /// never in the menu bar.
+        ///
+        /// That rail word is now the app's single answer to "this one needs your
+        /// credential", whether the session is missing, expired or locked. It
+        /// replaces an amber padlock, and the trade is worth naming: a first run
+        /// drew nine saturated locks in a panel whose premise is that colour
+        /// means measurement, and none of them said what to click.
         ///
         /// Indigo rather than the teal it was, because teal is a hue away from
         /// nothing: it sat between the ramp's old resting stop and `ok`, so the
@@ -738,8 +1015,20 @@ public enum Tokens {
         /// facts and they were being answered by one value — and two accents
         /// lit at once is exactly what a quiet panel cannot afford, which is why
         /// the list above is closed.
-        /// Measures 7.02:1 on `Surface.base` light, 7.42:1 dark.
-        public static let arc = dynamic(light: 0x4340C9, dark: 0x8C9BFF)
+        /// The two halves of the pair hold one chroma as well as one hue, and the
+        /// light half was re-cut to get there. It was `0x4340C9` — OKLCh C 0.205,
+        /// which made the app's own colour the highest-chroma ink in the panel,
+        /// above the warning red's 0.186 and nearly twice the caution amber's
+        /// 0.108. On a first run that is the whole of the panel's colour: fifteen
+        /// `Sign in` rails, 1.07% of every pixel, all of it accent and none of it
+        /// measurement — the alert cannot announce itself against a hue that
+        /// out-shouts it before there is anything to announce. `0x454BA7` is the
+        /// same hue at the dark half's own chroma (0.146) and, deliberately, the
+        /// same contrast to within a hundredth: L 0.460, 7.01:1 on `Surface.base`
+        /// and 5.75:1 on a hovered card, against 7.02 and 5.75 before. Nothing
+        /// about its legibility moved; only its loudness relative to the ramp did.
+        /// 7.01:1 on `Surface.base` light, 7.41:1 dark.
+        public static let arc = dynamic(light: 0x454BA7, dark: 0x8C9BFF)
 
         /// Working. Reserved for exactly that: a connected service that is not
         /// answering is not green.
@@ -748,19 +1037,38 @@ public enum Tokens {
         /// it up. The ramp's resting stop is now grey, which takes that further:
         /// a healthy row carries no hue at all, so any colour arriving anywhere
         /// in the panel means something needs looking at.
+        ///
+        /// It appears in exactly one drawing: a 6pt dot in the figure rail of a
+        /// row that reports no quota. That row has no number and no meter, so the
+        /// dot is its only proof of connection — and putting it in the rail with
+        /// the figures rather than in front of its own caption is what stops that
+        /// caption starting 20pt to the right of every other caption in the list.
         /// 5.80:1 light, 10.06:1 dark.
-        public static let ok = dynamic(light: 0x11703C, dark: 0x3DD68C)
+        public static let ok = dynamic(light: 0x11703C, dark: 0x2CA765)
 
-        /// Needs the user: locked, expired, connected but not responding. The
-        /// same pair as the usage ramp's caution stop, deliberately — "nearly
-        /// out" and "needs you" are the same call to action and should not be
-        /// two ambers. 5.61:1 light, 9.29:1 dark.
-        public static let attention = dynamic(light: 0x8A5A00, dark: 0xF5A623)
+        /// Needs the user, in the two places that still say it in colour: the
+        /// usage ramp's caution stop, and a budget figure past its line.
+        ///
+        /// These are the ramp's caution stops, byte for byte, and that is now
+        /// enforced rather than intended — the ramp's light stop had drifted to
+        /// `0xB45309`, which measures 3.87:1 on a hovered card and put a figure
+        /// under the 4.5:1 floor under three shipped presets. One amber, one pair
+        /// of hexes: "nearly out" and "needs you" are the same call to action and
+        /// cannot be two colours. 5.58:1 light, 9.32:1 dark on `Surface.base`;
+        /// 4.57 and 7.45 on a hovered card.
+        public static let attention = dynamic(light: 0x8A5A00, dark: 0xD08214)
 
-        /// The request failed outright. Kept distinct from `attention` because
-        /// "re-authenticate me" and "the request failed" ask the user for
-        /// different things. 5.18:1 light, 6.82:1 dark.
-        public static let failure = dynamic(light: 0xC62A2F, dark: 0xFF6B6E)
+        // `failure` was here, at `0xC62A2F / 0xFF6B6E` — a red for "the request
+        // failed", beside a ramp whose warning stop was byte-identical to it. So
+        // "this fetch did not come back" and "you are at your cap" were the same
+        // colour, and a panel of dropped requests drew ten red triangles down a
+        // list whose entire premise is that red means near-cap.
+        //
+        // Red has one owner and it is the ramp, because the ramp is the thing
+        // that measures. A failed request is not a measurement: its glyph is
+        // `muted` and its meaning is carried by shape and by one sentence of
+        // English. The deletion is compile-visible so that nothing keeps the old
+        // reading by keeping the old token.
 
         /// Neither: disabled, nothing reported yet, a count of things elsewhere.
         /// Explicitly `muted` rather than `Color.secondary`, so a disabled row
@@ -849,7 +1157,7 @@ public struct SelectableChip: View {
                 Text(title)
                     .font(.system(
                         size: Tokens.Ramp.title,
-                        weight: isSelected ? Tokens.Ramp.emphasisWeight : .regular
+                        weight: isSelected ? Tokens.Ramp.titleWeight : .regular
                     ))
                     .lineLimit(1)
                     // The title takes the rest of the width and places itself in

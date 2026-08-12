@@ -160,3 +160,113 @@ final class MeterFillShapeTests: XCTestCase {
         XCTAssertEqual(host.fittingSize.height, 8, accuracy: 0.5)
     }
 }
+
+/// Where a reading becomes a length.
+///
+/// The bar and the dial draw the same number, so the arithmetic that turns a
+/// percentage into a length is shared — and these are about the one property
+/// that makes it worth sharing: what the eye measures has to be what the figure
+/// on the same line says.
+final class MeterGeometryTests: XCTestCase {
+
+    // MARK: - The bar
+
+    /// A reading of nothing draws nothing. An empty track is how the panel says
+    /// 0%, and a floor applied blindly would leave a stub behind on it.
+    func testAZeroReadingDrawsNoFill() {
+        XCTAssertEqual(MeterGeometry.fillWidth(percent: 0, track: 278, thickness: 5), 0)
+    }
+
+    /// The floor is two thicknesses, so the shortest fill is a stub with a
+    /// direction rather than the round-capped dot one thickness produced — and a
+    /// dot is identical at 0.5% and at 1%, which is a meter that has stopped
+    /// measuring.
+    func testTheShortestFillIsTwoThicknessesAndNeverACircle() {
+        for percent in [0.001, 0.005, 0.01, 0.02] {
+            XCTAssertEqual(
+                MeterGeometry.fillWidth(percent: percent, track: 278, thickness: 5),
+                10,
+                accuracy: 0.001,
+                "\(percent) should sit on the floor"
+            )
+        }
+    }
+
+    /// Above the floor the fill is the reading, and nothing else.
+    func testAboveTheFloorTheBarIsTheReading() {
+        XCTAssertEqual(
+            MeterGeometry.fillWidth(percent: 0.5, track: 278, thickness: 5),
+            139,
+            accuracy: 0.001
+        )
+    }
+
+    /// A budget can be walked past; a fill cannot walk past its track.
+    func testTheFillIsClampedToTheTrack() {
+        XCTAssertEqual(
+            MeterGeometry.fillWidth(percent: 2.11, track: 278, thickness: 5),
+            278,
+            accuracy: 0.001
+        )
+    }
+
+    // MARK: - The dial
+
+    /// What `ringTrim` returns is what gets *painted*, and that is the whole
+    /// point of it: a round cap adds half a stroke of paint past each end of a
+    /// trim, so a dial that trimmed to its reading painted a full stroke more
+    /// than it said — 9.4 points of a 22pt dial at the shipped 5pt bar. The
+    /// figure two columns away was printing the truth the whole time, and a
+    /// meter may not disagree with the number beside it.
+    func testAboveTheFloorTheDialIsTheReading() {
+        for reading in [0.25, 0.5, 0.75, 0.9] {
+            XCTAssertEqual(
+                MeterGeometry.ringTrim(percent: reading, diameter: 22, stroke: 5),
+                reading,
+                accuracy: 0.0001,
+                "\(reading) should be painted as itself"
+            )
+        }
+    }
+
+    /// The dial's floor is the bar's floor: two strokes of painted arc, which is
+    /// exactly the mark it drew before — a one-stroke trim between two caps — so
+    /// the smallest reading looks as it did.
+    func testTheDialsFloorIsTwoStrokesOfPaintedArc() {
+        let cap = MeterGeometry.ringCapFraction(diameter: 22, stroke: 5)
+        XCTAssertEqual(cap, 5 / (Double.pi * 17), accuracy: 0.0001)
+        for reading in [0.001, 0.01, 0.07] {
+            XCTAssertEqual(
+                MeterGeometry.ringTrim(percent: reading, diameter: 22, stroke: 5),
+                2 * cap,
+                accuracy: 0.0001,
+                "\(reading) should sit on the floor"
+            )
+        }
+    }
+
+    /// Zero draws no arc at all: the caller checks for it, and the track alone
+    /// says nothing has been used.
+    func testAZeroReadingDrawsNoArc() {
+        XCTAssertEqual(MeterGeometry.ringTrim(percent: 0, diameter: 22, stroke: 5), 0)
+        XCTAssertEqual(MeterGeometry.ringTrim(percent: -1, diameter: 22, stroke: 5), 0)
+    }
+
+    /// Neither meter may be taken down by a NaN, an infinity or a zero
+    /// dimension: a percentage over a zero limit is exactly where one comes
+    /// from, and `min`/`max` both lose to a NaN.
+    func testNeitherMeterSurvivesANonFiniteReadingAsALength() {
+        for bad in [Double.nan, .infinity, -.infinity] {
+            XCTAssertEqual(MeterGeometry.fillWidth(percent: bad, track: 278, thickness: 5), 0)
+            XCTAssertEqual(MeterGeometry.ringTrim(percent: bad, diameter: 22, stroke: 5), 0)
+        }
+        XCTAssertEqual(MeterGeometry.fillWidth(percent: 0.5, track: .nan, thickness: 5), 0)
+        XCTAssertEqual(MeterGeometry.ringTrim(percent: 0.5, diameter: .nan, stroke: 5), 0)
+        XCTAssertEqual(MeterGeometry.ringCapFraction(diameter: 22, stroke: .nan), 0)
+    }
+
+    /// A dial cannot be filled past full, however far past its line a budget is.
+    func testTheDialIsClampedToFull() {
+        XCTAssertEqual(MeterGeometry.ringTrim(percent: 2.11, diameter: 22, stroke: 5), 1)
+    }
+}

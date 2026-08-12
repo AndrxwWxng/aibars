@@ -94,10 +94,49 @@ final class ProviderErrorTests: XCTestCase {
         XCTAssertTrue(ProviderError.notAuthenticated.isAuth)
     }
 
+    /// The sentence a row draws says what happened and that we will try again.
+    /// What it no longer does is repeat whatever the server sent: the payload
+    /// used to be interpolated straight into the panel, which put two lines of
+    /// truncated JSON on one row and a Cloudflare parameter name on another.
     func testBlockedSaysWhatHappenedAndThatItWillRetry() throws {
-        let message = try XCTUnwrap(ProviderError.blocked("cloudflare challenge").errorDescription)
-        XCTAssertTrue(message.contains("cloudflare challenge"))
+        let error = ProviderError.blocked("cf_chl_opt")
+        let message = try XCTUnwrap(error.errorDescription)
+        XCTAssertFalse(message.contains("cf_chl_opt"), "the raw payload reached the panel")
+        XCTAssertTrue(message.lowercased().contains("bot protection"))
         XCTAssertTrue(message.lowercased().contains("retry"))
+        // It has not gone anywhere — it moved to the tooltip.
+        XCTAssertEqual(error.diagnostic, "cf_chl_opt")
+    }
+
+    /// Every sentence in the closed set fits one line of the panel's 278pt text
+    /// column, which is what "we wrote these" buys: a message from a server has
+    /// no length we can plan a row around.
+    func testEverySentenceFitsOneLine() throws {
+        let all: [ProviderError] = [
+            .notAuthenticated, .sessionExpired, .blocked("x"), .rateLimited,
+            .network("x"), .parse("x"), .unsupported, .configuration("x")
+        ]
+        for error in all {
+            let message = try XCTUnwrap(error.errorDescription)
+            XCTAssertLessThanOrEqual(message.count, 38, "\(message) is too long for the row")
+            // No enum case name, no colon-prefixed label: a sentence, not a log
+            // line. "Network error: The endpoint did not respond" was both.
+            XCTAssertFalse(message.contains(":"), "\(message) reads as a log line")
+        }
+    }
+
+    /// The four cases that carry a payload expose it, and the four that carry
+    /// nothing say so rather than returning an empty string a tooltip would
+    /// draw as a blank second line.
+    func testOnlyTheCasesWithAPayloadHaveADiagnostic() {
+        XCTAssertEqual(ProviderError.network("HTTP 500: {}").diagnostic, "HTTP 500: {}")
+        XCTAssertEqual(ProviderError.parse("missing key").diagnostic, "missing key")
+        XCTAssertEqual(ProviderError.configuration("no endpoint").diagnostic, "no endpoint")
+        XCTAssertNil(ProviderError.network("   ").diagnostic)
+        XCTAssertNil(ProviderError.rateLimited.diagnostic)
+        XCTAssertNil(ProviderError.sessionExpired.diagnostic)
+        XCTAssertNil(ProviderError.notAuthenticated.diagnostic)
+        XCTAssertNil(ProviderError.unsupported.diagnostic)
     }
 }
 

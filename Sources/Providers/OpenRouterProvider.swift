@@ -25,7 +25,6 @@ public final class OpenRouterProvider: ObservableObject, UsageProvider {
     public var serviceID: String { "openrouter" }
     public let displayName = "OpenRouter"
     public let iconName = "arrow.triangle.branch"
-    public let accentColor: Color = Color(red: 0.42, green: 0.40, blue: 0.94)
 
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false

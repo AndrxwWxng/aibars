@@ -14,111 +14,20 @@ public extension Color {
     }
 }
 
-public extension BrandMark {
-    /// WCAG relative luminance, used to keep near-black marks (OpenAI,
-    /// Cursor, Copilot) visible against a dark menu.
-    ///
-    /// The formula lives in `Tokens`, not here. The app now weighs three
-    /// different colours by luminance — a brand mark, the text on an
-    /// accent-filled chip, and a meter's own tint — and three copies of the
-    /// same channel maths is three chances for the marks and the chips to
-    /// disagree about what "too dark to read" means. The colour is built in
-    /// sRGB from the literal rather than round-tripped through `Color`,
-    /// because `NSColor(_: Color)` does not promise a component space and the
-    /// WCAG coefficients assume one.
-    var luminance: Double {
-        Tokens.relativeLuminance(NSColor(
-            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-            green:   CGFloat((hex >>  8) & 0xFF) / 255,
-            blue:    CGFloat( hex        & 0xFF) / 255,
-            alpha:   1
-        ))
-    }
-
-    /// The colour to draw the glyph in for a given appearance.
-    ///
-    /// A provider's brand colour appears in its own mark — this glyph and the
-    /// tile it sits on — and nowhere else in the panel body. Not the meter, not
-    /// the figure, not the row's background, not a chip, unless the user picks
-    /// `ColorRamp.provider`, which is them asking for it. That was given up
-    /// deliberately and it costs something real: you cannot scan the list by
-    /// brand colour. What it buys is that colour in the panel never means "this
-    /// is Anthropic", so colour arriving anywhere means "this one needs you".
-    func foreground(dark: Bool) -> Color {
-        if dark && luminance < 0.22 { return Color(hex: 0xF2F2F2) }
-        if !dark && luminance > 0.78 { return Color(hex: hex).opacity(0.85) }
-        return Color(hex: hex)
-    }
-
-    /// The colour to draw the glyph in on the menu bar itself, when the strip
-    /// is drawn in colour rather than as a template.
-    ///
-    /// Same two bands as `foreground(dark:)`, because the legibility problem is
-    /// the same one: the four essentially black marks (Grok, OpenAI, Copilot,
-    /// Cursor, all under 0.011) disappear on a dark bar. The bands are not
-    /// widened for the strip's smaller glyph — the next mark up is Mistral's
-    /// saturated orange at 0.26, which reads perfectly well on a dark bar, so a
-    /// wider band would catch nothing and cost identity.
-    ///
-    /// What differs is the fix on the pale side. A panel row sits on an opaque
-    /// known surface, so a too-pale mark can be damped to 0.85 there and still
-    /// read. The menu bar is translucent with the user's desktop behind it, so
-    /// any alpha under 1 shows the wallpaper through the glyph; the mark is
-    /// substituted outright instead. Nothing currently ships above 0.78 — this
-    /// is the branch that keeps a future near-white brand from arriving as a
-    /// bug report.
-    func menuBarInk(dark: Bool) -> Color {
-        if dark && luminance < 0.22 { return Color(hex: 0xF2F2F2) }
-        if !dark && luminance > 0.78 { return Color(hex: 0x1A1A1A) }
-        return Color(hex: hex)
-    }
-
-    /// The colour of the rounded tile behind the glyph. Brands that are
-    /// essentially black would tint to nothing, so those fall back to a
-    /// neutral wash.
-    func tile(dark: Bool) -> Color {
-        guard luminance >= Self.tintFloor else { return Self.neutralTile(dark: dark) }
-        return Color(hex: hex, opacity: dark ? Self.tileTint.dark : Self.tileTint.light)
-    }
-
-    /// The tile behind a glyph this file has no vector for, tinted with the
-    /// colour the provider itself supplies.
-    ///
-    /// Same two answers as `tile(dark:)`, at the same two weights, so a service
-    /// that arrives before its artwork does gets a plate of the same strength as
-    /// the marks either side of it: a fallback drawn at an opacity of its own is
-    /// how one row in a panel of eleven comes to look like a different app.
-    ///
-    /// The luminance is measured off the `Color`, because a caller with no mark
-    /// has no hex to measure. `relativeLuminance` converts to sRGB itself, and
-    /// answers 0 for a colour it cannot convert at all — which lands on the
-    /// neutral wash, the safe way round for a tint nothing can measure.
-    static func tile(accent: Color, dark: Bool) -> Color {
-        guard Tokens.relativeLuminance(NSColor(accent)) >= tintFloor else {
-            return neutralTile(dark: dark)
-        }
-        return accent.opacity(dark ? tileTint.dark : tileTint.light)
-    }
-
-    /// A tint of the brand's own colour, as an opacity on it. Dark carries more
-    /// because the same alpha over graphite lands closer to the ground than it
-    /// does over paper.
-    private static let tileTint: (light: Double, dark: Double) = (0.15, 0.22)
-
-    /// The plate for a mark whose colour cannot tint anything: `Color.primary`
-    /// opacities, so it stays a plane above whatever ground it is dropped on.
-    private static func neutralTile(dark: Bool) -> Color {
-        Tokens.quiet(dark ? 0.10 : 0.07)
-    }
-
-    /// Below this luminance a tint of the brand's colour is indistinguishable
-    /// from no tile at all — seven of the entries in `BrandMark.all` fall under
-    /// it and six of those under 0.011 — so they take the neutral wash instead.
-    /// Deliberately well below the 0.22 the ink bands use: this asks "can this
-    /// colour tint a plate", and Z.ai's near-black blue at 0.026 cannot while
-    /// still needing its glyph lifted off a dark menu.
-    private static let tintFloor: Double = 0.06
-}
+// `BrandMark` used to be coloured from here, by five patches around one fact —
+// that fifteen unrelated brand colours cannot be a palette. `luminance` measured
+// each literal; `foreground(dark:)` and `menuBarInk(dark:)` lifted the near-black
+// marks off a dark menu and damped the pale ones; `tile(dark:)`, `tintFloor`,
+// `tileTint` and `neutralTile` decided whether a brand could tint its own plate
+// and washed it grey when it could not.
+//
+// All of it is deleted. A mark draws in one ink, `Tokens.Ink.mark`, so there is
+// nothing left to measure and nothing to lift: 10.22:1 light and 11.72:1 dark, on
+// the base surface and on a tile. The plate is one neutral for every brand. Brand
+// hue survives only in `BrandMark.brandInk`, pre-banded, on the two surfaces where
+// the user asked for it. Deleted outright rather than left forwarding, so a call
+// site that still wants a mark tinted by its own brand fails to build instead of
+// quietly reintroducing the look.
 
 /// The fractions a logo is laid out by, and the one stated exception to the
 /// token rule in this file.
@@ -137,17 +46,25 @@ public extension BrandMark {
 private enum Ratio {
     /// The tile's corner against its side. Just over 2/7: enough that the plate
     /// reads as an icon tile at the small end without rounding towards a circle
-    /// at the large one.
+    /// at the large one. Never a circle — a mark in a circle is an avatar, and
+    /// none of these services is a person.
     static let tileRadius: CGFloat = 0.29
 
-    /// The glyph inside the box, leaving the tile a margin to be a tile in.
-    ///
-    /// Unchanged when the tile is switched off. "Plain mark" removes the plate
-    /// and nothing else: a mark that also grew would make one setting do two
-    /// things, and it would change the optical weight of every row in the panel
-    /// while the layout stayed put, since `RowGeometry` measures the box and not
-    /// what is drawn in it.
+    /// The glyph inside the box when there is a tile, leaving the plate a margin
+    /// to be a plate in.
     static let glyphBox: CGFloat = 0.56
+
+    /// The glyph inside the box when there is not — the default, `logoStyle
+    /// .plain`.
+    ///
+    /// It used to be `glyphBox`, on the argument that "plain mark" should remove
+    /// the plate and nothing else. That kept the margin a tile needs after
+    /// deleting the tile: 36% of the leading column was empty air around a mark
+    /// that read visibly weaker than the 13pt name beside it. At the default 18pt
+    /// box this draws 13.68pt before optical scaling, and the box — which is what
+    /// `RowGeometry` measures — does not move, so no row changes height and no
+    /// text changes x.
+    static let plainGlyph: CGFloat = 0.76
 
     /// A lettermark standing in for artwork that does not exist yet, set against
     /// the whole box rather than the glyph inset above: a letter is drawn from
@@ -155,99 +72,156 @@ private enum Ratio {
     /// `glyphBox` it would sit visibly smaller than the vector marks beside it.
     static let letter: CGFloat = 0.42
 
+    /// SF Pro's cap height against its point size, measured: 9.1597pt at 13pt,
+    /// and the same at regular, medium, semibold and bold. A letter's point size
+    /// says nothing about how tall it draws, so a lettermark sized off the box
+    /// directly always lands short.
+    static let capHeight: CGFloat = 0.705
+
+    /// The same letter with the plate switched off, sized so its cap height
+    /// fills two thirds of the box the vector marks fill — 12.9pt at the default
+    /// 18pt box, a 9.1pt cap. Rendered against the set, this is where a letter
+    /// stops reading as a caption that wandered into the leading column and
+    /// starts carrying the mass of the glyph it stands in for; the tiled ratio
+    /// above can afford to be smaller because the plate carries some of it.
+    static let plainLetter: CGFloat = plainGlyph * (2.0 / 3.0) / capHeight
+
     /// The same letter with no tile around it and no inset to respect, where the
     /// frame it is given *is* the glyph box — `ProviderMark`'s case.
     static let soloLetter: CGFloat = 0.8
 }
 
-/// A provider's logo in a rounded tile.
+/// A provider's logo, optionally on a neutral plate.
 ///
 /// Prefers a bundled asset named `logo-<providerID>` when one exists, so a
-/// brand's official artwork can be dropped in without a code change; falls
-/// back to the vector mark, then to a lettermark for unknown providers.
+/// brand's official artwork can be dropped in without a code change; falls back
+/// to the vector mark, then to a lettermark for unknown providers.
 ///
-/// What state the subject is in is the caller's to say and not this view's: a
-/// service switched off in Settings draws at `Tokens.Dim.disabled`, one that is
-/// merely not connected at `Tokens.Dim.disconnected`. Two values because they
-/// are two different statements about the subject, and opacities on the finished
-/// mark so that a tile dims with the glyph it is behind.
+/// Every branch draws in one ink, and that is the whole colour policy of this
+/// view: identity is a silhouette, not a hue. Which ink is the caller's to say,
+/// because the caller is the only thing that knows what state the subject is in
+/// — `Tokens.Ink.mark` for a service that is reporting, `Tokens.Ink.muted` at
+/// full opacity for one that is loading, failed, locked, expired or not
+/// connected. Ink rather than opacity: the old `Dim.disconnected` fade put
+/// Gemini's mark at 1.92:1 on a light panel, under the 3:1 a meaningful graphic
+/// needs, across an entire first-run window. A list outside the panel that shows
+/// a service switched off in Settings still dims — `Tokens.Dim.disabled`, on the
+/// finished mark, so a plate fades with the glyph it is behind.
 public struct ProviderLogo: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
-
     public let providerID: String
     public let fallbackName: String
+    /// The brand colour the caller has to hand.
+    ///
+    /// Read by nothing here any more: the plate is one neutral for every brand
+    /// and the glyph is one ink, so there is no longer a surface in this view
+    /// that a provider's own colour could paint. Kept rather than deleted
+    /// because five call sites pass it and this pass is not about them; a
+    /// caller writing new code should leave it alone.
     public let fallbackColor: Color
     public let size: CGFloat
     public let showsTile: Bool
+    /// The single colour the mark is drawn in, or `nil` for the resting one.
+    public let ink: Color?
 
     public init(
         providerID: String,
         fallbackName: String,
         fallbackColor: Color = .accentColor,
         size: CGFloat = 30,
-        showsTile: Bool = true
+        showsTile: Bool = true,
+        ink: Color? = nil
     ) {
         self.providerID = providerID
         self.fallbackName = fallbackName
         self.fallbackColor = fallbackColor
         self.size = size
         self.showsTile = showsTile
+        self.ink = ink
     }
 
     private var mark: BrandMark? { BrandMark.mark(for: providerID) }
-    private var isDark: Bool { colorScheme == .dark }
+    private var resolvedInk: Color { ink ?? Tokens.Ink.mark }
+
+    /// The two inks a mark is ever drawn in, in one place.
+    ///
+    /// A row is reporting or it is not, and that one bit picks the ink: `Ink.mark`
+    /// at 10.22:1 light / 11.72:1 dark, or `Ink.muted` at 5.93 / 7.19 — both at
+    /// full opacity, both legible. It is a function rather than two literals at
+    /// the call site because the row, the Appearance preview and a Settings list
+    /// all have to answer it the same way, and three copies of a ternary is how
+    /// they came to answer it differently.
+    public static func markInk(isLive: Bool) -> Color {
+        isLive ? Tokens.Ink.mark : Tokens.Ink.muted
+    }
+
+    /// The glyph's frame inside the box.
+    ///
+    /// Two fractions and one per-mark correction. The fractions are the style's;
+    /// the correction is the mark's, because ink coverage across the fifteen
+    /// glyphs varies 2.7× — OpenCode fills 58% of its box, Gemini 21% — and at
+    /// one shared size that reads as fifteen marks drawn at fifteen weights,
+    /// which is half of the "row of stickers" the panel used to be. `BrandMark`
+    /// carries a scale that lands each glyph on the same optical mass, clamped
+    /// so nothing distorts. It multiplies the glyph and never the box, so the
+    /// leading column, the row height and `RowGeometry` are all untouched.
+    private var glyphSide: CGFloat {
+        size * (showsTile ? Ratio.glyphBox : Ratio.plainGlyph) * (mark?.opticalScale ?? 1)
+    }
 
     public var body: some View {
         ZStack {
             if showsTile { tile }
             glyph
-                .frame(width: size * Ratio.glyphBox, height: size * Ratio.glyphBox)
+                .frame(width: glyphSide, height: glyphSide)
         }
         .frame(width: size, height: size)
         .accessibilityLabel(fallbackName)
     }
 
-    /// The tinted plate. One ground and one stroke, like every other edge in the
-    /// app — no shadow and no inner highlight — and the stroke reads its weight
-    /// through `borderOpacity(increased:)` rather than off a pair of literals,
-    /// because a tinted tile at 15% on a similar ground is exactly the edge an
-    /// increased-contrast display needs stepped up.
+    /// The plate: one fill, no stroke.
+    ///
+    /// `Fill.logoTile` is `Color.primary` at 7% — 1.165:1 against the base
+    /// surface in light and 1.186:1 in dark, one plane above whatever ground the
+    /// logo is dropped on, and the same plane for every brand. It used to be a
+    /// tint of the brand's own colour with a hairline around it, which is two
+    /// edges on a shape whose whole job is to be a container, and fifteen
+    /// different containers down one list.
     private var tile: some View {
-        let shape = Tokens.surface(size * Ratio.tileRadius)
-        return shape
-            .fill(mark?.tile(dark: isDark) ?? BrandMark.tile(accent: fallbackColor, dark: isDark))
-            .overlay(
-                shape.strokeBorder(
-                    Tokens.quiet(Tokens.borderOpacity(increased: contrast == .increased)),
-                    lineWidth: Tokens.Control.hairline
-                )
-            )
+        Tokens.surface(size * Ratio.tileRadius)
+            .fill(Tokens.quiet(Tokens.Fill.logoTile))
     }
 
     @ViewBuilder
     private var glyph: some View {
         if let custom = NSImage(named: "logo-\(providerID)") {
+            // Inked like every other branch. Dropping in artwork replaces the
+            // silhouette, not the rule: one bitmap arriving at full brand
+            // saturation is exactly the clash the vector marks just gave up, and
+            // as a template it also picks up the caller's disconnected ink
+            // instead of staying bright on a row that is saying nothing.
             Image(nsImage: custom)
+                .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
+                .foregroundColor(resolvedInk)
         } else if let mark {
             SVGShape(pathData: mark.pathData, viewBox: mark.viewBox)
-                .fill(mark.foreground(dark: isDark))
+                .fill(resolvedInk)
         } else {
-            // The lettermark draws in the foreground colour rather than the
-            // provider's accent: an accent dark enough to look right on a light
-            // tile disappears on a dark one, and there's no vector here whose
-            // luminance we could reason about. Damped off `.primary` so a letter
-            // does not out-shout the real marks above and below it — it is
-            // standing in for artwork, not announcing itself.
+            // The same ink as a real mark, at the weight a filled glyph reads
+            // at: a lettermark is standing in for artwork, so it has to carry
+            // the same optical mass as the marks above and below it rather than
+            // announce that it is a fallback.
             //
             // SF Pro, at the same weight `ProviderMark` sets its own fallback:
             // the app has two faces, and a rounded display face used for one
             // letter in one state was a third.
             Text(String(fallbackName.prefix(1)).uppercased())
-                .font(.system(size: size * Ratio.letter, weight: .semibold))
-                .foregroundStyle(.primary.opacity(0.8))
+                .font(.system(
+                    size: size * (showsTile ? Ratio.letter : Ratio.plainLetter),
+                    weight: .semibold
+                ))
+                .foregroundColor(resolvedInk)
         }
     }
 }
@@ -268,6 +242,12 @@ public struct ProviderLogo: View {
 /// bundled bitmap cannot be filled with `ink`, and in a template it would
 /// contribute its own alpha instead of the shape's. The override belongs to the
 /// tiled logo, where the artwork is drawn as published.
+///
+/// Also deliberately no `opticalScale`: here the frame the caller gives *is* the
+/// glyph box, and the strip's layout is measured off that box, so a factor above
+/// 1 would put Gemini's mark over its neighbour instead of into its own margin.
+/// The panel normalises mass inside a box it owns; the strip has no margin to
+/// spend.
 public struct ProviderMark: View {
     /// The service family, not the account — "claude", never "claude#2" — so
     /// two subscriptions to one service resolve to the one mark with no
@@ -275,7 +255,7 @@ public struct ProviderMark: View {
     public let serviceID: String
     public let size: CGFloat
     /// The single colour the mark is drawn in. Resolved by the caller, because
-    /// the answer differs per destination: the brand's own colour in a coloured
+    /// the answer differs per destination: the banded brand colour in a coloured
     /// strip, the menu bar's neutral in a monochrome one, black in a template.
     public let ink: Color
 
@@ -298,7 +278,7 @@ public struct ProviderMark: View {
                 // service names.
                 Text(initial)
                     .font(.system(size: size * Ratio.soloLetter, weight: .semibold))
-                    .foregroundStyle(ink)
+                    .foregroundColor(ink)
             }
         }
         .frame(width: size, height: size)

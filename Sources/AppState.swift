@@ -60,6 +60,13 @@ public final class AppState: ObservableObject {
     @Published public var providers: [AnyUsageProvider] = []
     @Published public var snapshots: [String: Result<UsageData, ProviderError>] = [:]
     @Published public var isRefreshing: Bool = false
+    /// Which single rows have a fetch in flight, by provider id.
+    ///
+    /// `isRefreshing` only ever meant "refreshAll is running", so a per-row
+    /// refresh had no cue at all: the row's reading was thrown away, the row
+    /// shrank, and nothing said why. The reading stays now, and this is what
+    /// turns that row's ⟳ into a spinner in the box it already occupies.
+    @Published public var refreshingRows: Set<String> = []
     /// Sessions found but not readable, keyed by service. Chromium cookies need
     /// a keychain key the silent sweep will not ask for, so these exist and are
     /// simply locked — worth saying so rather than looking like nothing is there.
@@ -556,7 +563,18 @@ public final class AppState: ObservableObject {
     /// moment right after a successful sign-in.
     public func refresh(_ providerID: String) async {
         guard let provider = provider(for: providerID) else { return }
-        snapshots.removeValue(forKey: providerID)
+        // The reading this row already has stands until a new one lands.
+        //
+        // This line used to be `snapshots.removeValue(forKey: providerID)`, and
+        // it was the resize the user was seeing: click ⟳, and the row dropped
+        // from 66pt to 38pt while a fetch ran on a 15-second timeout, taking
+        // 28pt of `MenuBarExtra` window with it, under the pointer, with nothing
+        // anywhere saying a fetch was in flight. A refresh never discards what
+        // it has — the row keeps its figure, its meter and its height, and the
+        // in-flight cue is the row's own refresh glyph becoming a spinner in the
+        // 18pt box it already occupies.
+        refreshingRows.insert(providerID)
+        defer { refreshingRows.remove(providerID) }
         // The user asked for this one by name, so any backoff it was serving goes.
         cooldownUntil[providerID] = nil
         consecutiveFailures[providerID] = 0
@@ -851,7 +869,18 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
     public let accountID: String?
     public let displayName: String
     public let iconName: String
-    public let accentColor: Color
+
+    /// The brand colour, for `ColorRamp.provider` and nothing else.
+    ///
+    /// Computed rather than captured, and computed from the same table the mark
+    /// is drawn from: it used to be copied off the wrapped provider, which
+    /// copied it from one of sixteen hand-written literals that disagreed with
+    /// the marks by up to 98° of hue. One source of truth, pre-banded to be
+    /// legible as a figure.
+    public var accentColor: Color {
+        BrandMark.mark(for: serviceID)?.brandInk ?? .accentColor
+    }
+
     public let webLogin: WebLoginConfig?
     public let dashboardURL: URL?
 
@@ -879,7 +908,6 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
         self.accountID = provider.accountID
         self.displayName = provider.displayName
         self.iconName = provider.iconName
-        self.accentColor = provider.accentColor
         self.webLogin = provider.webLogin
         self.dashboardURL = provider.dashboardURL
         self.isEnabled = provider.isEnabled
