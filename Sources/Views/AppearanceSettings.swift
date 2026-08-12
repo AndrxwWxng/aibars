@@ -294,6 +294,8 @@ public final class AppearanceSettings: ObservableObject {
     /// of the user's real settings.
     public init(store: UserDefaults = .standard) {
         self.store = store
+        // Before anything is read, because everything below reads through it.
+        Self.adoptSecondGenerationLook(in: store)
         // Every fallback comes from Snapshot's own defaults, so "the default of
         // this setting" is written down exactly once.
         let defaults = Snapshot()
@@ -1147,7 +1149,7 @@ public final class AppearanceSettings: ObservableObject {
 
     // MARK: - Storage
 
-    private enum Key: String {
+    private enum Key: String, CaseIterable {
         case density = "aibars.appearance.density"
         case textScale = "aibars.appearance.textScale"
         case logoStyle = "aibars.appearance.logoStyle"
@@ -1181,6 +1183,7 @@ public final class AppearanceSettings: ObservableObject {
         case menuBarColour = "aibars.appearance.menuBarColour"
         case menuBarGlyphHeight = "aibars.appearance.menuBarGlyphHeight"
         case didMigrate = "aibars.appearance.didMigrateFromAppState"
+        case didAdoptSecondGeneration = "aibars.appearance.didAdoptSecondGeneration"
 
         /// Retired with the four abstract bars. Read once in `init` so a user who
         /// set a bar count keeps a service count near it, and never written.
@@ -1190,6 +1193,38 @@ public final class AppearanceSettings: ObservableObject {
         /// figure rail and the pace notch are both built on. Named only so
         /// `migrateLegacyKeys` can delete it.
         case legacyGradientFill = "aibars.appearance.usesGradientFill"
+    }
+
+    /// Takes an existing install to the new look, once.
+    ///
+    /// This exists because a redesign that only changes DEFAULTS changes nothing
+    /// for anybody who has already run the app. Every setting is written to the
+    /// store on `didSet`, and the first launch writes the lot, so by the second
+    /// launch there are no unset values left for a new default to reach. The
+    /// author saw the reskin land on tokens — surfaces, ink, type — while the
+    /// structural half of it did not move at all: logos still in their old
+    /// coloured tiles, a second full-width meter still on every row, the amber
+    /// band still starting at 0.60. It looked like nothing had happened, because
+    /// for the settings that were pinned, nothing had.
+    ///
+    /// So the appearance domain is cleared once and allowed to fall back to the
+    /// new defaults. Deliberately blunt: there is no way to tell a value the user
+    /// chose from a value the first launch happened to write, so preserving
+    /// "customisations" would mean preserving the old design under a new name.
+    /// Scoped tightly in return — only `aibars.appearance.*`, so sessions,
+    /// budgets, alert rules, per-provider switches and account names are all
+    /// untouched.
+    private static func adoptSecondGenerationLook(in store: UserDefaults) {
+        // Only the real domain. A scratch domain is one a test or a preview
+        // authored deliberately — several tests seed malformed values precisely
+        // to prove a bad store cannot break the layout — and clearing those would
+        // be this migration deciding it knows better than the fixture.
+        guard store === UserDefaults.standard else { return }
+        guard !store.bool(forKey: Key.didAdoptSecondGeneration.rawValue) else { return }
+        for key in Key.allCases where key != .didAdoptSecondGeneration {
+            store.removeObject(forKey: key.rawValue)
+        }
+        store.set(true, forKey: Key.didAdoptSecondGeneration.rawValue)
     }
 
     private let store: UserDefaults
