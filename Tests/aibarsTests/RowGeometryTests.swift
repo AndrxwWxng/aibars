@@ -53,7 +53,7 @@ final class RowGeometryTests: XCTestCase {
 
     /// The title line, reproduced from its three claimants rather than from the
     /// number it currently comes to. It is held at the action buttons' height,
-    /// which is taller than either type size at every density — so this is 20
+    /// which is taller than either type size at every density — so this is 18
     /// everywhere today, and it is written as the `max` so that a change to any
     /// one of the three moves every height case with it.
     private func titleLine(_ metrics: AppearanceSettings.Metrics) -> CGFloat {
@@ -73,8 +73,8 @@ final class RowGeometryTests: XCTestCase {
     /// density can produce. Cozy at 100% unless a case says otherwise, so a
     /// test that overrides one length is varying exactly that length.
     private func handBuilt(
-        rowVerticalPadding: CGFloat = 9,
-        contentSpacing: CGFloat = 5,
+        rowVerticalPadding: CGFloat = 10,
+        contentSpacing: CGFloat = 6,
         titleSize: CGFloat = 13,
         detailSize: CGFloat = 11,
         captionSize: CGFloat = 10,
@@ -118,9 +118,9 @@ final class RowGeometryTests: XCTestCase {
 
         let row = geometry(appearance, lines: [.meter, .window, .forecast])
         XCTAssertEqual(row.height, expected, "the height stopped matching the terms it is built from")
-        // 20 title + 5 spacing + 5 bar + 3 caption gap + 14 window
-        //    + 5 spacing + 13 forecast + 18 padding.
-        XCTAssertEqual(row.height, 83, "the shipped three-line row is \(row.height)pt, not 83")
+        // 18 title + 6 spacing + 5 bar + 3 caption gap + 14 window
+        //    + 6 spacing + 13 forecast + 20 padding.
+        XCTAssertEqual(row.height, 85, "the shipped three-line row is \(row.height)pt, not 85")
     }
 
     /// Dropping the pace line drops it and the pitch that separated it, and
@@ -141,7 +141,7 @@ final class RowGeometryTests: XCTestCase {
             full.height - metrics.contentSpacing - Tokens.lineBox(metrics.captionSize),
             "dropping the forecast moved something other than the forecast"
         )
-        XCTAssertEqual(row.height, 65, "the two-line row is \(row.height)pt, not 65")
+        XCTAssertEqual(row.height, 66, "the two-line row is \(row.height)pt, not 66")
     }
 
     /// Dropping the countdown as well takes the caption gap with it: the gap
@@ -168,8 +168,8 @@ final class RowGeometryTests: XCTestCase {
 
         let row = geometry(appearance, lines: [.meter])
         XCTAssertEqual(row.height, max(leading, text) + 2 * metrics.rowVerticalPadding)
-        // 31 leading column, since 20 + 5 + 5 of text does not reach it, + 18 padding.
-        XCTAssertEqual(row.height, 49, "the meter-only row is \(row.height)pt, not 49")
+        // 31 leading column, since 18 + 6 + 5 of text does not reach it, + 20 padding.
+        XCTAssertEqual(row.height, 51, "the meter-only row is \(row.height)pt, not 51")
     }
 
     /// The same row with the mark switched off, which is the pure text stack
@@ -188,7 +188,7 @@ final class RowGeometryTests: XCTestCase {
             row.height,
             titleLine(metrics) + metrics.contentSpacing + metrics.barHeight + 2 * metrics.rowVerticalPadding
         )
-        XCTAssertEqual(row.height, 48, "the meter-only row without a mark is \(row.height)pt, not 48")
+        XCTAssertEqual(row.height, 49, "the meter-only row without a mark is \(row.height)pt, not 49")
     }
 
     /// The dense end: a 4pt bar, no pace line, and a caption gap that has hit
@@ -212,8 +212,8 @@ final class RowGeometryTests: XCTestCase {
 
         let row = geometry(appearance, lines: [.meter, .window])
         XCTAssertEqual(row.height, expected)
-        // 20 title + 3 spacing + 4 bar + 2 caption gap + 13 window + 10 padding.
-        XCTAssertEqual(row.height, 52, "the compact two-line row is \(row.height)pt, not 52")
+        // 18 title + 4 spacing + 4 bar + 2 caption gap + 13 window + 12 padding.
+        XCTAssertEqual(row.height, 53, "the compact two-line row is \(row.height)pt, not 53")
     }
 
     /// Under the ring the dial *is* the meter, and it is already paid for in the
@@ -704,7 +704,7 @@ final class RowGeometryTests: XCTestCase {
         // case happens to be first.
         XCTAssertEqual(appearance.density, .cozy)
         XCTAssertEqual(appearance.meterStyle, .bar)
-        XCTAssertEqual(appearance.logoSize, 30)
+        XCTAssertEqual(appearance.logoSize, 18)
         // A number out of range is pulled in; a NaN is not a number and is not,
         // which is exactly why RowGeometry guards it rather than trusting it.
         XCTAssertEqual(appearance.textScale, 1.30)

@@ -218,44 +218,6 @@ final class TokensTests: XCTestCase {
         XCTAssertEqual(Tokens.relativeLuminance(p3White), 1, accuracy: 0.01)
     }
 
-    // MARK: - The meter track
-
-    /// The bug this exists to catch: `Fill.track` 0.12 against a
-    /// `Fill.trackElapsed` 0.20 measures 1.44:1 on dark and 1.09:1 on light, so
-    /// the elapsed half of the track was invisible in the light appearance while
-    /// looking fine in the one the author was working in.
-    func testTrackAndElapsedAreASeparateStepInBothAppearances() throws {
-        for dark in [true, false] {
-            let track = try resolve(Tokens.Meter.track, dark: dark)
-            let elapsed = try resolve(Tokens.Meter.trackElapsed, dark: dark)
-            XCTAssertNotEqual(
-                track, elapsed,
-                "the track and its elapsed portion resolved to one colour in \(dark ? "dark" : "light")"
-            )
-            XCTAssertGreaterThanOrEqual(
-                contrast(track, elapsed), 1.25,
-                "the elapsed step measures \(contrast(track, elapsed)):1 in \(dark ? "dark" : "light")"
-            )
-        }
-    }
-
-    func testNotchClearsTheTrackItSitsOn() throws {
-        // The notch is a 1pt mark and is the first thing a poor display loses,
-        // so it is held to a wider step than the track's own.
-        for dark in [true, false] {
-            let track = try resolve(Tokens.Meter.track, dark: dark)
-            let notch = try resolve(Tokens.Meter.notch, dark: dark)
-            XCTAssertGreaterThanOrEqual(contrast(track, notch), 2.2)
-
-            let increased = try resolve(Tokens.notchColour(increased: true), dark: dark)
-            XCTAssertGreaterThan(
-                contrast(track, increased), contrast(track, notch),
-                "increased contrast did not widen the notch's step in \(dark ? "dark" : "light")"
-            )
-        }
-        XCTAssertGreaterThan(Tokens.notchWidth(increased: true), Tokens.notchWidth(increased: false))
-    }
-
     // MARK: - Surfaces
 
     func testSurfaceBaseDiffersByAppearance() throws {
@@ -303,69 +265,15 @@ final class TokensTests: XCTestCase {
         }
     }
 
-    /// `onFill` is the ground punched back through a saturated fill, so it has to
-    /// *be* the ground rather than merely resemble it: the cut and the riser are
-    /// holes, and a hole in a slightly different colour reads as a scratch.
-    func testGroundPunchedThroughAFillIsTheGround() throws {
-        for dark in [true, false] {
-            XCTAssertEqual(
-                try resolve(Tokens.Surface.onFill, dark: dark),
-                try resolve(Tokens.Surface.base, dark: dark),
-                "the fill's clearance is not the panel ground in \(dark ? "dark" : "light")"
-            )
-        }
-    }
-
-    func testSurfaceIsWarmRatherThanTinted() throws {
-        // Warm by a small red-over-blue offset. Enough to read as deliberate
-        // beside a default blue-grey panel, never enough to read as a colour.
+    func testSurfaceIsCoolRatherThanTinted() throws {
+        // Cool by a small blue-over-red offset. Enough to read as deliberate
+        // beside a default neutral panel, never enough to read as a colour.
         for dark in [true, false] {
             let base = try resolve(Tokens.Surface.base, dark: dark)
-            let offset = base.redComponent - base.blueComponent
-            XCTAssertGreaterThan(offset, 0, "the base is not warm in \(dark ? "dark" : "light")")
+            let offset = base.blueComponent - base.redComponent
+            XCTAssertGreaterThan(offset, 0, "the base is not cool in \(dark ? "dark" : "light")")
             XCTAssertLessThan(offset, 0.05, "the base reads as tinted in \(dark ? "dark" : "light")")
         }
-    }
-
-    // MARK: - The cut, and the spine
-
-    /// The bar height that gates the cut has to be taller than the cut, in both
-    /// contrast modes.
-    ///
-    /// A cut is a clearance of ground either side of the riser, so it costs two
-    /// clearances plus the riser out of the bar's height. Punched through a bar no
-    /// taller than that it does not slit the fill, it severs it — and a bar in two
-    /// pieces says something the user has to stop and reinterpret, which is the
-    /// opposite of the overspend the cut exists to report. `meterThickness` goes
-    /// down to 3, so this floor is reachable rather than theoretical.
-    ///
-    /// The increased-contrast case is the binding one, because `notchWidth` widens
-    /// the riser there and the clearance does not shrink to pay for it.
-    func testTheCutsFloorIsTallerThanTheCutItGates() {
-        XCTAssertGreaterThan(Tokens.Meter.cutClearance, 0)
-        XCTAssertGreaterThan(
-            Tokens.Meter.cutMinBarHeight, Tokens.Meter.cutClearance * 2,
-            "a bar at the floor has no fill left either side of the cut"
-        )
-        for increased in [true, false] {
-            let cut = Tokens.notchWidth(increased: increased) + Tokens.Meter.cutClearance * 2
-            XCTAssertGreaterThan(
-                Tokens.Meter.cutMinBarHeight, cut,
-                "a \(cut)pt cut through a \(Tokens.Meter.cutMinBarHeight)pt bar is a broken bar"
-            )
-        }
-    }
-
-    /// Increased contrast widens the spine rather than recolouring it. The spine's
-    /// job is to survive greyscale — it is one of the four near-cap channels and
-    /// the only one that is a mark rather than a property of the type — and colour
-    /// alone cannot rescue a 2pt element on a low-contrast display.
-    func testTheSpineWidensUnderIncreasedContrast() {
-        XCTAssertGreaterThan(Tokens.Control.spineWidth, 0)
-        XCTAssertGreaterThan(
-            Tokens.Control.spineWidthIncreased, Tokens.Control.spineWidth,
-            "increased contrast left the bookmark at its resting width"
-        )
     }
 
     // MARK: - Increased contrast

@@ -147,19 +147,19 @@ public final class ConnectionFlow: ObservableObject {
     /// same condition came to read orange in one pane and red in another.
     ///
     /// Never the usage ramp and never `AppearanceSettings.tint`: a connection is
-    /// not a reading, so nothing here scales from teal to red. It is the same
-    /// line `RowSpine.ink` draws between `nearCap`, which takes the row's tint,
-    /// and its two state reasons, which take these inks — and the reason the two
-    /// alarm hues are shared with the ramp's amber and red rather than being a
-    /// second pair the user has to learn.
+    /// not a reading, so nothing here walks grey to amber to red with a number
+    /// behind it. The two alarm hues are still the ramp's own amber and red
+    /// rather than a second pair the user has to learn — the ramp says "this is
+    /// nearly full", these say "this needs you", and one palette carries both.
+    /// Never `Ink.arc` either: the app's own colour has a closed list of call
+    /// sites and a state is not on it.
     ///
-    /// `Ink.ok` is spent here deliberately, and it passes the same test that lets
-    /// the panel's status-only dot keep it: green beside a figure is redundant,
-    /// because a row reporting 92% has already proved the connection works. This
-    /// window has no figure — "Connected." is the whole reading, and the ink is
-    /// doing real work rather than decorating one. It never does it alone: the
-    /// word and `symbol`'s tick say the same thing, so the state survives
-    /// greyscale.
+    /// `Ink.ok` is spent here deliberately. Green beside a figure is redundant,
+    /// because a row reporting 92% has already proved the connection works —
+    /// which is why the panel body has no use for it. This window has no figure:
+    /// "Connected." is the whole reading, and the ink is doing real work rather
+    /// than decorating one. It never does it alone — the word and `symbol`'s
+    /// tick say the same thing, so the state survives greyscale.
     public enum Tone {
         case ok, attention, failure, idle
 

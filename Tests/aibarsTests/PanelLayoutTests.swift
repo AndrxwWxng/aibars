@@ -340,20 +340,31 @@ final class RowStateLayoutTests: XCTestCase {
         }
     }
 
-    /// A spinner and an error are the same one line, which is what lets a fetch
-    /// fail without moving the row it failed on.
+    /// A row still waiting is the shortest row the panel has, and an error is a
+    /// row with something to say. They used to be the same height, and that is
+    /// the change: the loading row reserved a full line to hold a spinner and
+    /// the word "Loading", which on a fresh launch is eleven rows of nothing at
+    /// a full row's price. What is left is the name drawn muted, which is the
+    /// whole of the pending cue and costs no pixels.
+    ///
+    /// Asserted as an ordering rather than as a number, because the gap between
+    /// them is a line box and a line box is a function of the density each
+    /// preset sets. What must hold at every preset is that the pending row is
+    /// the shorter one and that neither collapses.
     @MainActor
-    func testASpinnerAndAnErrorOccupyTheSameLine() throws {
+    func testAPendingRowIsShorterThanTheErrorItMayBecome() throws {
         for preset in AppearanceSettings.Preset.allCases {
             let appearance = try presetSettings(preset)
             let loading = try rowHeight(.loading, appearance: appearance, name: "line.\(preset.rawValue)")
             let failed = try rowHeight(
                 .failed("timed out"), appearance: appearance, name: "line.\(preset.rawValue)"
             )
-            XCTAssertEqual(
-                loading, failed, accuracy: 0.5,
-                "\(preset.rawValue): the spinner line is \(loading)pt and the error line \(failed)pt"
+            XCTAssertGreaterThan(
+                failed, loading,
+                "\(preset.rawValue): the pending row is \(loading)pt and the error row \(failed)pt — "
+                + "a row with nothing to say is not shorter than one that has"
             )
+            XCTAssertGreaterThan(loading, 0, "\(preset.rawValue): the pending row measured nothing")
         }
     }
 
@@ -406,300 +417,6 @@ final class RowStateLayoutTests: XCTestCase {
                 + "the \(slot)pt slot — a service reporting no quota has lost its meter"
             )
         }
-    }
-}
-
-// MARK: - The cut
-
-/// The cut, drawn: ground colour punched clean through the fill so the riser
-/// survives being overtaken.
-///
-/// This is the third of the pace channels and the only one that cannot be
-/// asserted off `PaceGeometry` — the other two are a position and a colour, and
-/// this one is a hole. It also carries a gate, `Meter.cutMinBarHeight`, and a
-/// gate is a boundary: `meterThickness` goes down to 3, and a 3pt slit through a
-/// 3pt bar severs it rather than marking it. So the bar is rasterised and read
-/// back a scanline at a time, at the two thicknesses either side of the gate.
-final class MeterCutRenderTests: XCTestCase {
-
-    /// A round track width, so a riser at half the window lands on a whole point
-    /// and the 2x raster carries no blended pixel to reason about. The width is
-    /// not otherwise under test: `MeterTrack` takes it from its parent.
-    private static let trackWidth: CGFloat = 200
-    /// Half the window gone, which puts the riser at the middle of the track.
-    private static let elapsed = 0.5
-    /// Room above and below the bar for the riser's overhang, which is drawn
-    /// outside the bar's own box and would otherwise be cropped out of the image.
-    private static let breathing: CGFloat = 4
-    /// The shipped warning threshold, which is where the fill squares its
-    /// trailing end. Named because the readings below are chosen against it.
-    private static let warning = 0.85
-
-    @MainActor
-    private func bar(thickness: CGFloat, percent: Double, elapsed: Double?) throws -> some View {
-        // The appearance the bar is drawn *in* is the raster's business; this only
-        // builds the view.
-        let appearance = try scratchAppearance("cut")
-        return MeterTrack(
-            percent: percent,
-            elapsed: elapsed,
-            height: thickness,
-            // The row's own tint function, so the fill under test is the fill a
-            // row of this reading actually draws rather than a colour picked to
-            // be easy to find.
-            tint: appearance.tint(for: percent, providerAccent: .primary),
-            isNearCap: ProviderRow.isNearCap(percent: percent, warning: Self.warning)
-        )
-        .frame(width: Self.trackWidth)
-        .padding(.vertical, Self.breathing)
-    }
-
-    /// The named colours along the bar's middle scanline, in order.
-    ///
-    /// Read at the middle rather than anywhere else because that is the one row
-    /// where a capsule is at its full width, so the fill, the track and the cut
-    /// all appear at their own colour with nothing blended into them.
-    @MainActor
-    private func scanline(
-        thickness: CGFloat,
-        percent: Double,
-        elapsed: Double?,
-        dark: Bool = false
-    ) throws -> [String] {
-        let appearance = try scratchAppearance("cut")
-        let raster = try XCTUnwrap(
-            Raster(try bar(thickness: thickness, percent: percent, elapsed: elapsed), dark: dark)
-        )
-        let swatches = try XCTUnwrap(Swatches([
-            (label: "fill", colour: appearance.tint(for: percent, providerAccent: .primary)),
-            (label: "ground", colour: Tokens.Surface.onFill),
-            (label: "riser", colour: Tokens.notchColour(increased: false)),
-            (label: "elapsed", colour: Tokens.Meter.trackElapsed),
-            (label: "track", colour: Tokens.Meter.track)
-        ], dark: dark))
-        return raster.runs(alongY: Self.breathing + thickness / 2, of: swatches).map(\.label)
-    }
-
-    /// The gate, from both sides. At 4pt the fill is cut by nothing and the riser
-    /// is drawn in the ground colour where the fill covers it, which is what the
-    /// meter did before the cut existed; at 5pt a clearance appears either side
-    /// and the riser reverts to its own colour, because the cut has given it
-    /// clean ground to sit on.
-    @MainActor
-    func testTheCutAppearsOnlyOnceTheBarIsThickEnoughToTakeOne() throws {
-        // A reading well past the riser, so the fill has overtaken it and the cut
-        // is in play at all. The length of fill past the cut is the overspend.
-        let overspent = 0.9
-
-        let thin = try scanline(
-            thickness: Tokens.Meter.cutMinBarHeight - 1, percent: overspent, elapsed: Self.elapsed
-        )
-        XCTAssertEqual(
-            thin, ["fill", "ground", "fill", "track"],
-            "a bar under \(Tokens.Meter.cutMinBarHeight)pt drew \(thin) — at this thickness the mark "
-            + "is the ground colour alone, and a clearance beside it would sever the bar"
-        )
-
-        let thick = try scanline(
-            thickness: Tokens.Meter.cutMinBarHeight, percent: overspent, elapsed: Self.elapsed
-        )
-        XCTAssertEqual(
-            thick, ["fill", "ground", "riser", "ground", "fill", "track"],
-            "at \(Tokens.Meter.cutMinBarHeight)pt the bar drew \(thick) — the riser should be sitting "
-            + "in a slit of ground with the fill closing again past it"
-        )
-    }
-
-    /// And the same slit in the dark appearance, where most of this app is looked
-    /// at. `Surface.onFill` is a pair rather than a value precisely because the
-    /// cut is a hole through to the ground: punched in the light appearance's
-    /// #F6F4F1 it would be a white gash across a dark bar.
-    @MainActor
-    func testTheCutIsPunchedThroughToTheGroundInBothAppearances() throws {
-        let expected = ["fill", "ground", "riser", "ground", "fill", "track"]
-        for dark in [false, true] {
-            let drawn = try scanline(
-                thickness: Tokens.Meter.cutMinBarHeight, percent: 0.9, elapsed: Self.elapsed, dark: dark
-            )
-            XCTAssertEqual(
-                drawn, expected,
-                "the \(dark ? "dark" : "light") bar drew \(drawn) — the cut is not the ground it is drawn on"
-            )
-        }
-    }
-
-    /// The clearance is the riser's own, not a gash on one side of it. Read off
-    /// the two ground runs either side rather than off `Meter.cutClearance`,
-    /// which is the number under test.
-    @MainActor
-    func testTheClearanceIsTheSameWidthOnBothSidesOfTheRiser() throws {
-        let appearance = try scratchAppearance("cut")
-        let percent = 0.9
-        let raster = try XCTUnwrap(Raster(
-            try bar(thickness: Tokens.Meter.cutMinBarHeight, percent: percent, elapsed: Self.elapsed)
-        ))
-        let swatches = try XCTUnwrap(Swatches([
-            (label: "fill", colour: appearance.tint(for: percent, providerAccent: .primary)),
-            (label: "ground", colour: Tokens.Surface.onFill),
-            (label: "riser", colour: Tokens.notchColour(increased: false)),
-            (label: "track", colour: Tokens.Meter.track)
-        ]))
-        let runs = raster.runs(
-            alongY: Self.breathing + Tokens.Meter.cutMinBarHeight / 2, of: swatches
-        )
-        let ground = runs.filter { $0.label == "ground" }.map(\.pixels)
-        XCTAssertEqual(ground.count, 2, "the cut came back as \(runs.map(\.label))")
-        XCTAssertEqual(
-            ground.first, ground.last,
-            "the clearance is \(ground) pixels wide either side — the riser is off centre in its own slit"
-        )
-    }
-
-    /// With no elapsed fraction there is nothing to compare against, and the
-    /// meter says so by drawing neither half of the comparison: a uniform track
-    /// and no mark at all. Nil rather than zero is the whole point — a riser at
-    /// the left edge of every window a provider declines to describe reads as
-    /// "the window just started" rather than as "the window is not measured".
-    @MainActor
-    func testWithNoElapsedFractionNeitherTheElapsedTrackNorTheRiserIsDrawn() throws {
-        // Short of the riser, so the mark would be drawn in its own colour over
-        // bare track: the case where its absence cannot be confused with the cut.
-        let percent = 0.3
-        let paced = try scanline(thickness: 5, percent: percent, elapsed: Self.elapsed)
-        XCTAssertEqual(
-            paced, ["fill", "elapsed", "riser", "track"],
-            "with half the window gone the bar drew \(paced) — this is the reference the case below is "
-            + "read against, and it has to show both channels before their absence means anything"
-        )
-
-        let unpaced = try scanline(thickness: 5, percent: percent, elapsed: nil)
-        XCTAssertEqual(
-            unpaced, ["fill", "track"],
-            "with no elapsed fraction the bar still drew \(unpaced)"
-        )
-    }
-
-    /// The other half of the riser, which stands above the bar rather than
-    /// through it, and which costs no row height precisely because it is drawn
-    /// outside the bar's own box. Nothing is allowed up there when there is no
-    /// window to compare against.
-    @MainActor
-    func testTheOverhangIsThereWithAWindowAndGoneWithoutOne() throws {
-        let above = CGRect(x: 0, y: 0, width: Self.trackWidth, height: Self.breathing)
-
-        let paced = try XCTUnwrap(Raster(try bar(thickness: 5, percent: 0.3, elapsed: Self.elapsed)))
-        XCTAssertGreaterThan(
-            paced.inkedPixels(in: above), 0,
-            "the riser drew nothing above the bar — either the overhang is gone or it is being clipped"
-        )
-
-        let unpaced = try XCTUnwrap(Raster(try bar(thickness: 5, percent: 0.3, elapsed: nil)))
-        XCTAssertEqual(
-            unpaced.inkedPixels(in: above), 0,
-            "something is drawn above a bar with no window to compare against"
-        )
-    }
-}
-
-// MARK: - The spine
-
-/// The bookmark, drawn: is it on the row, and is it in the same place whatever
-/// the ramp.
-///
-/// `RowSpineTests` owns the decision — which row spines and why — and this owns
-/// the two things a decision cannot state. That the row actually draws it, at
-/// the card's leading edge and nowhere else; and that its *presence* does not
-/// depend on hue, which is the testable half of the near-cap invariant. Under
-/// `ColorRamp.mono` the mark is `Color.primary` and under `.usage` it is the
-/// ramp's red, and the panel is the same shape either way.
-///
-/// Measured as ink in the leading margin, which is empty by construction here:
-/// the logo is switched off so no brand colour reaches it, the row background is
-/// `.plain` so the card contributes nothing, and the row's own content starts at
-/// `Space.gutter`. Anything found in front of that is the mark.
-final class RowSpineRenderTests: XCTestCase {
-
-    /// The margin the mark lives in: from the window's edge to where the row's
-    /// text column begins. The card's leading edge — `Space.cardInset` — is
-    /// inside it, and the service name's first glyph is outside it.
-    private static let marginWidth = Tokens.Space.gutter
-
-    /// Ink in that margin, and the column it starts at.
-    ///
-    /// `atThreshold` asks for a reading exactly at `warningThreshold`, which is
-    /// the boundary the other three near-cap channels turn on at and therefore
-    /// the side of it the spine has to agree with them on.
-    @MainActor
-    private func margin(
-        ramp: AppearanceSettings.ColorRamp,
-        atThreshold: Bool
-    ) throws -> (inked: Int, firstColumn: Int?) {
-        let name = "spine.\(ramp.rawValue).\(atThreshold)"
-        let appearance = try scratchAppearance(name)
-        appearance.colorRamp = ramp
-        appearance.logoStyle = .hidden
-        appearance.meterStyle = .bar
-        appearance.rowBackground = .plain
-        appearance.rowActions = .never
-
-        let provider = try connectedProvider()
-        let percent = atThreshold ? appearance.warningThreshold : appearance.cautionThreshold / 2
-        let row = ProviderRow(
-            provider: provider,
-            result: .success(
-                UsageData(
-                    providerID: provider.id,
-                    primary: UsageMetric(label: "5h", used: percent * 100, limit: 100, unit: "%")
-                )
-            ),
-            onSignIn: {},
-            appearance: appearance,
-            budgets: try scratchBudgets(name),
-            trend: try scratchTrends(name)
-        )
-        .frame(width: CGFloat(appearance.panelWidth))
-
-        let raster = try XCTUnwrap(Raster(row))
-        let strip = CGRect(x: 0, y: 0, width: Self.marginWidth, height: raster.size.height)
-        return (raster.inkedPixels(in: strip), raster.firstInkedColumn(in: strip))
-    }
-
-    /// The common case, and the one that decides whether the panel reads as a
-    /// list or as a picket fence: a healthy row carries no mark under any ramp,
-    /// including the two where the user has asked for a coloured column.
-    @MainActor
-    func testAQuietRowCarriesNoBookmarkUnderAnyRamp() throws {
-        for ramp in AppearanceSettings.ColorRamp.allCases {
-            let found = try margin(ramp: ramp, atThreshold: false)
-            XCTAssertEqual(
-                found.inked, 0,
-                "a healthy row put \(found.inked) pixels of ink in its leading margin under \(ramp.rawValue)"
-            )
-        }
-    }
-
-    /// And the boundary itself, under all four ramps. The mark is `Color.primary`
-    /// under `.mono` and the ramp's red under `.usage`, and neither the presence
-    /// nor the position of it may know which: presence is the near-cap channel
-    /// that has to survive greyscale, and a mark that moved with the colour
-    /// setting would be a second thing the ramp decides.
-    @MainActor
-    func testARowAtTheWarningThresholdCarriesOneUnderEveryRamp() throws {
-        var columns: [String: Int] = [:]
-        for ramp in AppearanceSettings.ColorRamp.allCases {
-            let found = try margin(ramp: ramp, atThreshold: true)
-            XCTAssertGreaterThan(
-                found.inked, 0,
-                "a row at the warning threshold drew no bookmark under \(ramp.rawValue) — presence is a "
-                + "non-colour channel and must survive a ramp with no hue in it"
-            )
-            columns[ramp.rawValue] = try XCTUnwrap(found.firstColumn)
-        }
-        XCTAssertEqual(
-            Set(columns.values).count, 1,
-            "the mark starts at a different column under different ramps: \(columns) — only its ink is "
-            + "the ramp's business, never its geometry"
-        )
     }
 }
 
@@ -1007,8 +724,8 @@ private struct Raster {
 /// Reference colours, rendered through the same path as the view under test.
 ///
 /// Never compared against the hex in `Tokens`. `ImageRenderer` hands back a
-/// bitmap in the display's colour space, so `Surface.onFill` — #F6F4F1 — reads
-/// #F7F6F3 out of it; the shift is the profile rather than a wrong colour, and
+/// bitmap in the display's colour space, so `Surface.base` — #F7F8FA — reads
+/// back a shade off out of it; the shift is the profile rather than a wrong colour, and
 /// it is identical for a swatch and for a bar. Rendering the reference is what
 /// makes the comparison exact instead of approximate, and it also means a token
 /// that changes value moves the test with it rather than failing it.

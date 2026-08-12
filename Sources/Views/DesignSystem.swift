@@ -52,7 +52,12 @@ public enum Tokens {
         /// the column, and what is left of the panel is the text column their
         /// chip estimate divides. Rounding it to 12 changes how many chips a
         /// 300pt row draws.
-        public static let leadingColumn: CGFloat = 11
+        ///
+        /// Ten rather than eleven now the mark is 18pt and sits on the ground
+        /// with no plate around it: a tile carried its own visual margin, and a
+        /// bare glyph needs the gap to be a little tighter to bind to the name
+        /// beside it rather than float between the edge and the text.
+        public static let leadingColumn: CGFloat = 10
         /// Logo to dial inside that column: the spacing of the `leading` stack
         /// in both rows, and the gap `AppearanceSettings.ringBudget` subtracts
         /// along with the logo when it decides how wide a dial may be — which is
@@ -60,8 +65,13 @@ public enum Tokens {
         public static let leadingItems: CGFloat = 7
         /// Panel header: above the title line, and below it to the divider.
         /// Asymmetric because the divider reads as part of the bottom edge.
-        public static let headerTop: CGFloat = 11
-        public static let headerBottom: CGFloat = 9
+        ///
+        /// Both grew a couple of points when the header lost its subtitle: one
+        /// line of type in the same box reads as cramped where two read as
+        /// full, and the header is the only place in the panel that is allowed
+        /// to be generous, because nothing repeats down the list behind it.
+        public static let headerTop: CGFloat = 12
+        public static let headerBottom: CGFloat = 11
         /// Vertical breathing room around the panel's list inside the window.
         public static let listMargin: CGFloat = 6
         /// A settings pane's own inset, for the panes that aren't a `Form`.
@@ -76,8 +86,11 @@ public enum Tokens {
     /// different thing: four kinds of rounded rectangle were being drawn by five
     /// radii (5, 6, 7, 8, 10), and no call site said which surface it meant.
     public enum Radius {
-        /// A borderless icon button's hover plate.
-        public static let control: CGFloat = 5
+        /// A borderless icon button's hover plate, and the disclosure plate.
+        /// Six rather than five: at a 22pt plate a 5pt corner reads as almost
+        /// square beside a 6pt chip and an 8pt card sitting directly under it,
+        /// and three radii inside 3pt is noise rather than a hierarchy.
+        public static let control: CGFloat = 6
         /// A selectable pill: sidebar row, preset chip, section disclosure.
         public static let chip: CGFloat = 6
         /// A row card in the panel.
@@ -123,13 +136,25 @@ public enum Tokens {
         public static let caption: CGFloat = 10
 
         /// A name, a heading, a figure that is the row's answer.
-        public static let titleWeight: Font.Weight = .semibold
+        ///
+        /// Medium, not semibold. Nine semibold names down a 356pt panel is the
+        /// panel shouting, and hierarchy in a quiet dark UI comes from colour
+        /// and space rather than from weight — `Ink.body` against `Ink.muted`
+        /// separates a name from its caption further than a weight step does.
+        /// It also closes a divergence that had no business existing: the panel
+        /// set a row title at `emphasisWeight` and the Appearance preview set
+        /// the same title at `titleWeight`, so the preview drew heavier than the
+        /// thing it was previewing. They resolve to one weight now.
+        public static let titleWeight: Font.Weight = .medium
         /// A label that has to hold its own beside a figure.
         public static let emphasisWeight: Font.Weight = .medium
         /// A figure at or above `warningThreshold`. The only weight in the panel
         /// heavier than `emphasisWeight`, so the change at the threshold cannot
-        /// be read as anything else — it is the third of the four channels that
-        /// carry near-cap, and the one that survives a greyscale screenshot.
+        /// be read as anything else — it is one of the three channels that carry
+        /// near-cap, and one of the two that survive a greyscale screenshot. The
+        /// other two are the fill's square trailing cap and a bar that is
+        /// visibly full; the coloured spine that used to be a fourth is gone,
+        /// and its share of the work is why this one cannot be softened.
         public static let alertWeight: Font.Weight = .semibold
         /// Percentages and any figure the eye scans down a column.
         ///
@@ -163,16 +188,14 @@ public enum Tokens {
         public static let figureDesign: Font.Design = .monospaced
     }
 
-    /// Letter spacing for an uppercased group header.
-    ///
-    /// A group header is now one fixed recipe with nothing to configure:
-    /// `Ramp.caption`, uppercased, this tracking, `.semibold`, `.secondary`, and
-    /// unscaled by the panel's text scale. `sectionSize(textScale:)` was here to
-    /// stop a 9pt header being scaled down to 7.6 and read as a grey smear; at a
-    /// fixed 10 that special case has nothing left to defend, and a header is
-    /// chrome rather than content — it is a divider with a word on it, and the
-    /// slider the user reached for was aimed at the readings underneath.
-    public static let sectionTracking: CGFloat = 0.5
+    // `sectionTracking` was here, and the uppercased group header it was for is
+    // gone with it. Tracking is now zero everywhere in the app: SF ships optical
+    // tracking per size and correcting it is how house type starts disagreeing
+    // with every native label beside it. The negative tracking the reference
+    // dark tools use is an Inter correction and does not transfer to SF.
+    //
+    // A group header is a word — sentence case, `Ramp.detail`, `Ink.muted` — not
+    // a rule with a word on it.
 
     /// Width of `digits` monospaced characters at `size`.
     ///
@@ -225,20 +248,30 @@ public enum Tokens {
     /// Hit targets and fixed control geometry.
     public enum Control {
         /// A borderless icon button standing alone in a header. The smallest
-        /// square that still reads as a target in a menu bar panel.
-        public static let iconButton: CGFloat = 24
+        /// square that still reads as a target in a menu bar panel — four of
+        /// them sit on the header line, and at 24 they were a row of plates
+        /// competing with the wordmark they share the line with.
+        public static let iconButton: CGFloat = 22
         /// The same button inside a row's title line, where it shares the line
         /// with type instead of standing alone. This is the *whole* button — the
-        /// hover plate included — not a frame wrapped around a 24pt one.
-        public static let rowIconButton: CGFloat = 20
+        /// hover plate included — not a frame wrapped around a 22pt one.
+        ///
+        /// Eighteen, which is also the logo box, and that is not a coincidence:
+        /// it is the row's title-line height, so the reserved action column and
+        /// the leading mark agree on how tall a row's first line is.
+        public static let rowIconButton: CGFloat = 18
         /// The glyph inside either.
         public static let iconGlyph: CGFloat = 12
         /// The status-item mark as drawn in the panel header and the appearance
         /// sample. Not `menuBarGlyphHeight`: that setting sizes the mark in the
         /// menu bar, where the row height is the system's, and a header is not
-        /// a menu bar. Named so the two stop being the same literal 16 in two
+        /// a menu bar. Named so the two stop being the same literal in two
         /// files with no relationship written down.
-        public static let headerGlyph: CGFloat = 16
+        ///
+        /// Fourteen: one point over the 13pt wordmark beside it, so the mark
+        /// reads as the wordmark's companion rather than as a logo the title has
+        /// been placed against.
+        public static let headerGlyph: CGFloat = 14
         /// The mark on the About pane, which is a logo rather than a control.
         public static let aboutGlyph: CGFloat = 44
         /// A provider logo in the settings window, which has no density setting
@@ -300,23 +333,14 @@ public enum Tokens {
         /// 440 and 460.
         public static let dialogWidth: CGFloat = 460
 
-        /// The attention bookmark at a row's leading edge: `RowSpine`.
-        ///
-        /// Two points is as wide as it goes at rest, and that is the whole idea —
-        /// it is the only vertical coloured element in the panel, and it earns
-        /// that by being thin enough that a quiet panel reads as a graphite list
-        /// with one or two marks down its left margin.
-        public static let spineWidth: CGFloat = 2
-        /// The same mark under increased contrast, for the reason
-        /// `notchWidth(increased:)` widens the pace riser: colour alone cannot
-        /// rescue a 2pt mark on a low-contrast display, and a 2pt mark is the
-        /// first thing such a display loses. Presence is a non-colour channel and
-        /// has to survive being unable to see the colour.
-        public static let spineWidthIncreased: CGFloat = 3
-        /// How far the mark is held off the card's top and bottom edge, so it
-        /// reads as a bookmark laid *in* the card rather than as the card's own
-        /// leading edge gaining a colour.
-        public static let spineInset: CGFloat = 2
+        // `spineWidth`, `spineWidthIncreased` and `spineInset` were here, for the
+        // coloured bookmark down a row's leading edge. The mark is deleted, and
+        // the reason is that nobody could read it: it was the one vertical
+        // coloured element in the panel, it meant two different things depending
+        // on why it was there, and its meaning could not be recovered from
+        // looking at it. Near-cap keeps three channels without it, and "this one
+        // needs you" is now a `lock.fill` in the row's own figure rail, which
+        // names the state on the line the state belongs to.
     }
 
     // MARK: - The menu bar strip
@@ -388,11 +412,25 @@ public enum Tokens {
         /// A control's hover plate: icon button, sidebar row, disclosure header,
         /// preset chip. One value, not 0.05/0.07/0.09/0.10.
         public static let controlHover: Double = 0.08
-        /// A pill carrying a value: plan name, section count, secondary chip.
+        /// The plan pill, and nothing else. The section count and the secondary
+        /// chips both used to take this and both are now plain text: a filled
+        /// capsule around every small number is chrome, and nine of them down a
+        /// panel is a second list competing with the readings.
         public static let pill: Double = 0.07
+        /// The neutral container a brand mark sits in when `logoStyle` is
+        /// `.tile`. Named here rather than written into `BrandMark` because it
+        /// is the same plate as `pill` and has to stay the same plate: a tile is
+        /// a container or it is nothing, and the tinted version of it — brand
+        /// hue, a tint floor and a hairline stroke — is what made the panel read
+        /// as 2015 iOS.
+        public static let logoTile: Double = 0.07
         /// A hairline rule, and the border on a floating surface. Read them
         /// through `ruleOpacity(increased:)` and `borderOpacity(increased:)`
         /// rather than directly: both step up under increased contrast.
+        ///
+        /// There is exactly one rule left in the panel, under the header. The
+        /// one that ran along a section label's trailing edge is deleted with
+        /// the rest of that furniture.
         public static let rule: Double = 0.07
         public static let border: Double = 0.09
 
@@ -451,6 +489,11 @@ public enum Tokens {
     /// wallpaper flattens the base into the card sitting on it. Light needs the
     /// extra 0.04 because its base is nearer the wallpaper to begin with.
     ///
+    /// Unchanged when the grounds went near-black, and re-derived rather than
+    /// assumed: the new base is *darker* than the graphite it replaced, so the
+    /// wallpaper swing this has to absorb is the same or smaller and the ladder
+    /// still cannot invert.
+    ///
     /// Fully opaque under reduce-transparency, where the caller also drops the
     /// material entirely: a scrim over nothing is just a fill.
     public static func scrimAlpha(isDark: Bool, reduceTransparency: Bool) -> Double {
@@ -472,19 +515,14 @@ public enum Tokens {
         increased ? 0.18 : Fill.border
     }
 
-    /// The pace notch's colour. Under increased contrast it takes a pair that
-    /// clears the track by more than the 2.5:1 the resting one manages, because
-    /// the notch is a 1pt mark and is the first thing a low-contrast display
-    /// loses.
-    public static func notchColour(increased: Bool) -> Color {
-        increased ? dynamic(light: 0x5E5A53, dark: 0x8E8B85) : Meter.notch
-    }
-
-    /// How wide that mark is drawn. Two points rather than one is the other half
-    /// of the same fix: colour alone cannot rescue a hairline.
-    public static func notchWidth(increased: Bool) -> CGFloat {
-        increased ? 2 : 1
-    }
+    // `notchColour(increased:)` and `notchWidth(increased:)` were here, for the
+    // pace riser that cut through the meter fill. The whole drawing is deleted —
+    // riser, cut and elapsed track shade — because a meter with a slit punched
+    // through it is a private vocabulary the user has to be taught, and it was
+    // also the reason a bar could not be drawn thinner than 5pt without becoming
+    // incoherent. No information is lost: pace already says itself in words, in
+    // `ForecastLine` ("on pace to cap in 40m"), which is where a quiet UI puts a
+    // second reading.
 
     // MARK: - Dimming
 
@@ -552,98 +590,91 @@ public enum Tokens {
 
     /// The grounds everything else is drawn on.
     ///
-    /// Warm graphite rather than the system's blue-grey, by a +3/+4 offset of
-    /// red over blue: enough to read as deliberate beside a default Mac panel,
-    /// never enough to read as tinted. It is the one thing that makes the app
-    /// look like neither competitor without hard-coding a look.
+    /// Cool and near-black, by a +3/+5 offset of blue over red — the inverse of
+    /// the warm graphite that was here. Warmth is the single biggest reason a
+    /// dark panel reads as dated: brown-ish tiles and mustard bars sitting on a
+    /// beige-black ground look like a theme rather than a tool. Every dark
+    /// surface a user would call modern is neutral-to-cool and lands nearer
+    /// black than this one did, so the dark ground drops from `0x1B1A18` to
+    /// `0x101114` and the light one loses its cream for a blue-white.
     ///
     /// This lands cheaply, and the reason is worth writing down: every value in
     /// `Fill` is a `Color.primary` opacity and is therefore *relative* — it
-    /// keeps its meaning over any ground. Introducing graphite is adding a base
-    /// underneath, not rewriting call sites. `quiet(_:)` and
+    /// keeps its meaning over any ground. Changing the palette is swapping the
+    /// base underneath, not rewriting call sites. `quiet(_:)` and
     /// `rowBackground(_:isHovered:)` are untouched, and every appearance setting
-    /// that reaches through them keeps working.
+    /// that reaches through them keeps working. It is also what keeps light mode
+    /// designed rather than inverted: the same opacity resolves to a *darker*
+    /// fill on a near-white ground and a lighter one on a near-black one.
     ///
     /// Elevation has exactly three planes — ground, card, raised — and there is
     /// no fourth. The steps between them are measured and are not free to be
-    /// tidied: base→well is 1.09 in light and 1.07 in dark, base→raised 1.10 and
-    /// 1.15. Each has to read as a plane change and none of them as a second
-    /// material, which is a narrow band: flattened they become one grey, opened
-    /// up they start looking like translucency the panel does not have.
+    /// tidied: well→base is 1.092 in light and 1.056 in dark, base→raised 1.063
+    /// and 1.086. Each has to read as a plane change and none of them as a
+    /// second material, which is a narrow band: flattened they become one grey,
+    /// opened up they start looking like translucency the panel does not have.
     public enum Surface {
         /// The panel ground, the panel header, and the settings form's.
-        public static let base = dynamic(light: 0xF6F4F1, dark: 0x1B1A18)
+        public static let base = dynamic(light: 0xF7F8FA, dark: 0x101114)
         /// A well sunk into it: the history chart's plot area, the conditional
         /// footer band, a raw-JSON field. Darker than `base` in both appearances,
-        /// so it reads as recessed rather than as a card.
-        public static let well = dynamic(light: 0xEDEAE6, dark: 0x141312)
+        /// so it reads as recessed rather than as a card. Dark's well is very
+        /// nearly black, which is the point of a near-black ground: the only
+        /// direction left to sink into is the last few points.
+        public static let well = dynamic(light: 0xEDEEF1, dark: 0x08090A)
         /// A surface with its own edge: the Appearance pane's sample panel, a
         /// banner, a callout, a connect dialog's step block. The one plane that
         /// stands *above* the ground, and the only one that takes a border — a
         /// raised surface is a border plus a ground and never a shadow, which the
         /// app does not have anywhere.
         ///
-        /// Lighter in both appearances, and it has to be: dark needs the larger
-        /// step (1.15 against light's 1.10) because a near-black ground has less
-        /// room below it than a near-white one has above it, so the same ratio
-        /// would land a dark card inside the noise of its own base.
-        public static let raised = dynamic(light: 0xFFFDFA, dark: 0x282623)
-        /// A mark drawn *over* a saturated meter fill — the pace riser where the
-        /// fill has already passed it, and the cut punched through the fill to
-        /// keep it. The same values as `base` because that is what it is: a hole
-        /// punched back through to the ground.
-        public static let onFill = dynamic(light: 0xF6F4F1, dark: 0x1B1A18)
+        /// Lighter in both appearances, and dark takes the larger step (1.086
+        /// against light's 1.063) for the reason its well takes the smaller one:
+        /// a near-black ground has less room below it than a near-white one has
+        /// above it, so dark spends its budget upward and light spends it down.
+        /// Light's raised plane is plain white, which is the one place in the
+        /// light appearance white is allowed — a raised surface is exactly what
+        /// the near-white ground is measured against.
+        public static let raised = dynamic(light: 0xFFFFFF, dark: 0x1A1B1F)
+
+        // `onFill` was here — the ground punched back through a saturated meter
+        // fill to keep the pace riser legible where the fill had overtaken it.
+        // It died with the cut it existed for. Nothing is drawn over a fill now.
     }
 
-    /// The parts of a meter that are not the fill.
+    /// The parts of a meter that are not the fill. Which, now, is the track and
+    /// the hairline that stands in for one — there is nothing else left.
     ///
     /// Explicit pairs rather than `Color.primary` opacities, which is the
     /// exception to how every other fill in this file works and is measured
-    /// rather than preferred: a single opacity cannot produce an equal
-    /// perceptual step in both appearances. The old `Fill.track` 0.12 against a
-    /// `Fill.trackElapsed` 0.20 measures 1.44:1 on dark and 1.09:1 on light —
-    /// which is to say the elapsed portion of the track was simply invisible in
-    /// the light appearance. These values are matched: 1.28:1 light, 1.33:1
-    /// dark.
+    /// rather than preferred: the track is the ground every meter fill is read
+    /// against, and a single opacity cannot hold the same ratio against a
+    /// near-white panel and a near-black one. These are set from the fill down:
+    /// the resting grey stop clears the track by 4.28:1 light and 4.18:1 dark,
+    /// amber by 4.23 and 6.69, red by 3.90 and 4.90 — all past the 3:1 a
+    /// non-text graphic needs, on both sides, at the *quietest* stop.
     public enum Meter {
         /// An empty track — bar and ring both.
-        public static let track = dynamic(light: 0xDCD8D3, dark: 0x33312E)
-        /// The part of the track the window has already spent. The second of
-        /// the two quantities the user is comparing, and the one no rival draws.
-        public static let trackElapsed = dynamic(light: 0xC4BFB8, dark: 0x46443F)
-        /// The pace notch — the riser at the elapsed boundary — where the fill
-        /// has not reached it. Read it through `notchColour(increased:)`, which
-        /// steps it up under increased contrast. Where the fill *has* reached it
-        /// the mark is `Surface.onFill` instead, standing in the cut below.
-        public static let notch = dynamic(light: 0x8A857D, dark: 0x6E6B65)
+        public static let track = dynamic(light: 0xD8D9DD, dark: 0x2A2B2F)
         /// The slot-filler on a row with no meter at all. Same values as
         /// `track`: a status-only service gets a hairline where the bar would
         /// be, never a 0% track. "Reports no quota" and "is at 0%" are different
         /// statements and must not draw the same.
-        public static let hairline = dynamic(light: 0xDCD8D3, dark: 0x33312E)
+        public static let hairline = dynamic(light: 0xD8D9DD, dark: 0x2A2B2F)
 
-        /// The clearance of ground punched either side of the riser when the fill
-        /// has overtaken it — the cut. Without it the riser is a mark of one
-        /// colour laid on a saturated fill of another, and at 1pt that reads as a
-        /// rendering artefact; with it the riser sits in a slit of `Surface.onFill`
-        /// and survives being drawn over its own fill. The length of fill past the
-        /// cut is the overspend, which is the reading.
-        public static let cutClearance: CGFloat = 1
-
-        /// The bar height below which the cut is not drawn at all, and the riser
-        /// carries pace on its own.
-        ///
-        /// The cut measures the riser plus this clearance either side: 3pt at
-        /// rest, 4pt under increased contrast, where `notchWidth` widens the
-        /// riser too. `meterThickness` goes down to 3, and a 3pt-wide gap punched
-        /// through a 3pt-tall bar is not a slit — it is a broken bar, and a bar
-        /// in two pieces says something the user has to stop and reinterpret.
-        public static let cutMinBarHeight: CGFloat = 5
+        // `trackElapsed`, `notch`, `cutClearance` and `cutMinBarHeight` were
+        // here. All four belonged to one drawing — a track shaded up to the
+        // elapsed boundary, a riser standing on it, and a slit cut through the
+        // fill so the riser survived being overtaken — and that drawing is
+        // deleted. It cost a reader a paragraph of explanation to decode a
+        // second quantity that `ForecastLine` already states in a sentence, and
+        // it is what pinned the minimum bar height at 5pt.
     }
 
     // MARK: - Semantic colour
 
-    /// Colours that mean a state.
+    /// Every ink in the app: the two neutrals text is set in, and the colours
+    /// that mean a state.
     ///
     /// Usage colour is not here and must not come here: every meter, dot and
     /// percentage goes through `AppearanceSettings.tint(for:providerAccent:)`,
@@ -652,55 +683,101 @@ public enum Tokens {
     /// that failed — spelled `.green`, `.orange` and `.red` at four call sites in
     /// three files, with no agreement between them, until they were named here.
     ///
-    /// All of them are now explicit pairs rather than system colours, for the
-    /// same reason the ramp is: each of these is sometimes text, and `.green` on
-    /// a light panel does not clear 4.5:1.
+    /// All of them are explicit pairs rather than system colours, for the same
+    /// reason the ramp is: each of these is sometimes text, and `.green` on a
+    /// light panel does not clear 4.5:1. Every ratio quoted below is measured on
+    /// `Surface.base`; each one also clears 4.5:1 on a hovered card, which is
+    /// the worst ground any of them lands on.
+    ///
+    /// `.tertiary` is banned from the panel. There is no third neutral: a value
+    /// is `body` or it is `muted`, and something that wants to be quieter than
+    /// muted wants to not be there.
     public enum Ink {
+        /// Text that is the answer: a service name, the wordmark, a figure below
+        /// caution.
+        ///
+        /// Not `Color.primary`, and this is the quietest change in the file with
+        /// the loudest effect. Primary on a near-black ground is pure white at
+        /// 19:1 — harsh to read, and the single clearest tell that a dark UI is
+        /// a default template rather than something anyone chose. No modern dark
+        /// tool sets body text at `#FFF`. 14.6:1 light, 17.0:1 dark: still far
+        /// past any requirement, without the glare.
+        public static let body = dynamic(light: 0x22242A, dark: 0xF2F3F5)
+
+        /// Everything that is context rather than answer: a caption, a
+        /// countdown, a section label, a unit tick, an icon glyph, a secondary
+        /// chip's label.
+        ///
+        /// The whole of the panel's hierarchy is this against `body`. Two inks
+        /// and one weight step do more separating than four type sizes did, and
+        /// they cost no vertical space. 5.93:1 light, 7.19:1 dark — a caption is
+        /// quiet, not unreadable, which is the difference between this and the
+        /// `.secondary`/`.tertiary` pair it replaces.
+        public static let muted = dynamic(light: 0x5C6069, dark: 0x9BA0A9)
+
         /// The app's own colour, and the only saturated thing in the chrome.
         ///
         /// Where it may appear, exhaustively: the app mark in the panel header,
         /// the app mark in the About pane, a text link ("open usage page",
-        /// "unlock a browser in Settings"), and the `Connect` affordance on a
-        /// disconnected row — as `.bordered`, never `.borderedProminent`.
-        /// Nowhere else. Never a surface, never a meter, never a row background,
-        /// never in the menu bar.
+        /// "unlock a browser in Settings"), and the `Sign in` affordance on a
+        /// disconnected row — plain text there, and `.bordered` in the connect
+        /// dialog, never `.borderedProminent`. Nowhere else. Never a surface,
+        /// never a meter, never a row background, never a border, never a hover
+        /// state, never in the menu bar.
+        ///
+        /// Indigo rather than the teal it was, because teal is a hue away from
+        /// nothing: it sat between the ramp's old resting stop and `ok`, so the
+        /// one colour that is supposed to mean "this is the app" was competing
+        /// with two colours that mean states. Indigo is unmistakably off the
+        /// ramp, which is the entire job.
         ///
         /// It is deliberately *not* `AppearanceSettings.accentColor`. That one
         /// is the user's, it defaults to the system accent, and it keeps every
-        /// job it has: selected chips, focus rings, primary buttons. The app
+        /// job it has: selected chips, focus rings, `ColorRamp.accent`. The app
         /// having its own colour and the user having theirs are two different
-        /// facts and they were being answered by one value.
-        /// Measures 4.86:1 on `Surface.base` light, 8.87:1 dark.
-        public static let arc = dynamic(light: 0x0E7490, dark: 0x5CC8E0)
+        /// facts and they were being answered by one value — and two accents
+        /// lit at once is exactly what a quiet panel cannot afford, which is why
+        /// the list above is closed.
+        /// Measures 7.02:1 on `Surface.base` light, 7.42:1 dark.
+        public static let arc = dynamic(light: 0x4340C9, dark: 0x8C9BFF)
 
         /// Working. Reserved for exactly that: a connected service that is not
         /// answering is not green.
         ///
-        /// Green now means one thing and one thing only, because the usage ramp
-        /// gave it up — its low stop is a desaturated teal. A meter resting at
-        /// 20% and a connection that is up were the same colour, and 0–60% is
-        /// where every row sits on a fresh launch, so the ramp was spending the
-        /// eye's whole colour budget on the least informative state.
-        public static let ok = dynamic(light: 0x1A7F4B, dark: 0x3DD68C)
+        /// Green means one thing and one thing only, because the usage ramp gave
+        /// it up. The ramp's resting stop is now grey, which takes that further:
+        /// a healthy row carries no hue at all, so any colour arriving anywhere
+        /// in the panel means something needs looking at.
+        /// 5.80:1 light, 10.06:1 dark.
+        public static let ok = dynamic(light: 0x11703C, dark: 0x3DD68C)
 
-        /// Needs the user: locked, expired, connected but not responding.
-        public static let attention = dynamic(light: 0x8F6100, dark: 0xE0A200)
+        /// Needs the user: locked, expired, connected but not responding. The
+        /// same pair as the usage ramp's caution stop, deliberately — "nearly
+        /// out" and "needs you" are the same call to action and should not be
+        /// two ambers. 5.61:1 light, 9.29:1 dark.
+        public static let attention = dynamic(light: 0x8A5A00, dark: 0xF5A623)
 
         /// The request failed outright. Kept distinct from `attention` because
         /// "re-authenticate me" and "the request failed" ask the user for
-        /// different things.
-        public static let failure = dynamic(light: 0xC62A2F, dark: 0xEC5D62)
+        /// different things. 5.18:1 light, 6.82:1 dark.
+        public static let failure = dynamic(light: 0xC62A2F, dark: 0xFF6B6E)
 
         /// Neither: disabled, nothing reported yet, a count of things elsewhere.
-        public static let idle: Color = Color.secondary
+        /// Explicitly `muted` rather than `Color.secondary`, so a disabled row
+        /// and a caption are the same grey — the system's secondary is a
+        /// different value from ours and put a third neutral on the panel.
+        public static let idle: Color = muted
 
         /// The wash behind a warning banner, at the weight a banner wants.
         /// Not `dynamic`, because it is the one colour here that is deliberately
-        /// translucent: it has to let the surface under it through.
+        /// translucent: it has to let the surface under it through. Retuned to
+        /// `attention`'s new stops, and a shade thinner in both appearances —
+        /// on a near-black ground the same alpha reads as a lit panel rather
+        /// than as a tint.
         public static let attentionWash = Color(nsColor: NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? NSColor(srgbRed: 0.88, green: 0.64, blue: 0.00, alpha: 0.14)
-                : NSColor(srgbRed: 0.56, green: 0.38, blue: 0.00, alpha: 0.10)
+                ? NSColor(srgbRed: 1.00, green: 0.65, blue: 0.14, alpha: 0.12)
+                : NSColor(srgbRed: 0.54, green: 0.35, blue: 0.00, alpha: 0.09)
         })
 
         /// Text and glyphs on an accent-filled chip.
@@ -710,8 +787,10 @@ public enum Tokens {
         /// a pale yellow that white text disappears into. The fix for a pale
         /// accent is to darken the *text*; it is never to darken the colour the
         /// user chose, which is what a binary search on their hex would amount
-        /// to. 0x101010 rather than pure black so it sits with the panel's warm
-        /// graphite instead of punching a hole in it.
+        /// to. `0x101010` rather than pure black, for the same reason `Ink.body`
+        /// is not pure white: the extremes are where a palette stops looking
+        /// chosen. It is fixed rather than dynamic because the ground here is
+        /// the user's fill, not the appearance.
         ///
         /// Two consumers: `SelectableChip` below, and `ConnectionFlow`'s `Tone`
         /// mapping.
@@ -819,7 +898,7 @@ public struct SectionFooter: View {
     public var body: some View {
         Text(text)
             .font(.system(size: Tokens.Ramp.caption))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Tokens.Ink.muted)
             // Prose, so it wraps rather than truncating. A footer that is not
             // allowed to grow downward can only ever say one line, and every
             // footer in the window says two.

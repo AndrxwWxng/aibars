@@ -55,8 +55,8 @@ public struct ConnectDialog: View {
             statusArea
         }
         .frame(width: Tokens.Control.dialogWidth)
-        // The same warm graphite ground the settings window and the panel stand
-        // on, rather than the system's window colour. Not a house preference: the
+        // The same near-black ground the settings window and the panel stand on,
+        // rather than the system's window colour. Not a house preference: the
         // account rows below are `Surface.raised`, whose step above the ground is
         // measured against this base, and over `windowBackgroundColor` in the
         // dark appearance that step inverts — a raised row would read as a well.
@@ -103,12 +103,18 @@ public struct ConnectDialog: View {
                 size: Tokens.Control.dialogLogo
             )
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
+                // `Ink.body` rather than the inherited `Color.primary`, which on
+                // this window's ground is pure white at 19:1. Every line of type
+                // in this file names its ink for that reason, and the captions
+                // take `Ink.muted` rather than `.secondary` — a hierarchical
+                // style resolves off the system's ramp, not off ours.
                 Text(title)
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
+                    .foregroundColor(Tokens.Ink.body)
                 if let host = flow.provider.webLogin?.startURL.host {
                     Text(host)
                         .font(.system(size: Tokens.Ramp.detail))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(Tokens.Ink.muted)
                 }
             }
             Spacer(minLength: 0)
@@ -193,11 +199,12 @@ public struct ConnectDialog: View {
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
                 Text(flow.headline)
                     .font(.system(size: Tokens.Ramp.title))
+                    .foregroundColor(Tokens.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = flow.detail {
                     Text(detail)
                         .font(.system(size: Tokens.Ramp.detail))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -235,9 +242,10 @@ public struct ConnectDialog: View {
             ForEach(flow.picks) { candidate in
                 HStack(spacing: Tokens.Space.medium) {
                     Image(systemName: "person.crop.circle")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Tokens.Ink.muted)
                     Text(candidate.label)
                         .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                        .foregroundColor(Tokens.Ink.body)
                         // A Chromium profile is named by its owner, so this is a
                         // sentence as often as it is a word. Unconstrained it
                         // wraps, and a wrapped row pushes its own Connect button
@@ -245,10 +253,17 @@ public struct ConnectDialog: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: Tokens.Space.medium)
+                    // `.bordered` in `Ink.arc`, never `.borderedProminent`, and
+                    // the same recipe the stage's own button takes — see
+                    // `actionButton`. Five accounts found is five buttons, and
+                    // five filled ones stacked down a window is a wall; the row's
+                    // edge already says this is a thing to pick, so the button
+                    // only has to say which way.
                     Button(ConnectionFlow.Action.connectTo(candidate).label) {
                         flow.perform(.connectTo(candidate))
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
+                    .tint(Tokens.Ink.arc)
                     .controlSize(.small)
                     .fixedSize()
                 }
@@ -286,7 +301,7 @@ public struct ConnectDialog: View {
                 // name twice on the way through the stack.
                 Text("Usage endpoint")
                     .font(.system(size: Tokens.Ramp.detail))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(Tokens.Ink.muted)
                     .accessibilityHidden(true)
                 TextField("Usage endpoint", text: $flow.endpoint, prompt: Text("https://api.example.com/usage"))
                     .labelsHidden()
@@ -294,7 +309,7 @@ public struct ConnectDialog: View {
             }
             Text(tokenFieldLabel)
                 .font(.system(size: Tokens.Ramp.detail))
-                .foregroundStyle(.secondary)
+                .foregroundColor(Tokens.Ink.muted)
                 .accessibilityHidden(true)
             HStack(spacing: Tokens.Space.medium) {
                 SecureField(tokenFieldLabel, text: $flow.pastedToken, prompt: Text("Token…"))
@@ -302,7 +317,8 @@ public struct ConnectDialog: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { submit() }
                 Button("Save") { submit() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
+                    .tint(Tokens.Ink.arc)
                     // Also off while a save is in flight: Return and a click on
                     // Save are two submissions of the same field, and the second
                     // one saves and verifies a token the first already cleared.
@@ -371,26 +387,44 @@ public struct ConnectDialog: View {
     private var linkRow: some View {
         if !linkActions.isEmpty || flow.offersTokenField {
             HStack(spacing: Tokens.Space.large) {
+                // A text link is on the app colour's closed list, so these take
+                // `Ink.arc` rather than the system's link blue. Left alone they
+                // are a second saturated colour in a window that is already
+                // spending its one on the button beside them.
                 ForEach(linkActions) { action in
                     Button(action.label) { flow.perform(action) }
                         .buttonStyle(.link)
+                        .tint(Tokens.Ink.arc)
                 }
                 if flow.offersTokenField {
                     Button(flow.showsTokenField ? "Hide manual entry" : "Paste a token instead") {
                         flow.toggleTokenField()
                     }
                     .buttonStyle(.link)
+                    .tint(Tokens.Ink.arc)
                 }
                 Spacer(minLength: 0)
             }
         }
     }
 
+    /// The stage's own button, and the window's one emphasis recipe: `.bordered`
+    /// tinted `Ink.arc`, never `.borderedProminent`.
+    ///
+    /// `.borderedProminent` fills with the *user's* accent, and that colour has a
+    /// short list of jobs — selected chips, focus rings, the accent ramp — none
+    /// of which is chrome. A filled accent button here would also put a second
+    /// saturated colour on screen beside the picker's Connect, which is the one
+    /// thing the direction rules out. So the dialog spends the app's colour once,
+    /// on whatever the stage is actually asking for, and the button beside it —
+    /// Done, Cancel — stays the plain system bezel, which is the difference
+    /// between them.
     @ViewBuilder
     private func actionButton(_ action: ConnectionFlow.Action, isPrimary: Bool) -> some View {
         if isPrimary {
             Button(action.label) { flow.perform(action) }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
+                .tint(Tokens.Ink.arc)
         } else {
             Button(action.label) { flow.perform(action) }
         }
@@ -419,11 +453,12 @@ public struct ConnectDialog: View {
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
                 Text(flow.headline)
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                    .foregroundColor(Tokens.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = flow.detail {
                     Text(detail)
                         .font(.system(size: Tokens.Ramp.detail))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -447,13 +482,21 @@ private struct StepRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.medium) {
+            // `.medium`, not `.bold`: the window sets nothing above medium, and a
+            // step number is the least important digit in it — it says what order
+            // to read the line in, not what the line says.
             Text("\(number)")
-                .font(.system(size: Tokens.Ramp.caption, weight: .bold, design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(.secondary)
+                .font(.system(
+                    size: Tokens.Ramp.caption,
+                    weight: Tokens.Ramp.emphasisWeight,
+                    design: Tokens.Ramp.figureDesign
+                ))
+                .foregroundColor(Tokens.Ink.muted)
                 .frame(width: 17, height: 17)
                 .background(Circle().fill(Tokens.quiet(Tokens.Fill.controlHover)))
             Text(text)
                 .font(.system(size: Tokens.Ramp.title))
+                .foregroundColor(Tokens.Ink.body)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }

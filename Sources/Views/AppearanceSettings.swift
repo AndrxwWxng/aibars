@@ -46,7 +46,10 @@ public final class AppearanceSettings: ObservableObject {
         public var id: String { rawValue }
         public var label: String {
             switch self {
-            case .tile:   return "Tinted tile"
+            // No longer "tinted tile": the plate is a neutral 7% container in
+            // every appearance and for every brand, so a label promising a tint
+            // would be describing a drawing the app stopped making.
+            case .tile:   return "In a tile"
             case .plain:  return "Plain mark"
             case .hidden: return "None"
             }
@@ -218,7 +221,10 @@ public final class AppearanceSettings: ObservableObject {
     @Published public var density: Density { didSet { write(density.rawValue, .density) } }
     @Published public var textScale: Double { didSet { clampAndWrite(\.textScale, 0.85...1.30, .textScale) } }
     @Published public var logoStyle: LogoStyle { didSet { write(logoStyle.rawValue, .logoStyle) } }
-    @Published public var logoSize: Double { didSet { clampAndWrite(\.logoSize, 18...40, .logoSize) } }
+    /// The floor is 16 rather than 18 because two presets ask for a 16pt mark:
+    /// with a mark sitting on the ground instead of on a plate, the size that
+    /// reads well beside a 12pt name in Compact is below what a plate needed.
+    @Published public var logoSize: Double { didSet { clampAndWrite(\.logoSize, 16...40, .logoSize) } }
     @Published public var panelWidth: Double { didSet { clampAndWrite(\.panelWidth, 300...520, .panelWidth) } }
     @Published public var rowBackground: RowBackground { didSet { write(rowBackground.rawValue, .rowBackground) } }
 
@@ -397,17 +403,23 @@ public final class AppearanceSettings: ObservableObject {
 
         /// The row's answer, set in SF Mono.
         ///
-        /// 1.15 rather than a larger multiple: SF Mono reads optically smaller
-        /// than SF Pro at the same point size, so a bump is needed to keep the
-        /// figure the loudest thing on the line — but at 1.25 the number shouted
-        /// down the service name, and a panel does that on nine rows at once.
-        public var figureSize: CGFloat { max(12, (titleSize * 1.15).rounded()) }
+        /// The same size as the name it sits opposite, and no longer a bump on
+        /// it. A 15pt number beside a 13pt name is where "the panel shouts"
+        /// came from, and it was buying prominence the figure already has for
+        /// free: it is the only mono run on the line, it sits alone in a
+        /// reserved trailing rail, and it is the one thing on a resting row
+        /// that colour is allowed to arrive on.
+        public var figureSize: CGFloat { max(11, titleSize) }
 
         /// The unit tick beside that figure: the `%`, the currency mark.
         ///
-        /// The unit is not the reading. It rides at 62% of the figure so it
-        /// reads as an annotation on the number rather than as part of it.
-        public var unitSize: CGFloat { max(9, (figureSize * 0.62).rounded()) }
+        /// The same size as the figure, which is the end of the superscript
+        /// percent: `92%` is one mono run on one baseline, with the digits
+        /// carrying the tint and the unit staying muted. A raised 8pt tick
+        /// beside a 13pt number reads as a typesetting flourish, and the
+        /// distinction it was drawing — the unit is not the reading — is
+        /// already carried by colour.
+        public var unitSize: CGFloat { figureSize }
 
         /// Title line to the caption directly beneath it — the countdown, the
         /// forecast sentence. Half the gap between two separate things, because
@@ -429,21 +441,29 @@ public final class AppearanceSettings: ObservableObject {
         }
 
         /// The same rail for a secondary window's line, built off `detailSize`.
+        /// Its unit follows the headline's rule and takes the figure's own size,
+        /// so the two rails are the same shape at two scales rather than two
+        /// different treatments of a number.
         public var secondaryRail: CGFloat {
             Tokens.figureWidth(detailSize, digits: 3)
                 + Tokens.Space.hairline
-                + Tokens.figureWidth((detailSize * 0.62).rounded(), digits: 1)
+                + Tokens.figureWidth(detailSize, digits: 1)
         }
     }
 
     public var metrics: Metrics {
-        // `cozy` at 100% reproduces the metrics the panel shipped with, so the
-        // middle setting is a no-op for anyone who never opens this pane.
+        // `cozy` at 100% is the shipped panel, so the middle setting is a no-op
+        // for anyone who never opens this pane.
         let step: (padding: CGFloat, gap: CGFloat, spacing: CGFloat, title: CGFloat, detail: CGFloat, caption: CGFloat, ring: CGFloat)
         switch density {
-        case .compact:     step = (5, 0, 3, 12, 10, 9, 18)
-        case .cozy:        step = (9, 2, 5, 13, 11, 10, 22)
-        case .comfortable: step = (12, 5, 7, 14, 12, 11, 26)
+        // The three type sizes are the same as they were: density buys
+        // line-height, not letter size. What moved is the air — a point more
+        // padding and a point more between the title and what it labels — which
+        // is where a quiet panel gets its calm from, and it costs nothing at the
+        // scan because the row lost a whole second meter.
+        case .compact:     step = (6, 0, 4, 12, 10, 9, 18)
+        case .cozy:        step = (10, 2, 6, 13, 11, 10, 22)
+        case .comfortable: step = (13, 4, 8, 14, 12, 11, 26)
         }
         let scale = CGFloat(textScale)
         let thickness = CGFloat(meterThickness)
@@ -506,19 +526,21 @@ public final class AppearanceSettings: ObservableObject {
         case .usage:    return percent >= cautionThreshold ? cautionColor : okColor
         case .accent:   return accentColor
         case .provider: return providerAccent
-        case .mono:     return .primary
+        // `Ink.muted` and not `Color.primary`. On a near-black ground primary
+        // resolves to pure white, which made the bar the loudest thing on a
+        // panel whose entire premise is that it has no colour on it.
+        case .mono:     return Tokens.Ink.muted
         }
     }
 
     /// The colour a figure at `percent` is set in.
     ///
-    /// The meter and the number it labels no longer take the same colour, and
-    /// that is the point. Below caution under `.usage` the figure is neutral: a
-    /// panel of nine rows resting teal spends the eye's whole colour budget on
-    /// the least informative state it has, and the digits are the column being
-    /// scanned down. Holding them graphite until caution makes colour arriving
-    /// on a number the event, rather than the background a healthy panel is
-    /// drawn against.
+    /// Below caution under `.usage` the figure is neutral, and the bar beside
+    /// it now agrees: the ramp's resting stop is grey, so a healthy row carries
+    /// no hue at all and colour arriving anywhere in the panel means something
+    /// wants the user. This used to be the one place that rule held — the
+    /// figure went neutral while nine resting bars painted teal across the
+    /// panel — and the disagreement is what made colour stop meaning anything.
     ///
     /// Under `.accent`, `.provider` and `.mono` this defers unconditionally.
     /// The user asked for a coloured column — or for no colour at all — and
@@ -533,7 +555,7 @@ public final class AppearanceSettings: ObservableObject {
         guard colorRamp == .usage, percent < cautionThreshold else {
             return tint(for: percent, providerAccent: providerAccent)
         }
-        return .primary
+        return Tokens.Ink.body
     }
 
     /// Menu bar tint, nil below `warningThreshold` so the glyph stays quiet —
@@ -590,9 +612,13 @@ public final class AppearanceSettings: ObservableObject {
     // The ramp's three colours still come from UsageTint, sampled inside each
     // of its own fixed bands. Only the boundaries became settings; the palette
     // is still defined in one place.
+    // The sample points are the shipped defaults of the two thresholds, which is
+    // what UsageTint asks a caller wanting "the caution colour" to pass. They
+    // move with those defaults: sampling 0.60 now lands in the resting band and
+    // would hand a row at 90% a grey bar.
     private var okColor: Color { UsageTint.color(for: 0) }
-    private var cautionColor: Color { UsageTint.color(for: 0.60) }
-    private var warningColor: Color { UsageTint.color(for: 0.85) }
+    private var cautionColor: Color { UsageTint.color(for: 0.80) }
+    private var warningColor: Color { UsageTint.color(for: 0.95) }
 
     private static func hex(from color: Color) -> Int? {
         // Extended-range components are legal and would overflow a byte, so the
@@ -823,7 +849,10 @@ public final class AppearanceSettings: ObservableObject {
         public var summary: String {
             switch self {
             case .comfortable:
-                return "The shipped look. Everything on, urgency order, connected services first with the rest folded away."
+                // No longer "everything on": the plan pill is off by default,
+                // and a summary that overstates its preset is how a user comes
+                // to distrust the other four.
+                return "The shipped look. Amounts and countdowns on, urgency order, connected services first with the rest folded away."
             case .compact:
                 return "Every service on screen at once. Keeps the bars and the numbers, drops the prose."
             case .minimal:
@@ -844,33 +873,37 @@ public final class AppearanceSettings: ObservableObject {
                 // install recognises the preset it is already on and "reset"
                 // lands on it exactly. Named for how it reads beside Compact
                 // and Minimal, not after `Density.comfortable`: the panel
-                // shipped at cozy with a 5pt bar, and an upgrade that loosened
+                // ships at cozy with a 4pt bar, and an upgrade that loosened
                 // every row on its own would be this refactor changing the app
                 // rather than reorganising it.
                 return Snapshot()
             case .compact:
                 return Snapshot(
                     density: .compact, textScale: 1.0,
-                    logoStyle: .tile, logoSize: 22, panelWidth: 340, rowBackground: .always,
+                    // It already folded its windows onto one line; only the
+                    // plate and the thresholds were off-message.
+                    logoStyle: .plain, logoSize: 16, panelWidth: 340, rowBackground: .always,
                     showsPercentage: true, showsAmounts: false, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: false,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
                     meterStyle: .bar, meterThickness: 4, colorRamp: .usage,
-                    cautionThreshold: 0.60, warningThreshold: 0.85,
+                    cautionThreshold: 0.80, warningThreshold: 0.95,
                     sortOrder: .urgency, grouping: .flat, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
                     menuBarLabel: .iconAndPercent, menuBarValue: .highest,
-                    menuBarServiceCount: 3, menuBarColour: .perBar, menuBarGlyphHeight: 13
+                    menuBarServiceCount: 3, menuBarColour: .alertOnly, menuBarGlyphHeight: 13
                 )
             case .minimal:
                 return Snapshot(
                     density: .compact, textScale: 1.0,
-                    logoStyle: .plain, logoSize: 20, panelWidth: 300, rowBackground: .plain,
+                    // The preset the whole direction was always closest to: a
+                    // plain mark, no windows, no meter. Only the mark was big.
+                    logoStyle: .plain, logoSize: 16, panelWidth: 300, rowBackground: .plain,
                     showsPercentage: true, showsAmounts: false, showsCountdowns: false,
                     showsPlanNames: false, showsAccountLabels: false,
                     secondaryWindows: .hidden, secondaryWindowLimit: 1, rowActions: .never,
                     meterStyle: .numberOnly, meterThickness: 4, colorRamp: .usage,
-                    cautionThreshold: 0.60, warningThreshold: 0.85,
+                    cautionThreshold: 0.80, warningThreshold: 0.95,
                     sortOrder: .alphabetical, grouping: .flat, disconnectedServices: .hidden,
                     showsAllAccounts: false, hidesQuotalessServices: true, showsHeaderSummary: false,
                     // One service, because this is the preset that drops the
@@ -883,12 +916,17 @@ public final class AppearanceSettings: ObservableObject {
             case .dashboard:
                 return Snapshot(
                     density: .comfortable, textScale: 1.05,
-                    logoStyle: .tile, logoSize: 32, panelWidth: 460, rowBackground: .always,
+                    // The one preset allowed to be loud and dense on purpose, so
+                    // it keeps its full windows, its early thresholds and its
+                    // coloured strip — but a 32pt mark on a plate was dated
+                    // rather than dense, and an expanded window now costs a line
+                    // rather than a second bar, so the density is still honest.
+                    logoStyle: .plain, logoSize: 22, panelWidth: 460, rowBackground: .always,
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: true, showsAccountLabels: true,
                     secondaryWindows: .expanded, secondaryWindowLimit: 6, rowActions: .always,
-                    meterStyle: .bar, meterThickness: 7, colorRamp: .usage,
-                    cautionThreshold: 0.55, warningThreshold: 0.80,
+                    meterStyle: .bar, meterThickness: 5, colorRamp: .usage,
+                    cautionThreshold: 0.75, warningThreshold: 0.92,
                     sortOrder: .urgency, grouping: .usageBand, disconnectedServices: .shown,
                     showsAllAccounts: true, hidesQuotalessServices: false, showsHeaderSummary: true,
                     menuBarLabel: .iconAndPercent, menuBarValue: .average,
@@ -897,12 +935,14 @@ public final class AppearanceSettings: ObservableObject {
             case .monochrome:
                 return Snapshot(
                     density: .cozy, textScale: 1.0,
-                    logoStyle: .plain, logoSize: 26, panelWidth: 356, rowBackground: .plain,
+                    logoStyle: .plain, logoSize: 18, panelWidth: 356, rowBackground: .plain,
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: true,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
                     meterStyle: .ring, meterThickness: 4, colorRamp: .mono,
-                    cautionThreshold: 0.60, warningThreshold: 0.90,
+                    // The warning is the one moment this preset spends a colour,
+                    // so it spends it where every other preset does.
+                    cautionThreshold: 0.60, warningThreshold: 0.95,
                     sortOrder: .manual, grouping: .status, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
                     // Two, because this preset draws marks and no figures: a
@@ -956,23 +996,34 @@ public final class AppearanceSettings: ObservableObject {
         public init(
             density: Density = .cozy,
             textScale: Double = 1.0,
-            logoStyle: LogoStyle = .tile,
-            logoSize: Double = 30,
+            // A brand mark on the ground at the size of two lines of text, not
+            // a 30pt mark on a plate beside a 13pt name. The plate is the single
+            // most dated thing the panel drew, and the size was set by it.
+            logoStyle: LogoStyle = .plain,
+            logoSize: Double = 18,
             panelWidth: Double = 356,
             rowBackground: RowBackground = .hover,
             showsPercentage: Bool = true,
             showsAmounts: Bool = true,
             showsCountdowns: Bool = true,
+            // A filled capsule on every row is chrome, and the plan is the one
+            // thing on the line that never changes. Still one click away.
             showsPlanNames: Bool = true,
             showsAccountLabels: Bool = true,
-            secondaryWindows: SecondaryWindowStyle = .expanded,
+            // The windows fold onto the trailing half of the caption line. A
+            // second full-width bar per row cost 24pt each and was what turned
+            // one service crossing a threshold into a panel washed in amber.
+            secondaryWindows: SecondaryWindowStyle = .chips,
             secondaryWindowLimit: Int = 4,
             rowActions: RowActionVisibility = .onHover,
             meterStyle: MeterStyle = .bar,
-            meterThickness: Double = 5,
+            meterThickness: Double = 4,
             colorRamp: ColorRamp = .usage,
-            cautionThreshold: Double = 0.60,
-            warningThreshold: Double = 0.85,
+            // The industry breakpoints, and the reason the panel stops being
+            // amber: at 0.60 a perfectly healthy weekly window at 61% read as a
+            // warning, nine rows at a time.
+            cautionThreshold: Double = 0.80,
+            warningThreshold: Double = 0.95,
             sortOrder: SortOrder = .urgency,
             grouping: Grouping = .status,
             disconnectedServices: DisconnectedDisplay = .collapsed,
@@ -982,7 +1033,8 @@ public final class AppearanceSettings: ObservableObject {
             menuBarLabel: MenuBarLabelStyle = .iconAndPercent,
             menuBarValue: MenuBarValue = .highest,
             menuBarServiceCount: Int = 3,
-            menuBarColour: MenuBarColour = .perBar,
+            // The strip obeys the panel's rule: hue means something is wrong.
+            menuBarColour: MenuBarColour = .alertOnly,
             menuBarGlyphHeight: Double = 13
         ) {
             self.density = density
@@ -1192,7 +1244,7 @@ public final class AppearanceSettings: ObservableObject {
     /// against the other.
     private func normalize() {
         textScale = min(max(textScale, 0.85), 1.30)
-        logoSize = min(max(logoSize, 18), 40)
+        logoSize = min(max(logoSize, 16), 40)
         panelWidth = min(max(panelWidth, 300), 520)
         secondaryWindowLimit = min(max(secondaryWindowLimit, 1), 6)
         meterThickness = min(max(meterThickness, 3), 12)

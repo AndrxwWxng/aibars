@@ -41,6 +41,20 @@ private extension Font {
     static var paneCaption: Font { .system(size: Tokens.Ramp.caption).monospacedDigit() }
 }
 
+// Two inks in this window and no third, which is the panel's rule read across
+// the divider: `Ink.body` for a row's subject and the prose beside it,
+// `Ink.muted` for every line under one. `.secondary` and `.tertiary` are gone
+// from here for the reason they are gone from the panel — they are a fraction
+// of the label colour, so over a near-black ground the third rung lands around
+// 3:1 and a profile name stops being readable rather than becoming quieter.
+// `Ink.muted` is a stated pair on both grounds and clears 4.5:1 on each.
+//
+// `Color.primary` is gone with them. On `Surface.base` dark it is pure white at
+// 19:1, which is the loudest thing either window can draw, and a settings row
+// shouting louder than the figure it configures is backwards. What is still
+// `.primary` here is what the system draws for itself — a picker's label, a
+// section header, a button's title — and those are AppKit's to set.
+
 private extension View {
     /// `scrollContentBackground` is macOS 13+, which is the deployment target,
     /// but keep it guarded so the app still builds against older SDKs.
@@ -146,7 +160,8 @@ public struct SettingsView: View {
                 // backgrounds meeting partway down the pane is what produced the
                 // dark band across the top.
                 .scrollContentBackgroundHidden()
-                // Warm graphite, the same ground the panel stands on. No material
+                // The same near-black ground the panel stands on, so the window
+                // that configures the panel is the same colour as it. No material
                 // and no scrim: the panel's scrim is the whole of the
                 // application's translucency, and a form is a surface with
                 // figures on it — a wallpaper showing through the ground under
@@ -264,7 +279,7 @@ public struct SettingsView: View {
                          ? "Looking through your browsers…"
                          : "No browser on this Mac keeps its cookies somewhere aibars can read.")
                         .font(.paneCaption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     ForEach(sources) { source in
@@ -456,16 +471,21 @@ public struct SettingsView: View {
             AppMark(size: Tokens.Control.aboutGlyph, tint: Tokens.Ink.arc)
 
             VStack(spacing: Tokens.Space.tight) {
-                Text("aibars").font(.paneTitle)
+                // The same wordmark the panel header sets, at the same size and
+                // the same weight: lower case, no tracking, no caps. The two are
+                // one name and were being set two ways.
+                Text("aibars")
+                    .font(.paneTitle)
+                    .foregroundStyle(Tokens.Ink.body)
                 Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1")")
                     .font(.paneBody)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
             }
 
             Text("Open-source AI subscription usage monitor.\nMIT License.")
                 .font(.paneBody)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Ink.muted)
 
             if let repository = Self.repository {
                 // Arc, because a text link is one of the four places it is
@@ -478,7 +498,7 @@ public struct SettingsView: View {
 
             Text("Product names and logos are trademarks of their respective owners.")
                 .font(.paneCaption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Tokens.Ink.muted)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -508,7 +528,7 @@ private struct BrowserSourceRow: View {
     var body: some View {
         HStack(spacing: Tokens.Space.gutter) {
             Image(systemName: symbol)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Ink.muted)
                 // The same column a service logo occupies, so every row in this
                 // pane starts its text at one x instead of two.
                 .frame(width: Tokens.Control.settingsLogo)
@@ -516,6 +536,7 @@ private struct BrowserSourceRow: View {
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
                 Text(source.name)
                     .font(.paneTitle)
+                    .foregroundStyle(Tokens.Ink.body)
                 Text(note ?? summary)
                     .font(.paneCaption)
                     .foregroundStyle(detailColor)
@@ -531,7 +552,10 @@ private struct BrowserSourceRow: View {
                         }
                     }
                     .font(.paneCaption)
-                    .foregroundStyle(.tertiary)
+                    // Muted, like the line above it, and told apart from it by
+                    // the indent and the gap rather than by a third grey that
+                    // does not clear 4.5:1 on either ground.
+                    .foregroundStyle(Tokens.Ink.muted)
                     // Wraps like the line above it. A profile's name is the whole
                     // point of the line, and a truncated one names nothing.
                     .fixedSize(horizontal: false, vertical: true)
@@ -632,8 +656,14 @@ private struct BrowserSourceRow: View {
         if isBusy {
             ProgressView()
         } else if source.requirement == .keychainKey {
+            // Bordered, not prominent. A filled button is a fill, and this pane
+            // draws one per browser and one per disconnected service — on a
+            // first launch that is a column of accent down the whole window,
+            // which is the wall the direction rules out. What says "this row
+            // wants you" is the amber line under the name, which is the same
+            // signal the panel gives and it costs no chrome.
             Button("Unlock \(source.locked)", action: onUnlock)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .help("Asks the Keychain for \(source.name)'s cookie key. No other browser is touched.")
         } else if source.requirement == .fullDiskAccess {
             Button("Grant Access…", action: onGrantAccess)
@@ -771,6 +801,7 @@ private struct ServiceRow: View {
                 VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
                     Text(provider.displayName)
                         .font(.paneTitle)
+                        .foregroundStyle(Tokens.Ink.body)
                         .lineLimit(1)
                     Text(status)
                         .font(.paneCaption)
@@ -851,9 +882,10 @@ private struct ServiceRow: View {
         } else {
             // Every method — browser session, pasted key, endpoint plus key —
             // goes through the same window, so the button says the same thing
-            // regardless of which one this service uses.
+            // regardless of which one this service uses. Bordered like every
+            // other button in the pane, for the reason given on Unlock above.
             Button("Connect…", action: onConfigure)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
         }
     }
 

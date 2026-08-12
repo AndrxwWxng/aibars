@@ -162,7 +162,10 @@ public struct HistoryPane: View {
                         // it used to take is retired: it sat a point under every
                         // native form beside it.
                         .font(.system(size: Tokens.Ramp.title))
-                        .foregroundStyle(.secondary)
+                        // `Ink.muted` rather than `.secondary`: the ink ladder is
+                        // explicit now, so a sentence that explains a state reads
+                        // the same here as a caption does in the panel.
+                        .foregroundStyle(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 } header: {
                     Text("History")
@@ -242,7 +245,7 @@ private struct HistoryPaneContent: View {
                     // it is in, and two sizes for one role is how a form starts
                     // looking assembled from parts.
                     .font(.system(size: Tokens.Ramp.title))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 seriesPicker(all)
@@ -269,7 +272,11 @@ private struct HistoryPaneContent: View {
 
                     Text(grainNote(interval))
                         .font(.system(size: Tokens.Ramp.caption))
-                        .foregroundStyle(.tertiary)
+                        // Was `.tertiary`. There is no tertiary ink any more: a
+                        // line either clears 4.5:1 on its own ground or it is not
+                        // worth drawing, and a note explaining what a point on the
+                        // chart is worth is worth drawing.
+                        .foregroundStyle(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -357,7 +364,11 @@ private struct HistoryPaneContent: View {
     /// every refresh and a line that quietly changes colour while you look at it
     /// is reporting the clock rather than the data.
     private func colour(for series: HistorySeriesID, points: [HistorySample]) -> Color {
-        let accent = AppState.shared.provider(for: series.providerID)?.accentColor ?? .secondary
+        // `Ink.muted` is the fallback rather than `.secondary`: a provider that
+        // has been signed out of has no brand colour left to lend, and a line
+        // filled with a hierarchical style is a line whose colour depends on what
+        // is drawing it.
+        let accent = AppState.shared.provider(for: series.providerID)?.accentColor ?? Tokens.Ink.muted
         return appearance.tint(for: points.map(\.percent).max() ?? 0, providerAccent: accent)
     }
 
@@ -463,7 +474,7 @@ private struct HistoryPaneContent: View {
                      ? "Nothing to summarise yet."
                      : "Nothing was recorded in the last \(range.title).")
                     .font(.system(size: Tokens.Ramp.title))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
             } else {
                 DayHeaderRow()
                 ForEach(ordered.prefix(Self.dayLimit), id: \.day) { day in
@@ -475,7 +486,7 @@ private struct HistoryPaneContent: View {
                 if ordered.count > Self.dayLimit {
                     Text("\(ordered.count - Self.dayLimit) more days in this range. The CSV has all of them.")
                         .font(.system(size: Tokens.Ramp.caption))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Tokens.Ink.muted)
                 }
             }
         } header: {
@@ -491,16 +502,16 @@ private struct HistoryPaneContent: View {
     /// hit the wall is the colour the row was in when it did.
     ///
     /// `figureTint` rather than `tint`, which is the difference between a figure
-    /// and a meter: under the usage ramp a peak below caution is set in graphite,
-    /// so thirty-one quiet days are a column of neutral digits and the amber one
-    /// is the day worth looking at. A table where every peak carries the resting
-    /// teal spends all of its colour on the days that had nothing wrong with
+    /// and a meter: under the usage ramp a peak below caution is `Ink.body`, so
+    /// thirty-one quiet days are a column of neutral digits and the amber one is
+    /// the day worth looking at. A table where every peak carried a resting hue
+    /// would spend all of its colour on the days that had nothing wrong with
     /// them. Under `.accent`, `.provider` and `.mono` it defers, because the user
     /// asked for a coloured column and gets one at every level.
     private func peakTint(_ day: HistoryDay, of series: HistorySeriesID?) -> Color {
         let accent = series
             .flatMap { AppState.shared.provider(for: $0.providerID) }?
-            .accentColor ?? .secondary
+            .accentColor ?? Tokens.Ink.muted
         return appearance.figureTint(for: day.peak, providerAccent: accent)
     }
 
@@ -526,7 +537,7 @@ private struct HistoryPaneContent: View {
             if let exportNote {
                 Text(exportNote)
                     .font(.system(size: Tokens.Ramp.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
@@ -629,14 +640,20 @@ private enum DayColumn {
 }
 
 /// The headings over the table, in the one recipe this app heads a group with:
-/// `Ramp.caption`, uppercased, tracked, semibold, secondary, unscaled. The same
-/// as `SectionLabel`'s in the panel, because a label over a group of rows and a
-/// label over a column of figures are the same object, and the 9pt this used to
-/// take was smaller than anything the system sets a label at.
+/// sentence case, `.medium`, `Ink.muted`, no tracking, unscaled. `SectionLabel`'s
+/// recipe in the panel, at this table's size, because a label over a group of
+/// rows and a label over a column of figures are the same object.
 ///
-/// Secondary rather than tertiary: at a fixed 10pt with letter spacing on it,
-/// tertiary is the weight at which an uppercased label stops being read and
-/// becomes texture.
+/// What went was the uppercasing and the letter spacing. SF has its optical
+/// tracking baked in, so tracked small caps are a correction for a face this app
+/// does not use, and an all-caps heading over a column is the treatment that
+/// reads as a template rather than a design.
+///
+/// The size stays `Ramp.caption` where the panel's label is `Ramp.detail`: this
+/// one heads a column of `Ramp.caption` figures, and a heading set larger than
+/// the figures under it is a heading that has stopped being a label. `Ink.muted`
+/// rather than a dimmer ink for the same reason it always was — a heading nobody
+/// reads is texture.
 ///
 /// The words are abbreviated to the figure rail. `Mean` is the figure the row
 /// actually holds, and `Caps` is both shorter than `Resets` and truer — what is
@@ -662,10 +679,8 @@ private struct DayHeaderRow: View {
                 Text("N")
                     .frame(width: DayColumn.figure, alignment: .trailing)
             }
-            .font(.system(size: Tokens.Ramp.caption, weight: Tokens.Ramp.titleWeight))
-            .tracking(Tokens.sectionTracking)
-            .textCase(.uppercase)
-            .foregroundStyle(.secondary)
+            .font(.system(size: Tokens.Ramp.caption, weight: Tokens.Ramp.emphasisWeight))
+            .foregroundStyle(Tokens.Ink.muted)
             // A heading that wraps takes the row's height with it and stops lining
             // up with the column it names. The scale floor is there for a locale
             // or a font metric that measures a heading a point wider than this
@@ -673,10 +688,13 @@ private struct DayHeaderRow: View {
             .lineLimit(1)
             .minimumScaleFactor(0.8)
 
-            // A heading over a table earns the one rule this app draws: 1pt, at
-            // `ruleOpacity`, stepping up under increased contrast. A `Rectangle`
-            // rather than a `Divider` because a `Divider` brings its own material
-            // and a second rule weight with it, and the app has one of each.
+            // A heading over a table earns a rule, which the panel's section
+            // labels no longer do — a word over a group of rows is a word, but a
+            // word over a column of figures is a column head, and this is the
+            // line that says where the heads stop and the readings start. It is
+            // the app's one rule weight: 1pt, at `ruleOpacity`, stepping up under
+            // increased contrast. A `Rectangle` rather than a `Divider` because a
+            // `Divider` brings its own material and a second weight with it.
             Rectangle()
                 .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
                 .frame(height: Tokens.Control.hairline)
@@ -701,25 +719,29 @@ private struct DayRow: View {
                 .font(.system(size: Tokens.Ramp.title))
                 .monospacedDigit()
                 .lineLimit(1)
+                // The row's subject, so `Ink.body` — which is the point of having
+                // it: `Color.primary` on the new near-black is pure white, and a
+                // column of thirty-one dates at 17:1 is the loudest thing in the
+                // window for the least reason.
+                .foregroundStyle(Tokens.Ink.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             percentCell(day.peak, weight: Tokens.Ramp.emphasisWeight)
                 .foregroundStyle(peakTint)
 
             percentCell(day.mean, weight: .regular)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Ink.muted)
 
             countCell(day.capHits)
                 // A window that crossed its cap is the one fact in this row worth
                 // finding by eye; a day it did not is a zero like any other. The
-                // dimming says something about the day rather than about the
-                // surface under it, which is what `Dim` is for.
-                .foregroundStyle(day.capHits > 0
-                                 ? Color.secondary
-                                 : Color.secondary.opacity(Tokens.Dim.disabled))
+                // step is up the ink ladder rather than down through an opacity:
+                // a figure dimmed to 40% is a figure under 4.5:1, and this pass
+                // has no ink that fails its own ground.
+                .foregroundStyle(day.capHits > 0 ? Tokens.Ink.body : Tokens.Ink.muted)
 
             countCell(day.samples)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Tokens.Ink.muted)
         }
         .padding(.vertical, Tokens.Space.hairline)
         // Where the tenth of a percent the columns round away survives.
@@ -745,7 +767,7 @@ private struct DayRow: View {
     /// whole day is noise.
     ///
     /// The unit rides inside the run here rather than being set as a separate
-    /// tertiary tick. That treatment is for a row's headline answer; a column of
+    /// muted tick. That treatment is for a row's headline answer; a column of
     /// thirty-one of them is a column of ticks. The rail still reserves a cell
     /// for it, because the cell is what the `%` occupies either way.
     private func percentCell(_ ratio: Double, weight: Font.Weight) -> some View {

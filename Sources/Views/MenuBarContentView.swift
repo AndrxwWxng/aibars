@@ -125,7 +125,7 @@ public struct MenuBarContentView: View {
     ///
     /// It used to take the warning colour whenever anything was near its cap,
     /// and that is now deleted rather than tuned: the alarm belongs to the row
-    /// that has the problem — its figure, its square-capped fill, its spine —
+    /// that has the problem — its figure, its weight, its square-capped fill —
     /// and a coloured edge across the chrome names no service, so it cannot be
     /// acted on. It also put hue on the one element that stays on screen while
     /// the list is scrolled, which is to say it shouted for as long as a user
@@ -239,12 +239,18 @@ public struct MenuBarContentView: View {
 
     /// Group headers no longer follow the panel's text scale.
     ///
-    /// A group header is a divider with a word on it, not reading matter, so the
+    /// A group header is a label on a block of rows, not reading matter, so the
     /// slider that sizes the numbers has nothing to say about it — and the
     /// special case it used to need (9 × 0.85 is 7.6, which is a grey smear) has
-    /// nothing left to defend at a fixed 10.
+    /// nothing left to defend at a fixed size.
+    ///
+    /// `detail` rather than `caption`: the panel has two sizes and this is a
+    /// caption, set at the same 11pt as every other caption in it. 10pt is now
+    /// spent on exactly one line in the app — the pace sentence — and a header a
+    /// point smaller than the countdown under it was a fifth size pretending to
+    /// be a hierarchy.
     private var sectionFontSize: CGFloat {
-        Tokens.Ramp.caption
+        Tokens.Ramp.detail
     }
 
     private func expansion(of id: String) -> Binding<Bool> {
@@ -378,11 +384,15 @@ public struct MenuBarContentView: View {
 
     private var emptyState: some View {
         VStack(spacing: Tokens.Space.small) {
+            // `Ink.muted`, not `.tertiary`. Tertiary is banned from the panel —
+            // it is a fourth ink that resolves under 4.5:1 on both grounds, and
+            // this mark is the largest thing on an otherwise empty window.
             Image(systemName: "square.dashed")
                 .font(.system(size: Self.emptyMarkSize))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(Tokens.Ink.muted)
             Text(hasEnabledServices ? "Nothing to show" : "No services enabled")
                 .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.emphasisWeight))
+                .foregroundColor(Tokens.Ink.body)
             // An empty panel with services enabled means the appearance filters
             // ate them — say so, or the user goes looking in Services for a row
             // that is switched on and hidden.
@@ -390,7 +400,7 @@ public struct MenuBarContentView: View {
                  ? "Your Appearance settings are hiding every service."
                  : "Turn one on in Settings → Services.")
                 .font(.system(size: appearance.metrics.detailSize))
-                .foregroundStyle(.secondary)
+                .foregroundColor(Tokens.Ink.muted)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -425,7 +435,7 @@ public struct MenuBarContentView: View {
     private var orientation: some View {
         Text("aibars reads the sessions already open in your browsers. You don't need to sign in again.")
             .font(.system(size: appearance.metrics.detailSize))
-            .foregroundStyle(.secondary)
+            .foregroundColor(Tokens.Ink.muted)
             // The sentence wraps at any panel width, and a wrapped Text inside a
             // stack whose height is being fixed from below gets truncated to one
             // line unless it is allowed to state its own.
@@ -477,7 +487,10 @@ public struct PanelHeader<Trailing: View>: View {
     /// the alarm, and a header whose paint moves with a reading is a header that
     /// eventually moves its height with one.
     public let topPercent: Double
-    /// The line under the title, drawn only while `showsHeaderSummary` is on.
+    /// The status line beside the wordmark, drawn only while
+    /// `showsHeaderSummary` is on. It used to sit under the title; it says the
+    /// same thing on the same line now, and yields its tail before anything else
+    /// on that line gives way.
     public let summary: String?
 
     private let trailing: Trailing
@@ -497,6 +510,10 @@ public struct PanelHeader<Trailing: View>: View {
     }
 
     public var body: some View {
+        // One line, not a title over a subtitle. A bold all-caps masthead with a
+        // caption stacked under it is the dated treatment, and it also spent a
+        // second line of the panel's height on something that is chrome rather
+        // than a reading. Everything the header says now says it on one baseline.
         HStack(spacing: Tokens.Space.medium) {
             // `Tokens.Control.headerGlyph`, not `menuBarGlyphHeight`: that
             // setting exists because the menu bar's row height is the system's
@@ -505,38 +522,44 @@ public struct PanelHeader<Trailing: View>: View {
             // the gutter with no nudge of its own, which puts it on the same
             // left edge as every logo in the list below.
             //
-            // Arc is the app's own colour and one of the three saturated things
-            // the panel allows: this mark, the provider logos, and the usage
-            // ramp. It is never a surface, a meter or a row background.
+            // Arc is the app's own colour, and this is the first entry on the
+            // closed list of four places it may appear: this mark, the mark on
+            // the About pane, a text link, and the sign-in affordance. It is
+            // never a surface, a meter, a border or a row background.
             AppMark(size: Tokens.Control.headerGlyph, tint: Tokens.Ink.arc)
 
-            VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
-                // A wordmark, so it takes `Ramp.title` rather than the panel's
-                // scaled `titleSize`: the text-scale slider sizes the reading
-                // matter, and a masthead that grows with it starts competing
-                // with the figures it is a label for.
-                Text(Wordmark.text)
-                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
-                    .tracking(Wordmark.tracking)
-                    // A wrapped title grows the header, which pushes the rule
-                    // and every row below it down and makes the window resize to
-                    // follow. The summary under it already holds one line; the
-                    // title is the half of this pair that had no such promise.
+            // A wordmark, so it takes `Ramp.title` rather than the panel's
+            // scaled `titleSize`: the text-scale slider sizes the reading
+            // matter, and a masthead that grows with it starts competing with
+            // the figures it is a label for. Set at the same size and weight as
+            // a service name, because it is the same kind of thing — a name.
+            Text(Wordmark.text)
+                .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
+                .foregroundColor(Tokens.Ink.body)
+                // A wrapped title grows the header, which pushes the rule and
+                // every row below it down and makes the window resize to follow.
+                .lineLimit(1)
+
+            if appearance.showsHeaderSummary, let summary {
+                // SF Pro with tabular digits, not SF Mono: "updated 12s ago" is
+                // a run with words in it, and the mono face is reserved for runs
+                // that are only digits and separators. The tabular figures still
+                // matter — this line counts up every second the panel is open.
+                Text(summary)
+                    .font(.system(size: appearance.metrics.detailSize).monospacedDigit())
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
-                if appearance.showsHeaderSummary, let summary {
-                    // SF Pro with tabular digits, not SF Mono: "updated 12s ago"
-                    // is a run with words in it, and the mono face is reserved
-                    // for runs that are only digits and separators. The tabular
-                    // figures still matter — this line counts up every second
-                    // the panel is open.
-                    Text(summary)
-                        .font(.system(size: appearance.metrics.captionSize).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                    .truncationMode(.tail)
+                    // The one thing on this line that may be cut. Sharing a
+                    // baseline with the wordmark means the two are now competing
+                    // for the same width, and the answer has to be written down:
+                    // the name is the header, the summary is what it happens to
+                    // be saying, so the summary gives ground first and loses its
+                    // tail rather than shortening "aibars" to "aiba…".
+                    .layoutPriority(-1)
             }
 
-            Spacer(minLength: Tokens.Space.small)
+            Spacer(minLength: Tokens.Space.medium)
 
             // One cluster, tight enough to read as a set rather than as four
             // unrelated controls scattered along the edge.
@@ -545,8 +568,9 @@ public struct PanelHeader<Trailing: View>: View {
             }
         }
         .padding(.horizontal, Tokens.Space.gutter)
-        // Asymmetric: the rule beneath reads as part of the bottom edge, so the
-        // gap to it is smaller than the gap above the title.
+        // A point asymmetric: the rule beneath reads as the header's own bottom
+        // edge rather than as the list's top one, so the gap down to it is the
+        // smaller of the two.
         .padding(.top, Tokens.Space.headerTop)
         .padding(.bottom, Tokens.Space.headerBottom)
     }
@@ -558,13 +582,15 @@ public struct PanelHeader<Trailing: View>: View {
 /// Outside `PanelHeader` because that type is generic over its trailing view and
 /// Swift will not hold a static stored property inside a generic one.
 private enum Wordmark {
-    /// Uppercased in the literal rather than by `.uppercased()`: that transform
-    /// is locale-sensitive and this is a name, not prose.
-    static let text = "AI USAGE"
-    /// Slightly less than a group header's 0.5. A masthead is read as one word
-    /// at a glance and needs only enough air to stop the caps touching; a
-    /// section label is scanned past and needs more.
-    static let tracking: CGFloat = 0.4
+    /// The app's name, lower case, at body size and body weight.
+    ///
+    /// It was `AI USAGE` — bold, all caps, letter-spaced — which is a masthead
+    /// treatment, and a masthead is the loudest thing a panel can open with. The
+    /// panel is a list of readings and its header is a label on that list; the
+    /// name of the app is not the news. Nothing is tracked here any more either:
+    /// SF has its optical tracking baked in, and the spacing that rescues an
+    /// all-caps run is damage on a lower-case one.
+    static let text = "aibars"
 }
 
 /// A quiet group divider that folds the rows beneath it away.
@@ -572,7 +598,7 @@ struct DisclosureHeader: View {
     let title: String
     let count: Int
     @Binding var isExpanded: Bool
-    var fontSize: CGFloat = Tokens.Ramp.caption
+    var fontSize: CGFloat = Tokens.Ramp.detail
 
     @State private var isHovered = false
 
@@ -595,17 +621,24 @@ struct DisclosureHeader: View {
         } label: {
             HStack(spacing: Self.labelSpacing) {
                 Image(systemName: "chevron.right")
-                    // Semibold, not bold: the panel runs on three weights and
-                    // this is the only mark that had reached for a fourth.
-                    .font(.system(size: fontSize * 0.9, weight: Tokens.Ramp.titleWeight))
-                    .foregroundStyle(.tertiary)
+                    // Two points under the label rather than a fraction of it: a
+                    // chevron is a mark beside the word, not a letter in it, and
+                    // at the label's own size it starts reading as punctuation.
+                    // Semibold because a 9pt glyph in `Ink.muted` is the one
+                    // mark in the panel thin enough to disappear at `.medium`.
+                    .font(.system(size: fontSize - 2, weight: .semibold))
+                    .foregroundColor(Tokens.Ink.muted)
                     // A fixed box, or the column `chevronColumn` promises is
                     // whatever width the glyph happened to render at.
                     .frame(width: fontSize)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    // The one thing on this header that moves, and the only
+                    // motion the panel allows here: the rows themselves appear
+                    // and disappear without animation, for the reason on the
+                    // toggle above.
+                    .animation(.easeOut(duration: 0.16), value: isExpanded)
                 SectionLabel(title: title, count: count, fontSize: fontSize)
             }
-            .padding(.vertical, Tokens.Space.tight)
             .padding(.leading, Tokens.Space.gutter)
             .contentShape(Rectangle())
             .background(
@@ -618,58 +651,60 @@ struct DisclosureHeader: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .help(isExpanded ? "Hide" : "Show \(count) more")
     }
 }
 
 /// A quiet group divider for the dropdown list, and the app's only definition of
-/// what a group header looks like: `Ramp.caption`, uppercased, tracked, semibold,
-/// secondary, and unscaled. `DisclosureHeader` draws this one rather than a second
+/// what a group header looks like: `Ramp.detail`, sentence case, medium, muted,
+/// untracked, and unscaled. `DisclosureHeader` draws this one rather than a second
 /// copy of it, so a collapsible block and a whole one cannot disagree.
+///
+/// It was a rule with a word on it — uppercased, letter-spaced, its count in a
+/// filled capsule, and a hairline running from the count to the panel's edge.
+/// That is three pieces of furniture to say one word. A header is a word.
 struct SectionLabel: View {
     let title: String
     let count: Int
-    var fontSize: CGFloat = Tokens.Ramp.caption
-
-    /// The rule trailing the label is a hairline, and a hairline is the first
-    /// thing a low-contrast display loses.
-    @Environment(\.colorSchemeContrast) private var contrast
+    var fontSize: CGFloat = Tokens.Ramp.detail
 
     var body: some View {
         HStack(spacing: Tokens.Space.small) {
-            Text(title.uppercased())
-                // Secondary, not tertiary: at a fixed 10pt with letter spacing on
-                // it, tertiary is the weight at which an uppercased label stops
-                // being read and becomes texture. It is a label on a group of
-                // rows, and it has to survive being scanned past.
-                .font(.system(size: fontSize, weight: Tokens.Ramp.titleWeight))
-                .foregroundStyle(.secondary)
-                .tracking(Tokens.sectionTracking)
+            // Sentence case, as it arrives. `.uppercased()` was doing two jobs
+            // and both of them badly: it is locale-sensitive on a string that is
+            // sometimes a service's own word, and an all-caps run needs tracking
+            // to stay legible, which is the tracking this panel no longer has.
+            Text(title)
+                .font(.system(size: fontSize, weight: Tokens.Ramp.emphasisWeight))
+                .foregroundColor(Tokens.Ink.muted)
+                .lineLimit(1)
             // A run that is only digits, so it takes the mono face like every
             // other figure in the panel — a count set in SF Pro beside nine
             // percentages set in SF Mono is the one number that looks borrowed.
             //
-            // And so it takes a rail, because mono outside a reserved width is
-            // what puts the jitter back: two digits, which is every count this
-            // panel can produce. Centred rather than trailing-aligned — a lone
-            // pill in a header is furniture, not a column being read down, and
-            // the flexible rule after it absorbs the slack either way.
+            // And so it takes a rail, trailing-aligned like every other mono run
+            // in the app: two digits, which is every count this panel can
+            // produce. The capsule behind it is gone — a fill on a two-digit
+            // number is chrome, and the number reads perfectly well as a number.
             Text("\(count)")
                 .font(.system(
                     size: fontSize,
-                    weight: Tokens.Ramp.emphasisWeight,
+                    weight: .regular,
                     design: Tokens.Ramp.figureDesign
                 ))
-                .foregroundStyle(.secondary)
-                .frame(minWidth: Tokens.figureWidth(fontSize, digits: 2), alignment: .center)
-                .padding(.horizontal, Tokens.Space.snug)
-                .padding(.vertical, Tokens.Space.hairline)
-                .background(Capsule().fill(Tokens.quiet(Tokens.Fill.pill)))
-            Rectangle()
-                .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-                .frame(height: Tokens.Control.hairline)
+                .foregroundColor(Tokens.Ink.muted)
+                .frame(width: Tokens.figureWidth(fontSize, digits: 2), alignment: .trailing)
+            // What the deleted hairline used to do: hold the header open to the
+            // panel's full width, so the hover plate a disclosure draws behind
+            // this is a card's width rather than a word's.
+            Spacer(minLength: 0)
         }
         .padding(.trailing, Tokens.Space.gutter)
+        // The recipe both kinds of header are drawn by, held here rather than on
+        // the disclosure: a collapsible block and a whole one have to be the same
+        // height, and they were not while only one of them carried this.
+        .padding(.vertical, Tokens.Space.snug)
         .padding(.bottom, Tokens.Space.tight)
     }
 }
@@ -695,7 +730,11 @@ struct HoverIconButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: Tokens.Control.iconGlyph, weight: Tokens.Ramp.emphasisWeight))
-                .foregroundStyle(.secondary)
+                // The same ink as every caption in the panel. A control glyph is
+                // a label until it is pointed at, and `.secondary` resolved
+                // lighter than the words beside it in one appearance and heavier
+                // in the other.
+                .foregroundColor(Tokens.Ink.muted)
                 .frame(width: size, height: size)
                 .background(
                     Tokens.surface(Tokens.Radius.control)
@@ -704,6 +743,9 @@ struct HoverIconButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        // The plate arrives rather than appearing. One of the five things in the
+        // panel that animate, and at the same 0.12s as a row card's own fill.
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .help(help)
     }
 }

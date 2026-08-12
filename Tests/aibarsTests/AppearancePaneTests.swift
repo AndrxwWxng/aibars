@@ -17,11 +17,10 @@ import AppKit
 ///
 /// Height alone is not enough, though, and that is the second lesson of the
 /// same bug: two stacks can agree on a height while disagreeing about the
-/// figure rail, the card's corner and whether the row carries a spine, and a
-/// preview wrong about any of those is describing a panel the app does not
-/// draw. Each of the three is asserted at the seam where it can be: the corner
-/// follows from the measured height, the spine is a decision `RowSpine` makes
-/// out loud, and the rail — a reserved width, invisible in any measurement of a
+/// figure rail and the card's corner, and a
+/// preview wrong about either is describing a panel the app does not
+/// draw. Each is asserted at the seam where it can be: the corner
+/// follows from the measured height, and the rail — a reserved width, invisible in any measurement of a
 /// row by construction — is pinned to the number `RowGeometry` hands both rows
 /// and to the widest reading either of them can print.
 ///
@@ -393,89 +392,30 @@ final class AppearancePaneTests: XCTestCase {
         }
     }
 
-    /// The preview has to carry a row that wants the user and a row that does not,
-    /// because the spine is the app's silhouette and a preview showing neither
-    /// state cannot show what the panel looks like.
-    ///
-    /// Asserted against each preset's own `warningThreshold` rather than against
-    /// the shipped one. The sample's headline reading is a fixed 412 of 450, so a
-    /// preset that moved its warning above that — or an edit that eased the sample
-    /// down to something comfortable — would leave the preview with nothing spined
-    /// and no way to notice.
-    ///
-    /// Both rows reach the decision through `RowSpine` from inputs they already
-    /// have, so what is checked here is that they are handed the same ones: the
-    /// reading the preview draws and the reading inside the `UsageData` a real row
-    /// is given are the same reading, and both are connected with nothing failed.
-    @MainActor
-    func testThePreviewCarriesARowThatSpinesAndARowThatDoesNot() {
-        let appearance = settings("sample-row-spine")
-        for preset in AppearanceSettings.Preset.allCases {
-            appearance.apply(preset)
-            let warning = appearance.warningThreshold
-
-            for (sample, expected) in [
-                (SampleService.claude, SpineReason.nearCap),
-                (SampleService.chatgpt, nil)
-            ] as [(SampleService, SpineReason?)] {
-                let previewed = RowSpine.reason(
-                    percent: sample.primary.percent,
-                    warningThreshold: warning,
-                    error: nil,
-                    isConnected: true
-                )
-                XCTAssertEqual(
-                    previewed, expected,
-                    "\(preset.id): at a warning of \(warning) the preview's \(sample.displayName) row spines \(String(describing: previewed)) rather than \(String(describing: expected))"
-                )
-
-                // The same question, off the row the panel would draw from this
-                // service: a `UsageData` carrying the sample's own metric, on a
-                // provider with a credential and no failure.
-                let real = realRow(appearance, from: sample)
-                guard case .success(let data)? = real.result else {
-                    XCTFail("the real row was not handed a reading")
-                    continue
-                }
-                XCTAssertEqual(
-                    RowSpine.reason(
-                        percent: data.primary.percent,
-                        warningThreshold: warning,
-                        error: nil,
-                        isConnected: real.provider.isAuthenticated
-                    ),
-                    previewed,
-                    "\(preset.id): the panel and the preview disagree about whether \(sample.displayName) wants the user"
-                )
-            }
-        }
-    }
-
-    /// The spine is a bookmark laid on the card, not a thing the card makes room
-    /// for. A row that grew by drawing one would resize the panel the moment a
-    /// service crossed its warning — under the pointer, on the row the user is
-    /// reaching for.
+    /// Crossing the warning costs a row no height. A row that grew when a service
+    /// crossed its threshold would resize the panel under the pointer, on the row
+    /// the user is reaching for.
     ///
     /// Asserted on both rows, and the two readings are chosen two digits wide on
     /// purpose: 46% and 92% differ in every near-cap channel there is — the fill's
-    /// trailing end, the figure's weight, the spine, the colour — and in nothing
-    /// else, so a height that moves between them moved because of one of those.
+    /// trailing end, the figure's weight, the colour — and in nothing else, so a
+    /// height that moves between them moved because of one of those.
     @MainActor
-    func testASpineCostsARowNoHeight() {
-        let appearance = settings("sample-row-spine-height")
+    func testCrossingTheWarningCostsARowNoHeight() {
+        let appearance = settings("sample-row-warning-height")
         let width = CGFloat(appearance.panelWidth)
         let quiet = claudeSample(headline: 0.46)
-        let spined = claudeSample(headline: 0.92)
+        let alerting = claudeSample(headline: 0.92)
 
         XCTAssertEqual(
             fittingHeight(SampleRow(appearance: appearance, service: quiet), width: width),
-            fittingHeight(SampleRow(appearance: appearance, service: spined), width: width),
+            fittingHeight(SampleRow(appearance: appearance, service: alerting), width: width),
             accuracy: 0.5,
             "the sample row changes height when it crosses the warning threshold"
         )
         XCTAssertEqual(
             fittingHeight(realRow(appearance, from: quiet), width: width),
-            fittingHeight(realRow(appearance, from: spined), width: width),
+            fittingHeight(realRow(appearance, from: alerting), width: width),
             accuracy: 0.5,
             "a real row changes height when it crosses the warning threshold"
         )

@@ -10,15 +10,14 @@ import SwiftUI
 //
 // `UsageForecast`:
 //     static func phrase(for: UsageProjection, now: Date) -> String?
-//     `UsageProjection.outcome`, for the one thing the sentence cannot carry:
-//     whether this is a warning or a note.
 //
-// The samples, the fit, the refusals and every word of the copy stay there.
-// This decides where the line is drawn, in what ink, and whether it is drawn
-// at all.
+// The samples, the fit, the refusals and every word of the copy stay there —
+// including whether this is a warning or a note, which the sentence says in
+// words rather than in colour. This decides where the line is drawn, in what
+// type, and whether it is drawn at all.
 // ---------------------------------------------------------------------------
 
-/// One caption under a row's meters saying where the current pace is heading.
+/// One caption under a row's meter saying where the current pace is heading.
 ///
 /// Only ever draws when there is something honest to say. No samples yet, a
 /// service that isn't being spent, a cap further out than half an hour of
@@ -26,9 +25,9 @@ import SwiftUI
 /// with no height reserved behind it.
 ///
 /// That is the opposite of how the rest of the row treats a line that comes and
-/// goes — `RowActions` and the loading spinner both hold their space precisely
-/// so the panel cannot resize under the pointer, because `MenuBarExtra` sizes
-/// its window to the content. Reserving space here would be worse than useless:
+/// goes — `RowActions` holds its space precisely so the panel cannot resize
+/// under the pointer, because `MenuBarExtra` sizes its window to the content.
+/// Reserving space here would be worse than useless:
 /// most rows have no pace to report at all, so every row in the panel would
 /// carry a blank line for the sake of the one that does. The resize is avoided
 /// from the other end instead — the caller places this inside the detail
@@ -50,9 +49,14 @@ public struct ForecastLine: View {
     /// The row's id — "claude#2", not "claude". Two accounts of one service are
     /// spent at their own rates and are sampled against their own keys.
     public let providerID: String
-    /// When the window this row's headline meter belongs to renews. Only the
-    /// ink reads it, and only to keep a projected cap that the reset now beats
-    /// from being drawn as a warning.
+    /// When the window this row's headline meter belongs to renews.
+    ///
+    /// Nothing here reads it any more, and it stays in the signature because the
+    /// caller holds it and this is the view that would need it back. It had one
+    /// job: the line used to take the meter's warning colour when the cap was
+    /// projected to arrive before the renewal, and this was the fresher of the
+    /// two dates that decision was checked against. The ink is gone — see
+    /// `body` — so the check has nothing left to correct.
     public let resetDate: Date?
 
     /// Held plainly rather than observed, unlike the appearance beside it. The
@@ -82,16 +86,22 @@ public struct ForecastLine: View {
     }
 
     public var body: some View {
-        // One clock for the sentence and for the ink, so a countdown that reads
-        // as inside the window cannot be drawn as though it isn't.
+        // Read at draw time and passed in, rather than taken inside the forecast:
+        // the copy is the whole of what this view decides to show, so a case has
+        // to be able to write it against a clock of its own.
         let now = Date()
-        let projection = trend.projection(for: providerID)
-        if let line = Self.text(projection: projection, now: now, showsPace: trend.showsPaceInPanel) {
+        if let line = Self.text(
+            projection: trend.projection(for: providerID),
+            now: now,
+            showsPace: trend.showsPaceInPanel
+        ) {
             Text(line)
-                // A caption, one size under the countdown above it. The pace is a
-                // claim the app is making and the countdown is a fact the
-                // provider stated, so the claim is drawn quieter — and what marks
-                // it out instead is the tint below, not a larger size.
+                // A caption one size under the countdown above it, and the only
+                // line in the panel set at this size. The pace is a claim the app
+                // is making and the countdown is a fact the provider stated, so
+                // the claim is drawn quieter. Regular weight, like every other
+                // caption: the panel has one weight above medium and it belongs
+                // to a figure at its cap.
                 .font(.system(size: appearance.metrics.captionSize))
                 // SF Pro with tabular digits, not SF Mono: this is a run with
                 // words in it, and mono on prose is the terminal pastiche the
@@ -100,7 +110,21 @@ public struct ForecastLine: View {
                 // macOS 12; `Text.monospaced()` is 13.3 and would raise the
                 // stated floor silently, so it is never called anywhere here.
                 .monospacedDigit()
-                .foregroundStyle(ink(for: projection))
+                // Muted, always, like every other run of prose in a row.
+                //
+                // This line used to take the meter's warning ink when the cap was
+                // projected to land before the window renewed, and that is now
+                // the wrong claim to make in colour. Colour in the panel body
+                // says one thing — the meter beside it is at or past its caution
+                // band — so an amber sentence over a bar resting in grey would be
+                // reporting a state the row is not in, and it would be the
+                // loudest thing on a panel whose whole complaint was that hue had
+                // stopped meaning anything. Nothing is lost with it: the
+                // distinction the ink drew is the difference between the two
+                // sentences `UsageForecast` writes, "on pace to cap in 40m"
+                // against "resets in 11h 59m, you'll finish under", which is
+                // where a quiet interface puts it.
+                .foregroundStyle(Tokens.Ink.muted)
                 // A pace that wraps to a second line has grown the row by more
                 // than the reading is worth.
                 .lineLimit(1)
@@ -125,32 +149,5 @@ public struct ForecastLine: View {
     public static func text(projection: UsageProjection?, now: Date, showsPace: Bool) -> String? {
         guard showsPace, let projection else { return nil }
         return UsageForecast.phrase(for: projection, now: now)
-    }
-
-    /// The row's own tint, and the caption is the one piece of prose in the panel
-    /// allowed to take it — because the sentence is the app's claim rather than a
-    /// reading, and the tint is how it says so.
-    ///
-    /// Secondary, except where the cap is projected to arrive before the window
-    /// renews — which is `.capsAt`, since a reset that gets there first is
-    /// reported as `.resetsFirst` instead. That line is reassurance and reads as
-    /// the note it is; this one is the row's own warning and takes the ink the
-    /// meter beside it would. Holding the reassurance neutral is the same rule
-    /// the figures follow: colour arriving on the row is the event, so spending
-    /// it on the calm case would leave nothing to spend on the loud one.
-    private func ink(for projection: UsageProjection?) -> Color {
-        guard let outcome = projection?.outcome, case .capsAt(let eta) = outcome else { return .secondary }
-        // The forecast has already weighed the renewal it was given, so this
-        // agrees with it on every ordinary refresh. It is checked again against
-        // the date the row is currently drawing because that is the fresher of
-        // the two: a window that renews first is not a warning, and a line whose
-        // samples were taken under the previous reset must not be painted as one.
-        if let resetDate, eta >= resetDate { return .secondary }
-        // Every ramp returns the warning colour at or above its threshold, so a
-        // full meter is how a caller asks for "whatever this panel warns in"
-        // without naming a colour the user has already configured elsewhere. No
-        // ramp can reach the brand colour at this percent, which is why there is
-        // no provider accent to pass in.
-        return appearance.tint(for: 1, providerAccent: .secondary)
     }
 }

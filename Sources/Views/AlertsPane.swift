@@ -289,11 +289,17 @@ public struct AlertsPane: View {
     private var logSection: some View {
         Section {
             if center.recent.isEmpty {
+                // `Ink.muted` rather than `.secondary`, here and at the three
+                // other quiet runs in this pane. The caption ink is a named
+                // pair now, measured against the ground it is drawn on in both
+                // appearances; the system's secondary label is whatever alpha
+                // AppKit happens to be applying this release, and it lands one
+                // ratio in the panel and another in this form.
                 Text(center.rules.isEnabled
                      ? "Nothing has crossed a level yet."
                      : "Alerts are off, so there is nothing here.")
                     .font(.system(size: Tokens.Ramp.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 // Keyed on position rather than on the alert. `PendingAlert.key`
@@ -362,6 +368,13 @@ private struct AlertLogRow: View {
                 // happens to end in a number. The figure it ends in is the
                 // reading the alert fired on, and it is the title that carries
                 // it — the body underneath carries the window and its reset.
+                //
+                // Left on the label colour rather than taken to `Ink.body`.
+                // That ink is the panel's, where we own the ground and the
+                // whole column of text; this line sits in a `Form` between
+                // toggle and `LabeledContent` labels the system draws, and one
+                // custom row title a shade off the labels above and below it is
+                // the mismatch, not the fix.
                 Text(alert.title)
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
                     .monospacedDigit()
@@ -376,7 +389,7 @@ private struct AlertLogRow: View {
                 Text(alert.body)
                     .font(.system(size: Tokens.Ramp.caption))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
                     .lineLimit(1)
                     .frame(height: Tokens.lineBox(Tokens.Ramp.caption), alignment: .leading)
 
@@ -400,7 +413,7 @@ private struct AlertLogRow: View {
             // column it sits in beside a log of past events says it anyway.
             Text(age)
                 .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Ink.muted)
                 .lineLimit(1)
                 .frame(width: AlertColumn.age, alignment: .trailing)
         }
@@ -457,7 +470,7 @@ private struct PercentStepper: View {
                     // monospaced.
                     .font(.system(size: Tokens.Ramp.caption, design: Tokens.Ramp.figureDesign))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Ink.muted)
                     // A readout wide enough to wrap would take the row's height
                     // with it, and the row below would shift half a line as the
                     // value crossed 100.

@@ -147,12 +147,11 @@ public struct HistoryChart: View {
     /// than through a second copy of the same rounding.
     @State private var hoverFraction: Double?
 
-    /// Read from the environment rather than taken as an argument, as
-    /// `RowSpineView` does: the caller has nothing to say about it that the
-    /// environment has not already said. Three marks in here are hairlines — the
-    /// frame, the threshold rule and the hover rule — and a hairline is the first
-    /// thing a low-contrast display loses, so each is read through the function
-    /// that steps it up rather than off the resting token.
+    /// Read from the environment rather than taken as an argument: the caller has
+    /// nothing to say about it that the environment has not already said. Three
+    /// marks in here are hairlines — the frame, the threshold rule and the hover
+    /// rule — and a hairline is the first thing a low-contrast display loses, so
+    /// each is stepped up rather than drawn at its resting weight.
     @Environment(\.colorSchemeContrast) private var contrast
 
     public init(series: [HistoryChartSeries], range: ClosedRange<Date>, warningThreshold: Double) {
@@ -175,14 +174,21 @@ public struct HistoryChart: View {
         axisFigureWidth + Tokens.Space.small
     }
 
-    /// The chart's one figure rail: four monospaced caption cells, which is "100"
-    /// and the unit tick beside it. Reserved rather than measured — a rail sized
-    /// from the label currently in it is how "50%" and "100%" come to start the
-    /// plot at two different x, which is the shift tabular figures were adopted to
-    /// prevent. The threshold figure inside the plot is set in this rail too,
-    /// because it is the same recipe.
+    /// The chart's one figure rail: "100" and the percent sign beside it, both at
+    /// the axis size. Reserved rather than measured — a rail sized from the label
+    /// currently in it is how "50%" and "100%" come to start the plot at two
+    /// different x, which is the shift tabular figures were adopted to prevent.
+    /// The threshold figure inside the plot is set in this rail too, because it is
+    /// the same recipe.
+    ///
+    /// Three cells, a hairline and one more cell, which is the same arithmetic
+    /// every rail in the panel is reserved by. It used to be four cells flat,
+    /// because the unit was a smaller tick and fitted in the fourth; the tick is
+    /// now the same size as the digits it annotates and no longer does.
     private static var axisFigureWidth: CGFloat {
-        Tokens.figureWidth(Tokens.Ramp.caption, digits: 4)
+        Tokens.figureWidth(Tokens.Ramp.caption, digits: 3)
+            + Tokens.Space.hairline
+            + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
     }
 
     /// The strip under the plot that the time labels sit in.
@@ -212,6 +218,19 @@ public struct HistoryChart: View {
     private static let lineWidth: CGFloat = 1.5
     /// The dot marking a series' sample under the pointer.
     private static let dotRadius: CGFloat = 2.5
+    /// The ink both reference rules take — the threshold and the pointer.
+    ///
+    /// `notchColour(increased:)` used to answer this. The pace riser it was named
+    /// for has gone, and neither of these marks may take a colour anyway: hue on
+    /// this plot names a service, so a rule carrying one reads as one more
+    /// service. The one neutral ink is what is left, and it clears the well by
+    /// more than the resting notch pair did, so only the width still steps.
+    private static let ruleInk = Tokens.Ink.muted
+    /// A rule's width, stepped up under increased contrast, because colour alone
+    /// cannot rescue a hairline on a display that is losing hairlines.
+    private var ruleWidth: CGFloat {
+        contrast == .increased ? 2 : Tokens.Control.hairline
+    }
     /// Quarters. Five lines, four gaps — enough to read a height off without
     /// the grid becoming the picture.
     private static let gridStops: [Double] = [0, 0.25, 0.5, 0.75, 1]
@@ -323,11 +342,10 @@ public struct HistoryChart: View {
 
     /// The panel's warning level, as a reference.
     ///
-    /// Dashed, and drawn in the notch ink rather than in the ramp's red: colour on
-    /// this chart says which service a line belongs to, so a second red thing
-    /// running across the plot would read as one more service. It is a reference
-    /// mark on the frame, which is the same job the pace riser does on a meter,
-    /// and it is read through the same accessor.
+    /// Dashed, and drawn in the neutral ink rather than in the ramp's red: colour
+    /// on this chart says which service a line belongs to, so a second red thing
+    /// running across the plot would read as one more service. It is a mark on the
+    /// frame rather than a reading, so it takes the frame's ink.
     private func thresholdRule(in rect: CGRect) -> some View {
         let y = HistoryChartLayout.y(for: warningThreshold, in: rect)
         let labelHeight = Tokens.lineBox(Tokens.Ramp.caption)
@@ -344,18 +362,14 @@ public struct HistoryChart: View {
                 path.addLine(to: CGPoint(x: rect.maxX, y: y))
             }
             .stroke(
-                // Both the colour and the width step up under increased
-                // contrast, for the reason the pace riser does: a 1pt dashed
-                // mark is what such a display loses first, and this one is the
-                // only thing on the plot saying where the panel starts warning.
-                Tokens.notchColour(increased: contrast == .increased),
-                style: StrokeStyle(
-                    lineWidth: Tokens.notchWidth(increased: contrast == .increased),
-                    dash: [3, 3]
-                )
+                // The width steps up under increased contrast: a 1pt dashed mark
+                // is what such a display loses first, and this one is the only
+                // thing on the plot saying where the panel starts warning.
+                Self.ruleInk,
+                style: StrokeStyle(lineWidth: ruleWidth, dash: [3, 3])
             )
 
-            figure(warningThreshold, size: Tokens.Ramp.caption, tint: .secondary)
+            figure(warningThreshold, size: Tokens.Ramp.caption, tint: Tokens.Ink.muted)
                 // The same recipe as an axis figure, so the same rail. A
                 // threshold of 9% and one of 100% are one column, and mono
                 // outside a reserved rail is a font choice rather than a column.
@@ -423,11 +437,8 @@ public struct HistoryChart: View {
                 // The same mark as the threshold rule, stepped up the same way:
                 // this is the line the reading on the readout belongs to, and a
                 // vertical hairline over a well is the frailest thing here.
-                .fill(Tokens.notchColour(increased: contrast == .increased))
-                .frame(
-                    width: Tokens.notchWidth(increased: contrast == .increased),
-                    height: rect.height
-                )
+                .fill(Self.ruleInk)
+                .frame(width: ruleWidth, height: rect.height)
                 .position(x: x, y: rect.midY)
 
             ForEach(plotted) { entry in
@@ -475,7 +486,12 @@ public struct HistoryChart: View {
                     // mono is only ever set inside.
                     .font(.system(size: Tokens.Ramp.detail, weight: Tokens.Ramp.emphasisWeight))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    // `.foregroundColor` and never `.foregroundStyle` on a `Text`:
+                    // with a `Text` receiver the compiler binds the macOS 14
+                    // overload that returns `Text` and silently raises the app's
+                    // floor past the stated minimum. Same trap as
+                    // `Text.monospaced()`, and the same way out.
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     .fixedSize()
 
@@ -518,7 +534,7 @@ public struct HistoryChart: View {
             // carries no reading.
             Text(entry.title)
                 .font(.system(size: Tokens.Ramp.detail))
-                .foregroundStyle(.secondary)
+                .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
         }
         // A key that truncates has stopped naming its line. Past a handful of
@@ -527,10 +543,12 @@ public struct HistoryChart: View {
         .fixedSize()
     }
 
-    /// Width held for a readout figure: "100.0" and its unit tick.
+    /// Width held for a readout figure: "100.0" and the percent sign after it,
+    /// reserved by the same three-part arithmetic as the axis rail.
     private static var readoutWidth: CGFloat {
         Tokens.figureWidth(Tokens.Ramp.title, digits: 5)
-            + Tokens.figureWidth(unitSize(for: Tokens.Ramp.title), digits: 1)
+            + Tokens.Space.hairline
+            + Tokens.figureWidth(Tokens.Ramp.title, digits: 1)
     }
 
     // MARK: - Axes
@@ -539,7 +557,7 @@ public struct HistoryChart: View {
     /// and 100 share one right edge and the plot beside them starts at one x.
     private func axisFigures(in rect: CGRect) -> some View {
         ForEach(Self.labelledStops, id: \.self) { stop in
-            figure(stop, size: Tokens.Ramp.caption, tint: .secondary)
+            figure(stop, size: Tokens.Ramp.caption, tint: Tokens.Ink.muted)
                 .fixedSize()
                 .frame(width: Self.axisFigureWidth, alignment: .trailing)
                 .position(x: Self.axisFigureWidth / 2,
@@ -571,14 +589,15 @@ public struct HistoryChart: View {
     /// is a third of the plot whatever the stamp measures — so the plot cannot
     /// shift as the window changes resolution.
     ///
-    /// `.secondary` rather than `.tertiary`: one axis, one ink. The figures up the
-    /// left are secondary, and a bottom axis a rank below them read as a fainter
-    /// kind of label rather than as the other half of the same frame.
+    /// `Ink.muted` and not a rank below it: one axis, one ink. The figures up the
+    /// left are muted, and a bottom axis a rank fainter than them read as a
+    /// lesser kind of label rather than as the other half of the same frame. The
+    /// panel has no third ink to reach for in any case.
     private func timeLabel(_ date: Date) -> some View {
         Text(Self.stamp(for: date, span: rangeSpan))
             .font(.system(size: Tokens.Ramp.caption))
             .monospacedDigit()
-            .foregroundStyle(.secondary)
+            .foregroundColor(Tokens.Ink.muted)
             .lineLimit(1)
     }
 
@@ -588,27 +607,31 @@ public struct HistoryChart: View {
     private func emptyState(in rect: CGRect) -> some View {
         Text("No history yet")
             .font(.system(size: Tokens.Ramp.title))
-            .foregroundStyle(.secondary)
+            .foregroundColor(Tokens.Ink.muted)
             .position(x: rect.midX, y: rect.midY)
     }
 
     // MARK: - Figures
 
-    /// A percentage set the way every figure in this app is set: the number in
-    /// mono, the unit a smaller tick beside it, the two sharing one baseline.
-    /// The unit is not the reading.
+    /// A percentage set the way every figure in this app is set: one mono run at
+    /// one size, on one baseline, with the digits carrying the reading and the
+    /// percent sign neutral beside them.
+    ///
+    /// The sign used to be a smaller tick raised onto the digits' baseline. It is
+    /// the same size as them now — `92` with a tiny lifted `%` after it is fussy
+    /// where a plain `92%` is not, and the unit was never small enough to be
+    /// ignored nor large enough to be read, which is the worst of both.
     ///
     /// Built from a `FormatStyle` rather than interpolated, so the decimal
     /// separator stays the reader's. `.number` over a scaled ratio rather than
     /// `.percent`, because `.percent` writes the sign into the run and the sign
     /// is the part being set separately here.
     ///
-    /// Two `Text`s in a baseline-aligned stack rather than one concatenation: the
-    /// digits take the reading's tint and the tick is always `Ink.idle`, and
-    /// `Text.foregroundStyle` — the only way to give two runs of one `Text` two
-    /// colours — is macOS 14. The stack shares one baseline and costs nothing.
+    /// Two `Text`s in a stack rather than one concatenation: the digits take the
+    /// reading's tint and the sign is always `Ink.muted`, and giving two runs of
+    /// one `Text` two colours needs macOS 14.
     ///
-    /// The tick is neutral in every state and under every ramp, which is the rule
+    /// The sign is neutral in every state and under every ramp, which is the rule
     /// the whole app follows: the unit annotates the number rather than being part
     /// of the reading, and holding it neutral is what leaves the digits as the only
     /// run that can gain a colour.
@@ -619,40 +642,21 @@ public struct HistoryChart: View {
         fractionDigits: Int = 0
     ) -> some View {
         let value = (ratio.isFinite ? min(max(ratio, 0), 1) : 0) * 100
-        return HStack(alignment: .firstTextBaseline, spacing: 0) {
+        return HStack(spacing: 0) {
             Text(value, format: .number.precision(.fractionLength(fractionDigits)))
                 .font(.system(size: size,
                               weight: Tokens.Ramp.emphasisWeight,
                               design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(tint)
-            // Verbatim: this is a unit tick, not a word to be looked up, and a
+                .foregroundColor(tint)
+            // Verbatim: this is a unit, not a word to be looked up, and a
             // localised percent sign arrives with the number it belongs to.
             Text(verbatim: "%")
-                .font(.system(size: Self.unitSize(for: size),
+                .font(.system(size: size,
                               weight: .regular,
                               design: Tokens.Ramp.figureDesign))
-                .foregroundStyle(Tokens.Ink.idle)
+                .foregroundColor(Tokens.Ink.muted)
         }
     }
-
-    /// The unit tick, at the ratio `AppearanceSettings.Metrics` derives it at.
-    /// Derived here rather than borrowed from there because this window does not
-    /// follow the panel's text scale — a settings pane that resized itself from
-    /// an appearance slider would be its own bug.
-    private static func unitSize(for size: CGFloat) -> CGFloat {
-        max(unitFloor, (size * 0.62).rounded())
-    }
-
-    /// The smallest a tick stays legible at, and where `Metrics.unitSize` floors
-    /// it too. Deliberately not `Ramp.caption`: the ramp is three sizes to *set
-    /// labels at* and its smallest is 10, while this is a derived tick and 9 is
-    /// the value it was tuned at.
-    ///
-    /// It is also load-bearing for the axis rail. That rail is four caption cells
-    /// — 25pt — and an axis figure is "100" plus this tick: at 9pt the pair
-    /// measures 19 + 6 and fits, at 10pt it measures 19 + 7 and does not, and the
-    /// tick would be the same size as the figure it annotates.
-    private static let unitFloor: CGFloat = 9
 
     // MARK: - Derived state
 

@@ -280,17 +280,20 @@ final class HistoryChartLayoutTests: XCTestCase {
 
     // MARK: - The axis rail
 
-    /// The gutter is four reserved cells at the axis size plus the gap to the
-    /// plot, and the number is worth pinning because the labels drawn in it do
-    /// not need four: the stops are 0, 50 and 100, so three cells hold every
-    /// digit that ever appears. A gutter measured over the widest label the chart
-    /// currently draws would come out 6pt narrower and would still look right
-    /// until the day something set a fourth cell in it. This is the chart's line
-    /// of the spec's rail table — `figureWidth(Ramp.caption, 4)` = 25 — and the
-    /// plot's leading edge is the only place it is observable from outside.
+    /// The gutter is the panel's own rail arithmetic — three reserved cells, a
+    /// hairline and one more for the unit — plus the gap to the plot, and the
+    /// number is worth pinning because the labels drawn in it do not need the
+    /// whole of it: the stops are 0, 50 and 100, so three cells hold every digit
+    /// that ever appears. A gutter measured over the widest label the chart
+    /// currently draws would come out narrower and would still look right until
+    /// the day something set a fourth cell in it. This is the chart's line of
+    /// the spec's rail table, and the plot's leading edge is the only place it
+    /// is observable from outside.
     func testTheAxisRailIsFourReservedCellsRatherThanTheWidthOfTheLabelsInIt() {
-        let rail = Tokens.figureWidth(Tokens.Ramp.caption, digits: 4)
-        XCTAssertEqual(rail, 25, accuracy: 0.0001, "the axis rail is no longer four cells at 10pt")
+        let rail = Tokens.figureWidth(Tokens.Ramp.caption, digits: 3)
+            + Tokens.Space.hairline
+            + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
+        XCTAssertEqual(rail, 27, accuracy: 0.0001, "the axis rail is no longer three cells, a hairline and a unit")
 
         let plot = HistoryChart.plotRect(in: CGSize(width: 320, height: 160))
         XCTAssertEqual(
@@ -311,7 +314,10 @@ final class HistoryChartLayoutTests: XCTestCase {
     /// rail is also the same width at every size the pane can be dragged to,
     /// including the ones too small to draw it in.
     func testTheRailIsTheSameWidthAtEverySizeThePaneCanBe() {
-        let expected = Tokens.figureWidth(Tokens.Ramp.caption, digits: 4) + Tokens.Space.small
+        let expected = Tokens.figureWidth(Tokens.Ramp.caption, digits: 3)
+            + Tokens.Space.hairline
+            + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
+            + Tokens.Space.small
         let sizes = [
             CGSize(width: 240, height: 120),
             CGSize(width: 320, height: 160),

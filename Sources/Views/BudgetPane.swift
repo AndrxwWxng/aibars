@@ -155,7 +155,10 @@ public struct BudgetPane: View {
                 // inventing a display name for a service that is no longer
                 // there would be worse.
                 name: names[service]?.name ?? service,
-                accent: names[service]?.accent ?? .secondary,
+                // A stated neutral rather than `.secondary`, because this is a
+                // fill the ramp may be asked to draw with and not a text
+                // hierarchy: `Ink.idle` is a colour wherever it lands.
+                accent: names[service]?.accent ?? Tokens.Ink.idle,
                 reports: reports[service] ?? []
             )
         }
@@ -177,9 +180,21 @@ public struct BudgetPane: View {
 
         return Section {
             if lines.isEmpty {
+                // `Ink.muted` and not `.secondary`: the hierarchy resolves to
+                // whatever the ground under it happens to be, and this pane's
+                // captions were measured for contrast against one stated ink.
+                // The same token carries every caption in the app.
+                //
+                // `foregroundColor` and not `foregroundStyle` wherever the
+                // receiver is statically a `Text`: the `Text` overload of
+                // `foregroundStyle` is macOS 14 and the compiler binds it in
+                // preference to the 12.0 `View` one, which raises the app's
+                // floor past the stated minimum. Same trap as `Text.monospaced`,
+                // documented on `Ramp.figureDesign`. On a shape or a glyph there
+                // is no such overload and `foregroundStyle` stays.
                 Text("No service is reporting what it has cost. Most publish usage but not spend, and a cap on a figure that is never reported would warn about nothing.")
                     .font(.system(size: Tokens.Ramp.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(Tokens.Ink.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(lines) { line in
@@ -188,7 +203,7 @@ public struct BudgetPane: View {
                 if silent > 0 {
                     Text("\(silent) other services report usage but not spend, so there is nothing here to cap.")
                         .font(.system(size: Tokens.Ramp.caption))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(Tokens.Ink.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -274,7 +289,7 @@ public struct BudgetPane: View {
             // Said twice on purpose — the figure carries "est." in its own lane
             // as well. That one is the glance and this one is the sentence, and a
             // fact this pane must not let a reader miss gets two channels, the
-            // way near-cap gets four in the panel.
+            // way near-cap gets three in the panel.
             parts.append("estimated")
         }
         if line.reports.isEmpty {
@@ -335,12 +350,12 @@ public struct BudgetPane: View {
             if reports.isEmpty {
                 Text("Nothing to add up yet.")
                     .font(.system(size: Tokens.Ramp.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(Tokens.Ink.muted)
             } else {
                 SpendRow(
                     serviceID: nil,
                     name: "Everything",
-                    accent: .secondary,
+                    accent: Tokens.Ink.idle,
                     amount: spend?.display,
                     confidence: spend?.confidence,
                     qualifierRail: qualifier,
@@ -350,7 +365,7 @@ public struct BudgetPane: View {
                         spend: spend,
                         exponent: exponent
                     ),
-                    tint: figureTint(for: status, accent: .secondary),
+                    tint: figureTint(for: status, accent: Tokens.Ink.idle),
                     isAlert: isAlert(status),
                     currency: currency,
                     exponent: exponent,
@@ -559,7 +574,12 @@ public struct BudgetPane: View {
     /// reason — it is not a reading, and the ramp's resting colour on it would say
     /// it was sitting at zero of something.
     private func figureTint(for status: BudgetStatus?, accent: Color) -> Color {
-        guard let status else { return .primary }
+        // `Ink.body` and not `.primary`: primary is pure white on the near-black
+        // ground, which is the loudest thing the app can draw and reads as a
+        // default rather than a decision. Body ink is the same figure a step
+        // quieter, and it is what the panel sets a figure below caution in, so
+        // a row with nothing to compare against matches a row that is fine.
+        guard let status else { return Tokens.Ink.body }
         // The ramp is defined over 0…1 and a budget is a line you can keep
         // walking past. Past it the ramp has nothing further to say, so the
         // clamp costs nothing and the words carry the overspend.
@@ -643,7 +663,7 @@ public struct BudgetPane: View {
                             weight: .regular,
                             design: Tokens.Ramp.figureDesign
                         ))
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(Tokens.Ink.muted)
                         // A readout wide enough to wrap would take the row's
                         // height with it, and the row below would shift half a
                         // line as the value crossed 100.
@@ -753,8 +773,14 @@ private struct SpendRow: View {
             }
 
             VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
+                // Body ink rather than the inherited primary, and `.medium`
+                // rather than a heavier weight: the row's subject is told from
+                // the sentence under it by ink and weight, not by size, and
+                // pure white on the near-black ground is what made a panel of
+                // these read as shouting.
                 Text(name)
                     .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.emphasisWeight))
+                    .foregroundColor(Tokens.Ink.body)
                     .lineLimit(1)
 
                 // A run with words in it, so SF Pro with tabular digits rather
@@ -763,7 +789,7 @@ private struct SpendRow: View {
                 Text(detail)
                     .font(.system(size: Tokens.Ramp.caption))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -802,9 +828,13 @@ private struct SpendRow: View {
                 // Empty rather than absent on a billed row: the lane is reserved
                 // for the whole pane, and an empty `Text` keeps a baseline for
                 // the row to align on where a `Color.clear` would not.
+                //
+                // Caption ink, because it is a caption: `Ink.muted` is what
+                // every word attached to a figure is set in, and it keeps the
+                // qualifier from reading as one of the figure's own digits.
                 Text(confidence == .estimated ? "est." : "")
                     .font(.system(size: Tokens.Ramp.title))
-                    .foregroundStyle(Tokens.Ink.idle)
+                    .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     .frame(width: qualifierRail, alignment: .trailing)
             }
@@ -841,7 +871,7 @@ private struct SpendRow: View {
                     weight: isAlert ? Tokens.Ramp.alertWeight : Tokens.Ramp.emphasisWeight,
                     design: Tokens.Ramp.figureDesign
                 ))
-                .foregroundStyle(tint)
+                .foregroundColor(tint)
                 .lineLimit(1)
                 // Gives up size before it gives up digits: eight cells covers a
                 // four-figure bill, and a larger one is worth overflowing for
@@ -849,13 +879,18 @@ private struct SpendRow: View {
                 .minimumScaleFactor(0.8)
                 .frame(width: SpendColumn.amount, alignment: .trailing)
         } else {
+            // `Ink.idle` and not `.tertiary`. There is one quiet ink in the app
+            // now: a third rung existed only to say "quieter than the last
+            // thing", and at that opacity it stopped clearing the contrast floor
+            // on the near-black ground — an em dash nobody can see is a row with
+            // no answer in it at all.
             Text(verbatim: "—")
                 .font(.system(
                     size: Tokens.Ramp.title,
                     weight: Tokens.Ramp.emphasisWeight,
                     design: Tokens.Ramp.figureDesign
                 ))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(Tokens.Ink.idle)
                 .frame(width: SpendColumn.amount, alignment: .trailing)
                 .accessibilityLabel("No spend reported")
         }
@@ -872,7 +907,7 @@ private struct SpendRow: View {
 /// read past. Elevation here is a ground plus one stroke — the app has no shadows
 /// anywhere, and nothing carrying a number is drawn on a material.
 ///
-/// One coloured element: the glyph. The sentence itself is `.secondary`, the way
+/// One coloured element: the glyph. The sentence itself is `Ink.muted`, the way
 /// the browser banner's detail line is, so the ink says "attention" once.
 private struct SpendCallout: View {
     let text: String
@@ -895,7 +930,7 @@ private struct SpendCallout: View {
                 .accessibilityHidden(true)
             Text(text)
                 .font(.system(size: Tokens.Ramp.caption))
-                .foregroundStyle(.secondary)
+                .foregroundColor(Tokens.Ink.muted)
                 // Prose, so it wraps. A callout that cannot grow downward can
                 // only ever name one account.
                 .fixedSize(horizontal: false, vertical: true)

@@ -119,18 +119,17 @@ public struct AppMark: View {
 public enum UsageTint {
     public static func color(for percent: Double) -> Color {
         switch percent {
-        // Two reasons the low stop is no longer green. 0–60% is the resting
-        // state of every row on a fresh launch, so a saturated green spent the
-        // eye's whole colour budget on the least informative state the panel
-        // has. And green→amber→red is the single worst axis for deuteranomaly
-        // and protanopia — the two ends collapse into each other — while
-        // teal→amber→red separates on the blue–yellow axis, which both preserve.
-        case ..<0.60: return Tokens.dynamic(light: 0x3F6B72, dark: 0x7FB3BD)   // resting teal
-        case ..<0.85: return Tokens.dynamic(light: 0x8F6100, dark: 0xE0A200)   // amber
-        // The dark red moved off 0xE5484D because the ground beneath it moved:
-        // it was tuned against the system panel background, and on the darker
-        // `Surface.base` it lands at 4.44:1. This one measures 5.22:1.
-        default:      return Tokens.dynamic(light: 0xC62A2F, dark: 0xEC5D62)   // red
+        // The resting stop is not a colour at all, and that is the point. It
+        // used to be teal, and a panel of nine healthy rows was nine teal bars —
+        // colour spent on the least informative state there is. Grey means a
+        // healthy row carries no hue, so any hue anywhere in the panel means
+        // something wants looking at. It is also strictly better than
+        // teal→amber→red for deuteranomaly and protanopia, which collapse hues
+        // towards each other but never towards grey.
+        case ..<0.80: return Tokens.dynamic(light: 0x5F636B, dark: 0x8A8F98)   // resting grey
+        case ..<0.95: return Tokens.dynamic(light: 0xB45309, dark: 0xF5A623)   // amber
+        default:      return Tokens.dynamic(light: 0xC62A2F, dark: 0xFF6B6E)   // red
         }
     }
+
 }

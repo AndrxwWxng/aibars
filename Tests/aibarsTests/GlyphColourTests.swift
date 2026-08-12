@@ -43,9 +43,17 @@ final class UsageRampContrastTests: XCTestCase {
     /// the third.
     func testTheRecordedContrastFiguresStillHold() throws {
         let expected: [(name: String, percent: Double, light: Double, dark: Double)] = [
-            ("teal", 0.10, 5.34, 7.48),
-            ("amber", 0.70, 4.95, 7.70),
-            ("red", 0.95, 5.02, 5.22)
+            // Measured against Surface.base in each appearance. The resting
+            // stop is no longer teal: a healthy row carries no hue, so the
+            // lowest band is grey and the recorded pair moved with it. Amber's
+            // light stop is #B45309 rather than a darker #8A5A00 — the earlier
+            // value cleared contrast as type and drew a brown smear when the
+            // same colour filled 200pt of bar, which is the one place in the
+            // panel where a legibility figure and a legibility judgement came
+            // apart. All three still clear 4.5:1, which is what this guards.
+            ("grey", 0.10, 5.67, 5.81),
+            ("amber", 0.85, 4.73, 9.32),
+            ("red", 0.95, 5.24, 6.81)
         ]
         for stop in expected {
             let light = try XCTUnwrap(
@@ -73,21 +81,26 @@ final class UsageRampContrastTests: XCTestCase {
 
     // MARK: - Bands
 
-    /// The boundaries are at exactly 0.60 and 0.85, and the value *at* a
-    /// boundary belongs to the band above it. 85% is warned about rather than
+    /// The boundaries are at exactly 0.80 and 0.95, and the value *at* a
+    /// boundary belongs to the band above it. 95% is warned about rather than
     /// cautioned about; the other way round is the app rounding in the
     /// provider's favour.
+    ///
+    /// The edges moved with the reskin — the resting band used to end at 0.60
+    /// and warning used to start at 0.85 — so these are the palette's own
+    /// boundaries restated, not a second opinion about where caution begins.
+    /// The invariant being guarded is the rounding direction, which is unchanged.
     func testABoundaryValueBelongsToTheHigherBand() throws {
-        let teal = try XCTUnwrap(hex(UsageTint.color(for: 0), dark: true))
-        let amber = try XCTUnwrap(hex(UsageTint.color(for: 0.70), dark: true))
+        let grey = try XCTUnwrap(hex(UsageTint.color(for: 0), dark: true))
+        let amber = try XCTUnwrap(hex(UsageTint.color(for: 0.85), dark: true))
         let red = try XCTUnwrap(hex(UsageTint.color(for: 1), dark: true))
-        XCTAssertNotEqual(teal, amber)
+        XCTAssertNotEqual(grey, amber)
         XCTAssertNotEqual(amber, red)
 
-        XCTAssertEqual(hex(UsageTint.color(for: 0.599), dark: true), teal)
-        XCTAssertEqual(hex(UsageTint.color(for: 0.60), dark: true), amber, "0.60 is caution, not resting")
-        XCTAssertEqual(hex(UsageTint.color(for: 0.849), dark: true), amber)
-        XCTAssertEqual(hex(UsageTint.color(for: 0.85), dark: true), red, "0.85 is the warning, not the top of caution")
+        XCTAssertEqual(hex(UsageTint.color(for: 0.799), dark: true), grey)
+        XCTAssertEqual(hex(UsageTint.color(for: 0.80), dark: true), amber, "0.80 is caution, not resting")
+        XCTAssertEqual(hex(UsageTint.color(for: 0.949), dark: true), amber)
+        XCTAssertEqual(hex(UsageTint.color(for: 0.95), dark: true), red, "0.95 is the warning, not the top of caution")
     }
 
     // MARK: - The menu bar's one colour
@@ -106,7 +119,13 @@ final class UsageRampContrastTests: XCTestCase {
     func testMenuBarTintIsSpentOnlyAtTheConfiguredWarning() throws {
         let appearance = settings("menu-bar-tint")
 
+        // Caution first, because warning is clamped to at least caution + 0.05
+        // and the shipped caution is now 0.80 — assigning 0.70 straight to the
+        // warning would silently clamp back up to 0.85 and this test would be
+        // asserting against the default it was written to avoid.
+        appearance.cautionThreshold = 0.60
         appearance.warningThreshold = 0.70
+        XCTAssertEqual(appearance.warningThreshold, 0.70, accuracy: 0.001, "the threshold did not take")
         XCTAssertNil(appearance.menuBarTint(for: 0.65), "0.65 is below a warning the user set at 0.70")
         XCTAssertNotNil(appearance.menuBarTint(for: 0.70), "0.70 is the warning the user set")
 
@@ -122,7 +141,7 @@ final class UsageRampContrastTests: XCTestCase {
         // asserting "the colour of 95%" when what the strip means is "this
         // crossed the line".
         let tint = try XCTUnwrap(appearance.menuBarTint(for: 0.95))
-        XCTAssertEqual(hex(tint, dark: true), hex(UsageTint.color(for: 0.85), dark: true))
+        XCTAssertEqual(hex(tint, dark: true), hex(UsageTint.color(for: 1), dark: true))
     }
 
     /// The same function's other half, and the second thing the duplicate could
@@ -136,31 +155,6 @@ final class UsageRampContrastTests: XCTestCase {
         appearance.warningThreshold = 0.70
         XCTAssertNil(appearance.menuBarTint(for: 0.70))
         XCTAssertNil(appearance.menuBarTint(for: 1), "monochrome means monochrome at the cap too")
-    }
-
-    // MARK: - The cut
-
-    /// The clearance punched through a fill so the pace riser survives it.
-    ///
-    /// Both forms of the meter punch the same hole: the bar draws the covered
-    /// half of its riser in `Surface.onFill`, and the dial draws its radial tick
-    /// in the same colour once the arc has passed it. It is only a hole if that
-    /// colour is the ground exactly — a value a shade off reads as a grey mark
-    /// laid *on* the fill, which is a fourth thing on the bar rather than a gap
-    /// in it, and the two tokens drifting apart is a silent way to get there.
-    func testTheCutIsTheGroundExactlyInBothAppearances() throws {
-        for dark in [false, true] {
-            let cut = try XCTUnwrap(hex(Tokens.Surface.onFill, dark: dark))
-            let ground = try XCTUnwrap(hex(Tokens.Surface.base, dark: dark))
-            XCTAssertEqual(
-                cut, ground,
-                "the cut is \(String(cut, radix: 16)) on \(dark ? "dark" : "light") where the ground is \(String(ground, radix: 16))"
-            )
-            // And it is not the riser's own colour. The riser above the bar and
-            // the cut through it are two marks with opposite jobs, so a change
-            // that collapsed them would erase the cut rather than move it.
-            XCTAssertNotEqual(cut, hex(Tokens.Meter.notch, dark: dark))
-        }
     }
 
     // MARK: - Resolving
@@ -217,113 +211,6 @@ final class UsageRampContrastTests: XCTestCase {
         return 0.2126 * linear(colour.redComponent)
              + 0.7152 * linear(colour.greenComponent)
              + 0.0722 * linear(colour.blueComponent)
-    }
-}
-
-/// The cut on the dial, at the thickness floor the bar is held to.
-///
-/// One rule, two forms. `MeterCut.isCut` refuses below `cutMinBarHeight` because
-/// a gap as wide as the bar is thick reads as a bar snapped in two, and the dial
-/// draws the same band radially across its stroke — so the stroke is the
-/// thickness it has to be judged on, and the floor means the same thing there.
-///
-/// Worth its own tests rather than trusting the shared function, because the dial
-/// meets the floor from a place the bar never does: `UsageRing` keeps a hole a
-/// third of its width, so its stroke is capped at `diameter / 3` however thick
-/// the meter setting asks for. A dial can therefore fall under the floor while a
-/// bar on the same setting sits comfortably over it, and that is the case where
-/// two forms of one instrument could quietly start disagreeing about whether a
-/// reading is overspending.
-final class RingCutTests: XCTestCase {
-    /// A reading that has overtaken its pace boundary: 80% spent, 40% of the
-    /// window gone. Sampled well clear of the boundary, so nothing here is
-    /// asserting where `fillHasPassedNotch` rounds.
-    private let overspending = (percent: 0.80, elapsed: 0.40)
-
-    /// The stroke a dial draws at, which is what it hands the cut where the bar
-    /// hands its thickness. `UsageRing` derives it exactly this way; it is
-    /// restated rather than reached for because the dial's own copy is private
-    /// and this is the input under test, not the drawing.
-    private func stroke(thickness: CGFloat, diameter: CGFloat) -> CGFloat {
-        min(thickness, diameter / 3)
-    }
-
-    /// The boundary itself, in the dial's terms: a stroke at the floor cuts, a
-    /// stroke a point under it does not. The same two assertions the bar makes,
-    /// which is the point — a floor that only one form honoured would be a floor
-    /// the panel does not have.
-    func testTheDialCutsAtTheFloorAndNotBelowIt() {
-        XCTAssertTrue(
-            MeterCut.isCut(
-                percent: overspending.percent,
-                elapsed: overspending.elapsed,
-                barHeight: Tokens.Meter.cutMinBarHeight
-            ),
-            "a stroke exactly at the floor is thick enough to hold a cut"
-        )
-        XCTAssertFalse(
-            MeterCut.isCut(
-                percent: overspending.percent,
-                elapsed: overspending.elapsed,
-                barHeight: Tokens.Meter.cutMinBarHeight - 1
-            ),
-            "a stroke under the floor would be broken by the gap rather than interrupted"
-        )
-    }
-
-    /// The dial's ceiling against the cut's floor, at the two ends of the
-    /// meter-thickness setting and at the diameters the leading column actually
-    /// produces — the headline dial, and the secondary chip's dial at 0.55 of it.
-    ///
-    /// The headline dial at the default thickness lands on the floor; the chip's
-    /// dial cannot reach it at any thickness, because a third of 12pt is 4. So the
-    /// small dial goes on drawing its riser in `Surface.onFill` where the arc
-    /// covers it, which is the reading a 3pt bar carries too, and neither form
-    /// invents a cut it has no room for.
-    func testTheDialsCeilingDecidesWhetherItCanCutAtAll() {
-        let cases: [(thickness: CGFloat, diameter: CGFloat, cuts: Bool)] = [
-            (5, 22, true),    // the default: stroke 5, exactly on the floor
-            (12, 22, true),   // the thickest setting on the same dial: stroke 7.3
-            (12, 12, false),  // the chip's dial: the third-of-its-width cap bites first
-            (3, 22, false)    // the thinnest setting: the dial is as thin as the bar
-        ]
-        for (thickness, diameter, cuts) in cases {
-            let height = stroke(thickness: thickness, diameter: diameter)
-            XCTAssertEqual(
-                MeterCut.isCut(
-                    percent: overspending.percent,
-                    elapsed: overspending.elapsed,
-                    barHeight: height
-                ),
-                cuts,
-                "a \(diameter)pt dial at \(thickness)pt strokes at \(height)pt, against a floor of \(Tokens.Meter.cutMinBarHeight)"
-            )
-        }
-    }
-
-    /// Why the floor is where it is, held to in both contrast modes: the gap is
-    /// always narrower than the thinnest bar it is allowed on. Under increased
-    /// contrast the riser widens and the gap widens with it, and that is the case
-    /// the floor has to survive — a cut as wide as its own bar is the broken bar
-    /// the floor exists to prevent, on the dial as much as on the bar.
-    func testTheGapIsNarrowerThanTheThinnestBarItIsAllowedOn() {
-        for increased in [false, true] {
-            XCTAssertLessThan(
-                MeterCut.width(increasedContrast: increased),
-                Tokens.Meter.cutMinBarHeight,
-                "the cut measures \(MeterCut.width(increasedContrast: increased))pt with increased contrast \(increased ? "on" : "off")"
-            )
-        }
-    }
-
-    /// A window nobody described has no boundary to overtake, so there is nothing
-    /// to cut whatever the stroke — the dial's version of the uniform track, and
-    /// the reason `isCut` takes the optional rather than each caller unwrapping it
-    /// and reaching its own conclusion.
-    func testAnUndescribedWindowIsNeverCut() {
-        XCTAssertFalse(
-            MeterCut.isCut(percent: 1, elapsed: nil, barHeight: Tokens.Meter.cutMinBarHeight * 2)
-        )
     }
 }
 

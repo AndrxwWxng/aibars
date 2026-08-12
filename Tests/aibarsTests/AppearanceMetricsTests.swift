@@ -37,10 +37,14 @@ final class AppearanceMetricsTests: XCTestCase {
 
     @MainActor
     func testFigureAndUnitSizePerDensity() {
+        // The figure is the name's own size and the unit is the figure's. The
+        // 15pt figure beside a 13pt name is where "the panel shouts" came from,
+        // and the 9pt raised tick beside it was the superscript percent: `92%`
+        // is one mono run on one baseline now.
         let expected: [(AppearanceSettings.Density, CGFloat, CGFloat)] = [
-            (.compact, 14, 9),
-            (.cozy, 15, 9),
-            (.comfortable, 16, 10)
+            (.compact, 12, 12),
+            (.cozy, 13, 13),
+            (.comfortable, 14, 14)
         ]
         let appearance = settings("sizes")
         appearance.textScale = 1.0
@@ -68,18 +72,20 @@ final class AppearanceMetricsTests: XCTestCase {
             appearance.density = density
             let metrics = appearance.metrics
             XCTAssertGreaterThanOrEqual(
-                metrics.figureSize, 12,
+                metrics.figureSize, 11,
                 "\(density.rawValue) at the smallest text scale sank the figure to \(metrics.figureSize)pt"
             )
             XCTAssertGreaterThanOrEqual(
-                metrics.unitSize, 9,
+                metrics.unitSize, 11,
                 "\(density.rawValue) at the smallest text scale sank the unit to \(metrics.unitSize)pt"
             )
-            // The figure is the row's answer: it must never end up smaller than
-            // the name beside it, floors or no floors.
-            XCTAssertGreaterThan(
+            // The figure is the row's answer, and it is set at the name's own
+            // size: its prominence comes from the mono face, the reserved rail
+            // and the colour, none of which cost loudness. What must never
+            // happen is the floors sinking it *under* the name.
+            XCTAssertGreaterThanOrEqual(
                 metrics.figureSize, metrics.titleSize,
-                "\(density.rawValue) drew the figure no larger than the service name"
+                "\(density.rawValue) drew the figure smaller than the service name"
             )
         }
     }
@@ -95,7 +101,7 @@ final class AppearanceMetricsTests: XCTestCase {
         appearance.density = .cozy
         appearance.textScale = 1.0
         XCTAssertEqual(appearance.metrics.headlineRail, 35, "the headline rail is not 35pt at cozy")
-        XCTAssertEqual(appearance.metrics.secondaryRail, 27, "the secondary rail is not 27pt at cozy")
+        XCTAssertEqual(appearance.metrics.secondaryRail, 29, "the secondary rail is not 29pt at cozy")
     }
 
     /// A secondary window's figure is a smaller reading of the same kind, so its
@@ -322,8 +328,8 @@ final class AppearanceTintTests: XCTestCase {
     /// boundaries are settings, the palette is not, so a moved threshold must not
     /// change which of these three a test is comparing against.
     private let resting = UsageTint.color(for: 0)
-    private let caution = UsageTint.color(for: 0.60)
-    private let warning = UsageTint.color(for: 0.85)
+    private let caution = UsageTint.color(for: 0.80)
+    private let warning = UsageTint.color(for: 0.95)
 
     /// Magenta at full chroma for the user's accent, spring green for the
     /// provider's: neither is in the palette, in any brand mark, or reachable by
@@ -346,33 +352,35 @@ final class AppearanceTintTests: XCTestCase {
     func testTheFigureIsNeutralBelowCautionAndTakesTheRampAtAndAboveIt() {
         let appearance = settings("figure-usage")
         appearance.colorRamp = .usage
-        XCTAssertEqual(appearance.cautionThreshold, 0.60, "the fixtures below are written against the shipped pair")
-        XCTAssertEqual(appearance.warningThreshold, 0.85)
+        XCTAssertEqual(appearance.cautionThreshold, 0.80, "the fixtures below are written against the shipped pair")
+        XCTAssertEqual(appearance.warningThreshold, 0.95)
 
-        for percent in [-0.5, 0, 0.01, 0.25, 0.5, 0.59] {
-            XCTAssertEqual(
-                figure(appearance, percent), Color.primary,
+        for percent in [-0.5, 0, 0.01, 0.25, 0.5, 0.79] {
+            assertSameInk(
+                figure(appearance, percent), Tokens.Ink.body,
                 "a figure at \(percent) took colour while the row was still healthy"
             )
         }
 
         let coloured: [(Double, Color)] = [
-            (0.60, caution),
-            (0.70, caution),
-            (0.84, caution),
-            (0.85, warning),
-            (0.92, warning),
+            (0.80, caution),
+            (0.90, caution),
+            (0.94, caution),
+            (0.95, warning),
+            (0.99, warning),
             (1, warning),
             (1.4, warning)
         ]
         for (percent, expected) in coloured {
             assertSameInk(figure(appearance, percent), expected, "the figure at \(percent)")
-            XCTAssertNotEqual(figure(appearance, percent), Color.primary, "the figure at \(percent) stayed neutral")
+            assertDifferentInk(figure(appearance, percent), Tokens.Ink.body, "the figure at \(percent) stayed neutral")
         }
 
-        // The resting teal is the meter's colour at these levels and never the
-        // figure's — if it were, the neutral rule would be doing nothing.
-        assertDifferentInk(figure(appearance, 0.1), resting, "a healthy figure took the meter's teal")
+        // The resting stop is the meter's colour at these levels and never the
+        // figure's. It is grey now rather than teal, so the two are a step apart
+        // rather than a hue apart — which is the whole of what makes a healthy
+        // row carry no colour at all.
+        assertDifferentInk(figure(appearance, 0.1), resting, "a healthy figure took the meter's resting grey")
     }
 
     /// Inclusive, and inclusive is the side that matters: the meter turns amber
@@ -386,15 +394,15 @@ final class AppearanceTintTests: XCTestCase {
         let boundary = appearance.cautionThreshold
         assertSameInk(figure(appearance, boundary), caution, "the caution threshold itself")
         assertSameInk(figure(appearance, boundary.nextUp), caution, "the float above the caution threshold")
-        XCTAssertEqual(
-            figure(appearance, boundary.nextDown), Color.primary,
+        assertSameInk(
+            figure(appearance, boundary.nextDown), Tokens.Ink.body,
             "the float below the caution threshold took colour"
         )
     }
 
-    /// And the boundary is the setting, not the 0.60 the palette happens to
+    /// And the boundary is the setting, not the 0.80 the palette happens to
     /// change colour at. These two numbers are equal on a fresh install and that
-    /// is the only reason a hardcoded 0.60 would pass the test above.
+    /// is the only reason a hardcoded 0.80 would pass the test above.
     @MainActor
     func testTheNeutralBandFollowsTheSettingRatherThanThePalette() {
         let appearance = settings("figure-moved")
@@ -405,10 +413,10 @@ final class AppearanceTintTests: XCTestCase {
         ))
         XCTAssertEqual(appearance.cautionThreshold, 0.40, accuracy: 0.0001)
 
-        XCTAssertEqual(figure(appearance, 0.39), Color.primary, "a figure below the user's caution threshold")
+        assertSameInk(figure(appearance, 0.39), Tokens.Ink.body, "a figure below the user's caution threshold")
         assertSameInk(figure(appearance, 0.40), caution, "the figure at the user's caution threshold")
-        // 0.50 is teal in the palette's own fixed bands and caution under this
-        // user's settings. The figure follows the user.
+        // 0.50 is the resting grey in the palette's own fixed bands and caution
+        // under this user's settings. The figure follows the user.
         assertSameInk(figure(appearance, 0.50), caution, "the figure between the setting and the palette's band")
     }
 
@@ -445,43 +453,47 @@ final class AppearanceTintTests: XCTestCase {
 
         appearance.colorRamp = .accent
         assertSameInk(figure(appearance, 0.1), Color(hex: UInt32(accentSentinel)), "the accent ramp below caution")
-        XCTAssertNotEqual(figure(appearance, 0.1), Color.primary, "the accent ramp went neutral")
+        assertDifferentInk(figure(appearance, 0.1), Tokens.Ink.body, "the accent ramp went neutral")
 
         appearance.colorRamp = .provider
         assertSameInk(figure(appearance, 0.1), providerSentinel, "the provider ramp below caution")
-        XCTAssertNotEqual(figure(appearance, 0.1), Color.primary, "the provider ramp went neutral")
+        assertDifferentInk(figure(appearance, 0.1), Tokens.Ink.body, "the provider ramp went neutral")
     }
 
-    /// Monochrome is the one ramp whose coloured column *is* the label colour,
-    /// right up to the warning — and then it is not. A monochrome panel is a
+    /// Monochrome is the one ramp whose coloured column *is* the panel's quiet
+    /// ink, right up to the warning — and then it is not. A monochrome panel is a
     /// preference; a panel that hides an imminent cutoff is a bug, so `tint` gives
     /// the ramp up at `warningThreshold` and the figure follows it there rather
     /// than inventing a rule of its own.
     ///
+    /// `Ink.muted` and not `Color.primary`: on a near-black ground primary
+    /// resolves to pure white, which made a monochrome column the loudest thing
+    /// on a panel whose whole premise is that it has no colour on it.
+    ///
     /// The opacity floor is asserted on both sides of the warning because both
     /// sides are figures being read: a washed-out number is a number that has been
-    /// dimmed, and nothing in these settings asks for that. The floor is
-    /// `Color.primary`'s own 0.847, which is the lightest anything here gets.
+    /// dimmed, and nothing in these settings asks for that. Every ink here is
+    /// opaque, which is the point of them being inks rather than opacities.
     @MainActor
     func testMonochromeKeepsTheLabelColourUntilTheWarningAndGivesItUpThere() throws {
         let appearance = settings("figure-mono")
         appearance.colorRamp = .mono
 
-        for percent in [0, 0.1, 0.59, 0.60, 0.84] {
-            XCTAssertEqual(
-                figure(appearance, percent), Color.primary,
-                "the monochrome figure at \(percent) is not the label colour"
+        for percent in [0, 0.1, 0.59, 0.80, 0.94] {
+            assertSameInk(
+                figure(appearance, percent), Tokens.Ink.muted,
+                "the monochrome figure at \(percent) is not the panel's quiet ink"
             )
         }
-        for percent in [0.85, 0.99, 1] {
+        for percent in [0.95, 0.99, 1] {
             assertSameInk(figure(appearance, percent), warning, "the monochrome figure at \(percent)")
-            XCTAssertNotEqual(
-                figure(appearance, percent), Color.primary,
+            assertDifferentInk(
+                figure(appearance, percent), Tokens.Ink.muted,
                 "monochrome held its own preference over an imminent cutoff at \(percent)"
             )
         }
 
-        for percent in [0, 0.60, 0.85, 1] {
+        for percent in [0, 0.80, 0.95, 1] {
             for dark in [false, true] {
                 let opacity = try XCTUnwrap(alpha(figure(appearance, percent), dark: dark))
                 XCTAssertGreaterThanOrEqual(opacity, 0.84, "the monochrome figure at \(percent) is a wash")
@@ -519,8 +531,8 @@ final class AppearanceTintTests: XCTestCase {
                 pairs += 1
 
                 for percent in [threshold, threshold.nextUp, (threshold + 1) / 2, 1, 1.5, .greatestFiniteMagnitude] {
-                    XCTAssertNotEqual(
-                        figure(appearance, percent), Color.primary,
+                    assertDifferentInk(
+                        figure(appearance, percent), Tokens.Ink.body,
                         "a figure at \(percent) went neutral against a warning threshold of \(threshold)"
                     )
                     assertSameInk(
@@ -540,9 +552,9 @@ final class AppearanceTintTests: XCTestCase {
     /// exactly where the meter beside it does.
     ///
     /// A reading below zero is a different fault and takes the other answer. It is
-    /// genuinely below the caution threshold, so the figure is graphite while the
-    /// meter is teal — which is the D3 rule doing its job, not the panel
-    /// contradicting itself.
+    /// genuinely below the caution threshold, so the figure is the body ink while
+    /// the meter is the resting grey — which is the D3 rule doing its job, not the
+    /// panel contradicting itself.
     @MainActor
     func testAnUnreadableNumberIsNeverDrawnAsAHealthyOne() {
         let appearance = settings("figure-nan")
@@ -554,8 +566,8 @@ final class AppearanceTintTests: XCTestCase {
                     appearance.tint(for: percent, providerAccent: providerSentinel),
                     "\(ramp.rawValue) at \(percent) does not agree with the meter beside it"
                 )
-                XCTAssertNotEqual(
-                    figure(appearance, percent), Color.primary,
+                assertDifferentInk(
+                    figure(appearance, percent), Tokens.Ink.body,
                     "\(ramp.rawValue) drew an unreadable \(percent) as a healthy figure"
                 )
             }
@@ -563,15 +575,15 @@ final class AppearanceTintTests: XCTestCase {
 
         appearance.colorRamp = .usage
         assertSameInk(figure(appearance, .nan), warning, "a NaN under the usage ramp")
-        XCTAssertEqual(figure(appearance, -.infinity), Color.primary, "a reading below zero is a quiet row")
+        assertSameInk(figure(appearance, -.infinity), Tokens.Ink.body, "a reading below zero is a quiet row")
     }
 
     // MARK: - The menu bar tint
 
-    /// The threshold the strip goes colourful at is the user's, not the 0.85 the
+    /// The threshold the strip goes colourful at is the user's, not the 0.95 the
     /// palette changes band at. Asserted in both directions, because a hardcoded
-    /// 0.85 is wrong twice over: it withholds the colour from a user who wanted
-    /// warning at 0.60, and spends it on one who moved it to 0.95.
+    /// 0.95 is wrong twice over: it withholds the colour from a user who wanted
+    /// warning at 0.60, and spends it on one who left it where it ships.
     @MainActor
     func testTheMenuBarTintFollowsTheWarningThresholdRatherThanTheHardcodedStop() throws {
         let appearance = settings("menu-bar-tint")
@@ -613,9 +625,9 @@ final class AppearanceTintTests: XCTestCase {
         let appearance = settings("menu-bar-tint-both")
         for colour: AppearanceSettings.MenuBarColour in [.alertOnly, .perBar] {
             appearance.menuBarColour = colour
-            XCTAssertNil(appearance.menuBarTint(for: 0.84), colour.rawValue)
+            XCTAssertNil(appearance.menuBarTint(for: 0.94), colour.rawValue)
             assertSameInk(
-                try XCTUnwrap(appearance.menuBarTint(for: 0.85)), warning,
+                try XCTUnwrap(appearance.menuBarTint(for: 0.95)), warning,
                 "the tint under \(colour.rawValue)"
             )
         }

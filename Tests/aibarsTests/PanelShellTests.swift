@@ -20,17 +20,20 @@ final class PanelShellTests: XCTestCase {
     // MARK: - Group headers
 
     /// The group header is a divider with a word on it rather than reading
-    /// matter, so it is fixed at `Ramp.caption` and the panel's text-scale slider
-    /// has nothing to say about it. Asserted on the defaults both kinds carry,
-    /// because that is where the old scaled size used to be reintroduced: the
-    /// panel handed one in, and anything that built either type without one got a
-    /// second size instead.
+    /// matter, so it is fixed at the panel's caption size and the text-scale
+    /// slider has nothing to say about it. `Ramp.detail`, not `Ramp.caption`:
+    /// 10pt is spent on exactly one line in the app now — the pace sentence —
+    /// and a header a point smaller than the countdown under it was a fifth
+    /// size pretending to be a hierarchy. Asserted on the defaults both kinds
+    /// carry, because that is where the old scaled size used to be
+    /// reintroduced: the panel handed one in, and anything that built either
+    /// type without one got a second size instead.
     @MainActor
     func testGroupHeadersAreFixedAtTheCaptionSize() {
-        XCTAssertEqual(SectionLabel(title: "grouped", count: 3).fontSize, Tokens.Ramp.caption)
+        XCTAssertEqual(SectionLabel(title: "grouped", count: 3).fontSize, Tokens.Ramp.detail)
         XCTAssertEqual(
             DisclosureHeader(title: "grouped", count: 3, isExpanded: .constant(false)).fontSize,
-            Tokens.Ramp.caption
+            Tokens.Ramp.detail
         )
     }
 
