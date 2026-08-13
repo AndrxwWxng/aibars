@@ -34,29 +34,47 @@ final class PanelWidthContractTests: XCTestCase {
     /// The panel widths a user can set, including both ends of the slider.
     private static let widths: [Double] = [300, 356, 420, 520]
 
+    /// The text-size slider's two ends and the shipped value between them.
+    ///
+    /// Swept with the widths rather than left at 100%, because every reserved
+    /// width in the row is a multiple of a type size and the text column is not:
+    /// at 130% the figure rails, the chip runs and the spend all grow while the
+    /// panel stays where the user put it, so a 300pt panel at 130% is the
+    /// narrowest line the app can be asked to fit anything on. It is also the
+    /// only combination that drives `chipLimit` down to its floor, which is the
+    /// one branch where the reservation is not simply a division.
+    private static let scales: [Double] = [0.85, 1.0, 1.30]
+
     // MARK: - The contract
 
     @MainActor
     func testNothingDrawsOutsideThePanel() throws {
         let appearance = AppearanceSettings.shared
         let originalWidth = appearance.panelWidth
-        defer { appearance.panelWidth = originalWidth }
+        let originalScale = appearance.textScale
+        defer {
+            appearance.panelWidth = originalWidth
+            appearance.textScale = originalScale
+        }
 
         let state = Self.pathologicalState()
         var failures: [String] = []
 
         for width in Self.widths {
-            appearance.panelWidth = width
-            let panel = MenuBarContentView(
-                state: state,
-                showSettings: .constant(false),
-                appearance: appearance
-            )
-            if let escape = Self.inkOutside(AnyView(panel), panelWidth: CGFloat(width)) {
-                failures.append(String(
-                    format: "%.0fpt panel: ink %.0fpt outside the ground (%@ edge)",
-                    width, escape.overhang, escape.edge
-                ))
+            for scale in Self.scales {
+                appearance.panelWidth = width
+                appearance.textScale = scale
+                let panel = MenuBarContentView(
+                    state: state,
+                    showSettings: .constant(false),
+                    appearance: appearance
+                )
+                if let escape = Self.inkOutside(AnyView(panel), panelWidth: CGFloat(width)) {
+                    failures.append(String(
+                        format: "%.0fpt panel at %.0f%% type: ink %.0fpt outside the ground (%@ edge)",
+                        width, scale * 100, escape.overhang, escape.edge
+                    ))
+                }
             }
         }
 
@@ -79,27 +97,34 @@ final class PanelWidthContractTests: XCTestCase {
     func testNoRowDrawsOutsideItsPanelWidth() throws {
         let appearance = AppearanceSettings.shared
         let originalWidth = appearance.panelWidth
-        defer { appearance.panelWidth = originalWidth }
+        let originalScale = appearance.textScale
+        defer {
+            appearance.panelWidth = originalWidth
+            appearance.textScale = originalScale
+        }
 
         let state = Self.pathologicalState()
         var failures: [String] = []
 
         for width in Self.widths {
-            appearance.panelWidth = width
-            for provider in state.providers where provider.isAuthenticated {
-                let row = ProviderRow(
-                    provider: provider,
-                    result: state.snapshots[provider.id],
-                    onSignIn: {},
-                    appearance: appearance
-                )
-                .frame(width: CGFloat(width))
+            for scale in Self.scales {
+                appearance.panelWidth = width
+                appearance.textScale = scale
+                for provider in state.providers where provider.isAuthenticated {
+                    let row = ProviderRow(
+                        provider: provider,
+                        result: state.snapshots[provider.id],
+                        onSignIn: {},
+                        appearance: appearance
+                    )
+                    .frame(width: CGFloat(width))
 
-                if let escape = Self.inkOutside(AnyView(row), panelWidth: CGFloat(width)) {
-                    failures.append(String(
-                        format: "%.0fpt panel: %@ draws %.0fpt past the %@ edge",
-                        width, provider.serviceID, escape.overhang, escape.edge
-                    ))
+                    if let escape = Self.inkOutside(AnyView(row), panelWidth: CGFloat(width)) {
+                        failures.append(String(
+                            format: "%.0fpt panel at %.0f%% type: %@ draws %.0fpt past the %@ edge",
+                            width, scale * 100, provider.serviceID, escape.overhang, escape.edge
+                        ))
+                    }
                 }
             }
         }

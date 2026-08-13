@@ -75,7 +75,13 @@ public struct ProviderRow: View {
     /// figure column to a row with a percentage, a row still loading and a row
     /// that will never have one" structural rather than a promise between call
     /// sites. Only `height` varies row by row, and only `cardRadius` reads it.
-    private var geometry: RowGeometry { rowGeometry(lines: lines) }
+    ///
+    /// Internal rather than private, and the one reason is that it has to be
+    /// assertable. Nothing in the app frames a row to this number, so a
+    /// reservation that disagreed with the drawing sat there for two releases
+    /// with every test in the suite green; `RowReservationTests` reads it here so
+    /// the reservation is checked against the same states the drawing is.
+    var geometry: RowGeometry { rowGeometry(lines: lines) }
 
     /// The same measurements at a stated set of lines.
     ///
@@ -113,33 +119,59 @@ public struct ProviderRow: View {
     /// `cardRadius`, and a row carrying a pace caption is three lines tall — the
     /// radius has saturated at `Radius.row` long before that. The corners only
     /// need protecting on the short row, which is the row with no forecast.
-    /// A row's height is a function of the settings and of one bit: has this row
-    /// a reading to report. Not which error, not how many digits, not whether a
-    /// spinner is turning — and the bit flips at most once per row per launch,
-    /// because a refresh never discards the reading it already has.
     ///
-    /// So an authenticated row reserves its meter slot and one line under it in
-    /// every state it can be in, and the two states that differ from a reporting
-    /// row by less than a line — loading, failed — occupy the same box with
-    /// different words in it. A row nobody has connected is the one short row:
-    /// its rail says `Sign in` and there is nothing under its name to draw.
+    /// A row's height is a function of the settings and of one bit: does this row
+    /// hold a reading at all. Not which error, not how many digits, not whether a
+    /// spinner is turning — and the bit flips at most once per row per launch.
+    ///
+    /// So a row that has anything to report reserves its meter slot in every
+    /// state it can be in, and one line under it whenever the settings put
+    /// anything on that line, and the states that differ from a reporting row by
+    /// less than a line — loading, failed — occupy the same box with different
+    /// words in it. A row nobody has connected is the one short row: its rail
+    /// says `Sign in` and there is nothing under its name to draw.
+    ///
+    /// It asked the *result* two questions until this pass and both were wrong.
+    /// It asked whether the caption had content, which is true of a reading and
+    /// false of the same row a second earlier, so a Minimal row was 15pt shorter
+    /// the moment its first reading landed and the whole panel shrank around it.
+    /// And it read `isAuthenticated` alone, so a session expiring while the panel
+    /// was open collapsed the row by its whole detail block and threw away the
+    /// one sentence written for that state. `result != nil` is what keeps the box
+    /// a row has already earned; `reservesWindowLine` is what stops the box
+    /// depending on what came back in it.
     private var lines: RowGeometry.Lines {
-        guard provider.isAuthenticated else { return [] }
-        // Loading and failed alike: the slot is reserved and draws nothing, and
-        // the line under it carries "Checking…" or the one sentence we wrote for
-        // this failure. Reserving nothing here is what made ⟳ shrink the window
-        // 26pt under the pointer.
-        guard case .success(let data) = result else { return [.meter, .window] }
+        // A never-connected row has no snapshot, so first-run is fifteen short
+        // rows exactly as before; a row that has reported keeps its box when its
+        // session dies under it.
+        guard provider.isAuthenticated || result != nil else { return [] }
         var lines: RowGeometry.Lines = .meter
-        // A quotaless service says everything it has to say on its status line,
-        // so that one is never absent; a metered window's caption can be
-        // switched off down to nothing — unless a chip is riding on it.
-        if data.primary.limit > 0 {
-            if primaryCaption(data).hasContent { lines.insert(.window) }
-        } else {
-            lines.insert(.window)
-        }
+        if reservesWindowLine { lines.insert(.window) }
         return lines
+    }
+
+    /// Whether this row keeps a line under its meter, asked of the settings and
+    /// of nothing else.
+    ///
+    /// The single predicate behind four decisions — this reservation, what
+    /// `UsageBar` draws, what the ring branch draws, and `drawsDetail`'s
+    /// alignment — because the failure mode is not any one of them being wrong.
+    /// It is two of them disagreeing: the reservation and the drawing diverged by
+    /// exactly one `lineBox` and the row resized on a fetch, with the reservation
+    /// then lying about it.
+    ///
+    /// Every term is a setting, so the answer cannot change while a row is on
+    /// screen. What that costs is stated rather than hidden: under Minimal, where
+    /// amounts, countdowns and the further windows are all off, the line is not
+    /// reserved and therefore not drawn in *any* state — a row still checking
+    /// puts its spinner in the figure rail and a row that failed puts a triangle
+    /// there, and the sentence each of them would have written lives in the row's
+    /// tooltip. That is the preset's whole premise, a name and a number, held to
+    /// in every state rather than only once a reading lands.
+    private var reservesWindowLine: Bool {
+        appearance.showsAmounts
+            || appearance.showsCountdowns
+            || appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .chips
     }
 
     /// Connected, asked, and nothing back yet.
@@ -248,17 +280,25 @@ public struct ProviderRow: View {
     /// JSON body, a Cloudflare challenge id — is diagnostic rather than
     /// information, and it belongs where it is asked for rather than printed
     /// across two lines of a 356pt panel.
+    ///
+    /// The failure is answered before the credential and not after it, which is
+    /// the fix for the one state where those two are true at once. A session that
+    /// expires during a sweep clears `isAuthenticated` in the same main-actor
+    /// turn that stores the failure, so the tooltip used to answer "Sign in to X"
+    /// and drop "Session expired — sign in again" and its diagnostic on the
+    /// floor. Both are kept and the action clause still says what clicking does.
     private var rowHelp: String {
-        guard provider.isAuthenticated else { return "Sign in to \(provider.displayName)" }
-        let action = provider.dashboardURL != nil
-            ? "Open \(provider.displayName) usage page"
-            : "\(provider.displayName) has no usage page"
+        let action = provider.isAuthenticated
+            ? (provider.dashboardURL != nil
+               ? "Open \(provider.displayName) usage page"
+               : "\(provider.displayName) has no usage page")
+            : "Sign in to \(provider.displayName)"
         if let failure {
             return [failure.errorDescription, failure.diagnostic, action]
                 .compactMap { $0 }
                 .joined(separator: "\n")
         }
-        guard let reading = preciseReading else { return action }
+        guard provider.isAuthenticated, let reading = preciseReading else { return action }
         return "\(reading)\n\(action)"
     }
 
@@ -615,10 +655,25 @@ public struct ProviderRow: View {
                 animatesDigits: true
             )
             .frame(width: geometry.headlineRail, alignment: .trailing)
+        } else if isLoading, !reservesWindowLine {
+            // The one state that has nowhere else to be drawn. With the window
+            // line unreserved — Minimal, and any hand-made settings like it —
+            // "Checking…" is not written under the title in any state, so a row
+            // waiting on its first answer would otherwise be a service name and
+            // an empty rail, which is what a row nobody has connected looks like.
+            // The spinner goes in the same 14pt square the failure triangle takes,
+            // for the same reason it does: the rail is the row's state column.
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: Self.railGlyph, height: Self.railGlyph, alignment: .trailing)
+                .frame(minWidth: geometry.headlineRail, alignment: .trailing)
+                .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
+                .accessibilityLabel("Checking")
         } else {
-            // Loading, or the number switched off. The rail stands empty rather
-            // than closing up: a row that is still checking must end on the same
-            // x as the row above it that already knows.
+            // Loading with a line under the title to say so, or the number
+            // switched off. The rail stands empty rather than closing up: a row
+            // that is still checking must end on the same x as the row above it
+            // that already knows.
             Color.clear
                 .frame(width: geometry.headlineRail, height: 0)
                 .accessibilityHidden(true)
@@ -671,22 +726,29 @@ public struct ProviderRow: View {
     /// one already chosen. Top alignment exists for a row with a block under its
     /// title; a row whose only detail is a single pace caption is two lines
     /// beside an 18pt mark, which is exactly the case centring is here for.
+    ///
+    /// Off the same two questions `lines` asks and in the same order, because the
+    /// two must agree: this chooses the alignment for the block `lines` reserved
+    /// the height of, and a row that reserved a detail block and then centred as
+    /// though it had none put its mark half a line off the title it belongs to.
     private var drawsDetail: Bool {
-        // Nothing under the title on a row nobody has connected: the rail says
-        // `Sign in`, and that one line beside the mark is exactly the case
-        // centring is here for. It is also why the row is 38pt rather than 66 —
-        // vertical space in proportion to what the row has to say.
-        guard provider.isAuthenticated else { return false }
-        // Loading and failed each draw a reserved slot and a line under it.
-        guard case .success(let data) = result else { return true }
+        // Nothing under the title on a row nobody has connected and that has
+        // never reported: the rail says `Sign in`, and that one line beside the
+        // mark is exactly the case centring is here for. It is also why the row is
+        // 38pt rather than 66 — vertical space in proportion to what the row has
+        // to say.
+        guard provider.isAuthenticated || result != nil else { return false }
         // Every style but the ring draws its meter in the text column, and that
-        // slot is now occupied on every row — a quota, a reading of zero and a
-        // service that reports no quota at all each fill it with something.
+        // slot is occupied on every row — a quota, a reading of zero, a service
+        // that reports no quota at all, and a row still waiting each fill it with
+        // something.
         guard appearance.meterStyle == .ring else { return true }
-        // Under the ring the dial is the meter, so the text column can still be
-        // empty. A quotaless provider gets its status line either way.
-        guard data.primary.limit > 0 else { return true }
-        if primaryCaption(data).hasContent { return true }
+        // Under the ring the dial is the meter and the leading column has paid
+        // for it, so the text column can genuinely be empty. What is left there is
+        // the window line, which is exactly what `reservesWindowLine` answers —
+        // and two content-dependent extras that can only add to it.
+        if reservesWindowLine { return true }
+        guard case .success(let data) = result else { return false }
         if budgetLine(for: data) != nil { return true }
         return !data.secondary.isEmpty
             && appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .expanded
@@ -694,12 +756,19 @@ public struct ProviderRow: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if !provider.isAuthenticated {
+        if !provider.isAuthenticated, result == nil {
             // Nothing. The line that used to read "Not connected" said what the
             // rail beside it says in the word for the action, on a row that has no
             // reading to explain — fifteen of them on a first run, each paying a
             // reserved line and a reserved meter slot to repeat the one thing the
             // row already makes obvious.
+            //
+            // Both halves of the condition, not just the flag. A session that dies
+            // while the panel is open clears the flag with the failure already
+            // stored, and this returned `EmptyView` to a row `lines` had just
+            // reserved a box for — so the row collapsed and "Session expired —
+            // sign in again", the one sentence written for this exact state, was
+            // unreachable from a sweep for every provider in the app.
             EmptyView()
         } else if let result {
             switch result {
@@ -755,15 +824,26 @@ public struct ProviderRow: View {
     /// a row's height is whether the row has a reading, and it must not flip when
     /// a fetch resolves — and because a rule drawn where a meter would go reads as
     /// a table rule rather than as an absence.
+    ///
+    /// The sentence is drawn only where the row reserves a line for it. Where it
+    /// does not — Minimal — this state costs exactly what a reporting row costs,
+    /// which is the slot and nothing else, and the state is in the rail instead:
+    /// a spinner while the fetch is out, the warning triangle when it failed. The
+    /// alternative was a Minimal panel that stood 15pt per row taller for its
+    /// first two seconds and then shrank under the pointer, which is the defect
+    /// this whole predicate exists to close.
+    @ViewBuilder
     private func stated(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: metrics.captionGap) {
             reservedMeterSlot
-            Text(text)
-                .font(.system(size: metrics.detailSize, weight: .regular))
-                .foregroundColor(Tokens.Ink.muted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+            if reservesWindowLine {
+                Text(text)
+                    .font(.system(size: metrics.detailSize, weight: .regular))
+                    .foregroundColor(Tokens.Ink.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+            }
         }
     }
 
@@ -783,7 +863,7 @@ public struct ProviderRow: View {
     @ViewBuilder
     private func primaryMetric(_ data: UsageData) -> some View {
         let metric = data.primary
-        let run = chipRun(data.secondary)
+        let run = chipRun(data.secondary, carriesSpend: data.spend != nil)
         if metric.limit > 0 {
             switch appearance.meterStyle {
             case .bar, .numberOnly:
@@ -802,14 +882,20 @@ public struct ProviderRow: View {
                     appearance: appearance,
                     spend: data.spend,
                     chips: run.chips,
-                    overflow: run.overflow
+                    overflow: run.overflow,
+                    reservesLine: reservesWindowLine
                 )
             case .ring:
                 // The dial in the leading column and the trailing percentage
-                // are the meter here; only the context line is left to draw,
-                // and with both its halves switched off the row is one line.
-                let line = primaryCaption(data)
-                if line.hasContent { line }
+                // are the meter here; only the context line is left to draw.
+                // Reserved or absent, never "drawn when there happens to be
+                // something to say": with the line reserved, a caption with
+                // nothing in it holds its box open so the row measures the same
+                // before and after its first reading.
+                if reservesWindowLine {
+                    let line = primaryCaption(data)
+                    if line.hasContent { line } else { ReservedTextLine(size: metrics.detailSize) }
+                }
             }
         } else {
             // A service that reports a state rather than a quota. The slot is
@@ -818,15 +904,26 @@ public struct ProviderRow: View {
             // instead: a figure means there is a quota, a dot means there is not.
             // A rule drawn between a title and a caption was indistinguishable
             // from a row divider, which is a poor way to make a fine distinction.
-            slotted(metric) {
-                StatusLine(
-                    metric: metric,
-                    accent: provider.accentColor,
-                    appearance: appearance,
-                    spend: data.spend,
-                    chips: run.chips,
-                    overflow: run.overflow
-                )
+            //
+            // The status line goes with the window line, because a row cannot know
+            // it is quotaless until it reports: reserving a line for the sentence
+            // only when a service turns out to have one is the same fetch-time
+            // resize seen from its other side. Where the line is unreserved the
+            // dot in the rail is the whole of what a quotaless row says, which is
+            // what it says while it is loading too.
+            if reservesWindowLine {
+                slotted(metric) {
+                    StatusLine(
+                        metric: metric,
+                        accent: provider.accentColor,
+                        appearance: appearance,
+                        spend: data.spend,
+                        chips: run.chips,
+                        overflow: run.overflow
+                    )
+                }
+            } else {
+                reservedMeterSlot
             }
         }
     }
@@ -885,11 +982,14 @@ public struct ProviderRow: View {
     /// The windows the caption line carries, and how many it had no room for.
     /// Empty under every style but `.chips`, which is the only one that puts them
     /// on a line that already exists.
-    private func chipRun(_ windows: [UsageMetric]) -> (chips: [UsageMetric], overflow: Int) {
+    private func chipRun(
+        _ windows: [UsageMetric],
+        carriesSpend: Bool
+    ) -> (chips: [UsageMetric], overflow: Int) {
         guard !windows.isEmpty,
               appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .chips
         else { return ([], 0) }
-        let split = chipSplit(windows.count)
+        let split = chipSplit(windows.count, carriesSpend: carriesSpend)
         return (Array(windows.prefix(split.shown)), split.hidden)
     }
 
@@ -899,12 +999,20 @@ public struct ProviderRow: View {
 
     /// How many chips the line holds, and the user's own ceiling on top of it.
     ///
-    /// The width half of that is `RowGeometry`'s, which owns the chip's furniture
-    /// and its two reserved runs. `RowGeometry.chipLimit` deliberately does not
-    /// clamp upward, because the ceiling is not a measurement: a stepper set to
-    /// six windows says how many the user wants to see, not how many fit. This is
-    /// the only place the two ends meet.
-    private var chipLimit: Int {
+    /// The width half of that is `RowGeometry`'s, which owns the chip's two
+    /// reserved runs and the gap between them. `RowGeometry.chipLimit`
+    /// deliberately does not clamp upward, because the ceiling is not a
+    /// measurement: a stepper set to six windows says how many the user wants to
+    /// see, not how many fit. This is the only place the two ends meet.
+    ///
+    /// `carriesSpend` is presence of a `SpendReport` and nothing about its
+    /// amount. It belongs here and not in `lines` for a reason worth stating:
+    /// `SpendFigure` leads the caption at `layoutPriority(1)` in every candidate
+    /// and cannot be dropped, so it takes width off the same line the chips ride
+    /// — but it takes no *height*, because the line is one `lineBox` whatever is
+    /// on it. A width-only input cannot resize a row when a bill lands, which is
+    /// the whole reason the reservation is otherwise content-free.
+    private func chipLimit(carriesSpend: Bool) -> Int {
         min(
             appearance.secondaryWindowLimit,
             RowGeometry.chipLimit(
@@ -912,7 +1020,11 @@ public struct ProviderRow: View {
                 // written there: this is asked while the row is still working out
                 // which lines it has, and the width does not depend on them.
                 textColumnWidth: rowGeometry(lines: []).textColumnWidth,
-                captionSize: metrics.captionSize
+                // The size the chips are actually set in. It was `captionSize`,
+                // which is a point smaller at every density, so the budget was
+                // measured one type step below the type being drawn.
+                chipSize: metrics.detailSize,
+                carriesSpend: carriesSpend
             )
         )
     }
@@ -927,8 +1039,12 @@ public struct ProviderRow: View {
     /// off the line rather than being added to it — pushed past the trailing edge
     /// it would be truncated away, which is the failure it exists to report — and
     /// one real chip is always kept, since "+6" alone names no window at all.
-    private func chipSplit(_ count: Int) -> (shown: Int, hidden: Int) {
-        let limit = chipLimit
+    ///
+    /// That last clause is the one case where the run draws one item more than the
+    /// limit, and `RowGeometry.chipLimit` pays for it by reserving the "+N"'s
+    /// three cells before it divides rather than after.
+    private func chipSplit(_ count: Int, carriesSpend: Bool) -> (shown: Int, hidden: Int) {
+        let limit = chipLimit(carriesSpend: carriesSpend)
         guard count > limit else { return (count, 0) }
         let shown = max(1, limit - 1)
         return (shown, count - shown)
@@ -963,7 +1079,7 @@ public struct ProviderRow: View {
     /// place. The chips are part of it by construction, which is what stops the
     /// row reserving no line and then drawing chips on it.
     private func primaryCaption(_ data: UsageData) -> MetricCaption {
-        let run = chipRun(data.secondary)
+        let run = chipRun(data.secondary, carriesSpend: data.spend != nil)
         return MetricCaption(
             metric: data.primary,
             isSecondary: false,
@@ -1425,6 +1541,16 @@ public struct UsageBar: View {
     /// passes them to the line that carries them.
     public let chips: [UsageMetric]
     public let overflow: Int
+    /// Whether the row has reserved a line under this meter — `ProviderRow`'s
+    /// `reservesWindowLine`, handed down rather than worked out again here.
+    ///
+    /// The bar cannot answer it: the predicate reads the row's own
+    /// `showsAllWindows` override, and two views deciding the same thing in two
+    /// ways is precisely how the reservation and the drawing came to differ by a
+    /// line in the first place. True is the right default for the one caller that
+    /// does not say — the settings sample, whose whole job is to look like the
+    /// panel's busiest row.
+    public let reservesLine: Bool
 
     public init(
         metric: UsageMetric,
@@ -1433,7 +1559,8 @@ public struct UsageBar: View {
         appearance: AppearanceSettings? = nil,
         spend: SpendReport? = nil,
         chips: [UsageMetric] = [],
-        overflow: Int = 0
+        overflow: Int = 0,
+        reservesLine: Bool = true
     ) {
         self.metric = metric
         self.isSecondary = isSecondary
@@ -1441,6 +1568,7 @@ public struct UsageBar: View {
         self.spend = spend
         self.chips = chips
         self.overflow = overflow
+        self.reservesLine = reservesLine
         self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
     }
 
@@ -1469,7 +1597,25 @@ public struct UsageBar: View {
             if !isSecondary {
                 MeterSlot(metric: metric, accent: accent, appearance: appearance)
             }
-            if caption.hasContent { caption }
+            // Whether there is a line here is the settings' answer; what goes on
+            // it is the reading's. Those two used to be one question — a caption
+            // with nothing in it drew nothing and cost nothing — so a row that had
+            // reserved a line stood a whole `lineBox` shorter the moment its first
+            // reading landed and every row beneath it moved up.
+            //
+            // The outer `if` is what makes it settings-only, and it is the reason
+            // an unreserved line drops a spend as well as a countdown: money is
+            // the one thing `MetricCaption.hasContent` returns true for that no
+            // setting governs, so drawing it here would put the line back on a
+            // Minimal row the instant a bill arrived — a row growing on a fetch,
+            // which is the defect, wearing a currency symbol.
+            if reservesLine {
+                if caption.hasContent {
+                    caption
+                } else {
+                    ReservedTextLine(size: metrics.detailSize)
+                }
+            }
         }
         // The meter says nothing out loud — the fill fraction is the whole
         // reading, so it is spoken as the meter's value. Clamped, because an
@@ -1478,14 +1624,40 @@ public struct UsageBar: View {
         .accessibilityValue("\(Int((min(max(metric.percent, 0), 1) * 100).rounded()))% used")
 
         // The caption's own text is the label whenever one is drawn, and naming
-        // the bar here would throw the amounts and the countdown away. With both
-        // halves of the caption switched off there is no text left, so then — and
-        // only then — the window names itself.
-        if caption.hasContent {
+        // the bar here would throw the amounts and the countdown away. With no
+        // line under the meter, or with both halves of the caption switched off,
+        // there is no text left — so then, and only then, the window names
+        // itself. It has to ask both questions the drawing above asks, or a
+        // Minimal row goes out unnamed to a screen reader.
+        if reservesLine, caption.hasContent {
             bar
         } else {
             bar.accessibilityLabel(metric.label)
         }
+    }
+}
+
+/// The window line with nothing written on it.
+///
+/// The same trick `reservedMeterSlot` plays one line up, for the same reason: a
+/// row's height must be a function of its settings and not of what came back
+/// from the network, so a line the settings reserve is a line the row occupies
+/// in every state — with a countdown in it, with an error in it, and with
+/// nothing in it. Sized at `Tokens.lineBox`, which is the floor every
+/// single-line detail in the panel is held at, so the empty box and the four
+/// things that can fill it are one height.
+///
+/// One implementation and not a `Color.clear` written out at each of the three
+/// call sites, because three copies of a reservation is how a reservation comes
+/// to disagree with itself.
+struct ReservedTextLine: View {
+    /// `Metrics.detailSize` — the size of the text this stands in for.
+    let size: CGFloat
+
+    var body: some View {
+        Color.clear
+            .frame(height: Tokens.lineBox(size))
+            .accessibilityHidden(true)
     }
 }
 
@@ -1808,7 +1980,11 @@ public struct MetricCaption: View {
                 chips: chips,
                 overflow: overflow,
                 accent: accent,
-                appearance: appearance
+                appearance: appearance,
+                // The run's cap comes out of what is left of the line, and the
+                // spend at the head of it is the part of that line nothing can
+                // give back.
+                carriesSpend: shownSpend != nil
             )
         } else if appearance.showsUsageNumber {
             Color.clear
@@ -1951,7 +2127,8 @@ public struct StatusLine: View {
                     chips: chips,
                     overflow: overflow,
                     accent: accent,
-                    appearance: appearance
+                    appearance: appearance,
+                    carriesSpend: spend != nil
                 )
             }
         }
@@ -2190,22 +2367,49 @@ struct NumberedMetric: Identifiable {
 /// nothing. That is fixed one level down, in the chip: each reading holds a rail of
 /// four cells, so a percentage chip is one width whatever the number in it.
 ///
-/// Not by reserving `chips.count × RowGeometry.chipWidth` for the run, which was
-/// tried and measured: that estimate still counts a capsule's padding and a dot
-/// this chip no longer draws, so at 300pt two slots claimed 196pt of a 248pt text
-/// column — it pushed the row's own trailing edge past the panel edge and left the
-/// sentence beside it nothing whatsoever. A reservation wider than the thing
-/// reserved is not alignment.
+/// And what the run *costs* is settled one level down as well, in the chip's own
+/// cap. `RowGeometry.chipCap` says how wide one chip may draw and
+/// `RowGeometry.chipLimit` says how many of them the line is offered, out of the
+/// same arithmetic against the same text column — so the run's ideal width is a
+/// function of the settings alone and the reservation is an upper bound on it by
+/// construction. Reserving `chips.count × chipWidth` without capping the chip was
+/// tried and measured and is the shipped bug: the estimate counted a capsule's
+/// padding and a dot this chip does not draw and left out four cells of reading,
+/// so a 356pt row was handed three slots for a 344pt run in a 304pt column, and
+/// `fixedSize` meant the excess had nowhere to go but past the panel's edge.
 struct SecondaryChipRun: View {
     let chips: [UsageMetric]
     let overflow: Int
     let accent: Color
     let appearance: AppearanceSettings
+    /// Whether the caption's leading half carries a spend figure it cannot give
+    /// back. The run does not draw it and cannot see it, but it takes width off
+    /// the same line, so the cap has to know.
+    let carriesSpend: Bool
+
+    init(
+        chips: [UsageMetric],
+        overflow: Int,
+        accent: Color,
+        appearance: AppearanceSettings,
+        carriesSpend: Bool = false
+    ) {
+        self.chips = chips
+        self.overflow = overflow
+        self.accent = accent
+        self.appearance = appearance
+        self.carriesSpend = carriesSpend
+    }
 
     var body: some View {
         HStack(spacing: Tokens.Space.medium) {
             ForEach(numbered) { window in
-                SecondaryChip(metric: window.metric, accent: accent, appearance: appearance)
+                SecondaryChip(
+                    metric: window.metric,
+                    accent: accent,
+                    appearance: appearance,
+                    cap: cap
+                )
             }
             if overflow > 0 {
                 OverflowChip(count: overflow, appearance: appearance)
@@ -2216,7 +2420,40 @@ struct SecondaryChipRun: View {
         // of unlabelled figures: `3/25  12/50`, two readings of two windows the
         // row can no longer name. The width it needs is the width it draws, and
         // the line's other half is sized against that.
+        //
+        // What makes that safe now is the cap above rather than the caption's
+        // good manners: the run cannot ask for more than the column has, so
+        // "the width it needs" is a width the line is known to hold.
         .fixedSize()
+    }
+
+    /// The widest any one of these chips may draw.
+    ///
+    /// Read from `RowGeometry` off the settings, exactly as the row reads the
+    /// chip *count* from it — the panel width, the leading column and the type
+    /// size are all settings, so this is the same number the row divided to
+    /// decide how many chips to hand over. Asked here rather than threaded down
+    /// through `MetricCaption` and `StatusLine` because the run is the thing that
+    /// must not overflow, and a value passed through two views is a value two
+    /// views can forget to pass.
+    private var cap: CGFloat {
+        RowGeometry.chipCap(
+            textColumnWidth: RowGeometry(
+                metrics: appearance.metrics,
+                showsPercentage: appearance.showsPercentage,
+                meterStyle: appearance.meterStyle,
+                logoStyle: appearance.logoStyle,
+                logoSize: CGFloat(appearance.logoSize),
+                panelWidth: CGFloat(appearance.panelWidth),
+                rowActions: appearance.rowActions,
+                // The text column is the panel minus its gutters minus the
+                // leading column, and none of the three is a function of which
+                // lines the row draws.
+                lines: []
+            ).textColumnWidth,
+            chipSize: appearance.metrics.detailSize,
+            carriesSpend: carriesSpend
+        )
     }
 
     private var numbered: [NumberedMetric] {
@@ -2236,18 +2473,34 @@ public struct SecondaryChip: View {
     @ObservedObject private var appearance: AppearanceSettings
     public let metric: UsageMetric
     public let accent: Color
+    /// The widest this chip may draw, from `RowGeometry.chipCap`.
+    ///
+    /// A ceiling and not a width: a chip whose two runs are shorter than this
+    /// draws shorter than this. What it buys is that no chip is ever *wider*,
+    /// which is what turns the row's chip budget from an estimate of a drawing
+    /// into a bound on it.
+    public let cap: CGFloat
 
     public init(
         metric: UsageMetric,
         accent: Color = .accentColor,
-        appearance: AppearanceSettings? = nil
+        appearance: AppearanceSettings? = nil,
+        cap: CGFloat
     ) {
         self.metric = metric
         self.accent = accent
+        self.cap = cap
         self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
     }
 
     private var size: CGFloat { appearance.metrics.detailSize }
+
+    /// How the cap divides between the label and the reading. Named once and
+    /// read twice, so the two frames below cannot be given caps that do not add
+    /// up to the one this chip was handed.
+    private var runs: (label: CGFloat, reading: CGFloat) {
+        RowGeometry.chipRuns(cap: cap, chipSize: size)
+    }
 
     public var body: some View {
         HStack(spacing: Tokens.Space.snug) {
@@ -2261,6 +2514,16 @@ public struct SecondaryChip: View {
                 // off the edge.
                 .lineLimit(1)
                 .truncationMode(.tail)
+                // And that is a ceiling now rather than a hope. `lineLimit` alone
+                // truncates only when something narrower than the text proposes a
+                // width, and nothing does: the run above is `fixedSize`, so the
+                // label was asking for its whole ideal — 100.5pt for
+                // "Weekly · all models" at 11 — and taking it out of a column that
+                // did not have it. Eight cells is what `RowGeometry` reserved for
+                // this run, so eight cells is what it may draw, and the estimate
+                // and the drawing are the same number rather than two guesses at
+                // one.
+                .frame(maxWidth: runs.label, alignment: .leading)
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(reading.digits)
                     // A figure, so it takes the figures' rule and not the meter's:
@@ -2292,7 +2555,18 @@ public struct SecondaryChip: View {
                 // move the truncation point of the caption beside it. A floor
                 // rather than a width, because "12/100" is a count and not a
                 // percentage and may be wider.
-                .frame(minWidth: Tokens.figureWidth(size, digits: 4), alignment: .trailing)
+                //
+                // And a ceiling above it, at the nine cells `RowGeometry` reserves:
+                // `9767.2M/0` is the widest reading the formatter can put here and
+                // it takes exactly those nine. The floor is clamped under the
+                // ceiling rather than stated flat, because a line too narrow to
+                // hold a whole chip hands this run less than four cells and a
+                // `minWidth` above its own `maxWidth` is not a frame.
+                .frame(
+                    minWidth: min(runs.reading, Tokens.figureWidth(size, digits: 4)),
+                    maxWidth: runs.reading,
+                    alignment: .trailing
+                )
                 // The reading is why the chip is here, so it is the part that
                 // must not be abbreviated away.
                 //
