@@ -3,6 +3,13 @@ import SwiftUI
 import AppKit
 @testable import aibarsCore
 
+/// Prints the preview row's fitting height next to the real row's, one
+/// appearance setting at a time, so the setting that separates them can be
+/// found by reading rather than by guessing.
+///
+/// It asserts nothing — the two numbers are the output — and it builds twenty
+/// hosting views to produce them, ten reports of two each, so it is gated with
+/// the other harnesses on `DebugHarness` and reports skipped in an ordinary run.
 final class ZZBisect: XCTestCase {
     @MainActor
     private func fittingHeight<V: View>(_ view: V, width: CGFloat) -> CGFloat {
@@ -13,6 +20,8 @@ final class ZZBisect: XCTestCase {
 
     @MainActor
     func testBisect() throws {
+        try DebugHarness.skipUnlessAsked("print the preview-against-real row heights")
+
         let domain = "aibars.zzbisect"
         let store = try XCTUnwrap(UserDefaults(suiteName: domain))
         store.removePersistentDomain(forName: domain)

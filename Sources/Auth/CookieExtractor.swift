@@ -483,16 +483,23 @@ public enum CookieExtractors {
     /// profiles are the usual way — and `search` deliberately stops at the
     /// first. This does not stop, and dedupes on the credential itself so the
     /// same session seen twice is still one account.
+    ///
+    /// `extractors` exists so the dedupe can be driven by a test. It defaults to
+    /// `available()`, and a default argument is only evaluated when the argument
+    /// is omitted — so a caller that passes its own list does not build the real
+    /// extractors, and cannot seed the process-lifetime cache behind
+    /// `available()` with a stub that would then leak into every later lookup.
     public static func searchAll(
         _ queries: [Query],
-        allowingKeychainPrompt: Bool = false
+        allowingKeychainPrompt: Bool = false,
+        extractors: [CookieExtractor] = available()
     ) -> [String: [BrowserCookie]] {
         guard !queries.isEmpty else { return [:] }
         let domains = Array(Set(queries.map(\.domain)))
 
         var found: [String: [BrowserCookie]] = [:]
         var seen: Set<String> = []
-        for extractor in available() {
+        for extractor in extractors {
             guard let jar = try? extractor.cookies(
                 forAnyOf: domains,
                 allowingKeychainPrompt: allowingKeychainPrompt
@@ -502,10 +509,21 @@ public enum CookieExtractors {
                 let scoped = jar.filter { matches(domain: $0.domain, query.domain) }
                 // Group by profile: one profile holds at most one session per
                 // service, and its cookies have to be resolved together so a
-                // chunked token isn't stitched across two accounts.
+                // chunked token isn't stitched across two accounts. Sorted,
+                // because when two profiles do hold one session they collapse to
+                // a single account below, and the survivor's `origin` would
+                // otherwise be whichever row the database handed back first.
                 for profile in Set(scoped.map { $0.profile ?? "" }).sorted() {
                     let inProfile = scoped.filter { ($0.profile ?? "") == profile }
                     guard let cookie = resolve(names: query.names, in: inProfile) else { continue }
+                    // Keyed by query as well as by value. Two queries can resolve
+                    // to one string — a service that writes its session and its
+                    // organisation into cookies with the same contents, or two
+                    // accounts that are genuinely the same login — and on the
+                    // value alone the second query would silently find nothing,
+                    // which reads on screen as one of the two services being
+                    // signed out. The value alone is only the right key within
+                    // one query, which is what this pair says.
                     let fingerprint = "\(query.key)|\(cookie.value)"
                     guard !seen.contains(fingerprint) else { continue }
                     seen.insert(fingerprint)
