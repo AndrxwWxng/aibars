@@ -477,6 +477,196 @@ final class HistoryPaneTests: XCTestCase {
         }
     }
 
+    // MARK: - Nothing is read while the pane is being drawn
+
+    /// The pane used to make three synchronous SQLite reads inside `body` —
+    /// `series()`, `days(for:since:)` and `samples(for:since:)`, all three
+    /// `queue.sync` on the main actor, on the same serial queue the writer holds
+    /// a transaction on. A sweep landing while the pane was open bumped
+    /// `revision`, which re-ran `body`, which queued three reads behind the
+    /// insert that had just published the revision.
+    ///
+    /// The proof that they are gone is that a pane over a *stocked* store
+    /// measures exactly what a pane over an empty one does on its first layout:
+    /// if `body` still read the store, the chart, the pickers and the table rows
+    /// would all be in that first measurement. Only after the run loop turns —
+    /// which is what lets the `.task` land — do the two diverge.
+    ///
+    /// It is also the one place in the suite that measures the pane before its
+    /// data arrives, so it is where the empty `Load` is proved to draw at all
+    /// rather than trapping on a series that is not there yet.
+    @MainActor
+    func testThePaneDrawsBeforeItHasReadAnythingAndReadsNothingWhileItDraws() throws {
+        let empty = try store("unread-empty")
+        let full = try store("unread-full")
+        seed(full, provider: "claude", windows: ["5-hour messages", "Weekly limit"])
+        seed(full, provider: "gemini", windows: ["Daily prompts"])
+
+        let bare = unsettled(HistoryPane(store: empty))
+        let bareFirst = bare.fittingSize
+        let stocked = unsettled(HistoryPane(store: full))
+        let stockedFirst = stocked.fittingSize
+
+        XCTAssertGreaterThan(bareFirst.height, 0, "the empty Load collapsed the pane")
+        XCTAssertEqual(
+            stockedFirst, bareFirst,
+            "the pane measures \(stockedFirst) over a stocked store against \(bareFirst) over an "
+                + "empty one, before either has been read — so something in body is reading the "
+                + "store synchronously again"
+        )
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+
+        XCTAssertEqual(
+            bare.fittingSize, bareFirst,
+            "the pane resized when a load carrying nothing landed"
+        )
+        XCTAssertGreaterThan(
+            stocked.fittingSize.height, stockedFirst.height,
+            "the load never landed, so this test is measuring nothing twice"
+        )
+    }
+
+    /// The same hosting as `hosted(_:)` without the run-loop spin at the end, so
+    /// what is measured is the pass before the `.task` has resumed.
+    @MainActor
+    private func unsettled<V: View>(_ view: V) -> NSView {
+        let host = NSHostingView(rootView: AnyView(view))
+        host.frame = CGRect(x: 0, y: 0, width: 660, height: 520)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = host
+        window.layoutIfNeeded()
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    /// And the part of the pane that must not move when the load does land: the
+    /// grid.
+    ///
+    /// Two stores identical inside the selected week, differing only in a reading
+    /// two months back. Same table rows, same chart window, and a coverage
+    /// caption of the same length — "3 of the last 90 days" against "4 of the
+    /// last 90 days" — so the only difference on screen is one more coloured
+    /// square in the ninety. A pane that grew by so much as a point has a grid
+    /// sizing itself to its data.
+    @MainActor
+    func testAnOlderDayFillsASquareAndMovesNothing() throws {
+        let near = try store("grid-near")
+        let far = try store("grid-far")
+        // Sixty days back, and recorded *first*: inside the grid's ninety and
+        // outside the pane's week, so it is a square that fills and nothing else.
+        // The store refuses a reading that arrives before the one already stored
+        // — the same guard that throttles a burst of refreshes — so the oldest
+        // has to go in before the three that follow it.
+        far.record(
+            UsageData(
+                providerID: "claude",
+                fetchedAt: anchor.addingTimeInterval(-60 * 24 * 60 * 60),
+                primary: UsageMetric(label: "5-hour messages", used: 90, limit: 100)
+            ),
+            for: "claude"
+        )
+        for store in [near, far] {
+            for dayOffset in [2, 1, 0] {
+                store.record(
+                    UsageData(
+                        providerID: "claude",
+                        fetchedAt: anchor.addingTimeInterval(-Double(dayOffset) * 24 * 60 * 60),
+                        primary: UsageMetric(label: "5-hour messages", used: 40, limit: 100)
+                    ),
+                    for: "claude"
+                )
+            }
+        }
+        let series = try XCTUnwrap(far.series().first, "the seeding recorded nothing")
+        XCTAssertEqual(
+            far.days(for: series, since: anchor.addingTimeInterval(-89 * 24 * 60 * 60)).count, 4,
+            "the sixtieth day back did not become a rollup, so the grid has nothing extra in it"
+        )
+
+        let shallow = hosted(HistoryPane(store: near))
+        let deep = hosted(HistoryPane(store: far))
+        XCTAssertEqual(
+            deep.fittingSize, shallow.fittingSize,
+            "the pane measures \(deep.fittingSize) with a fourth square filled against "
+                + "\(shallow.fittingSize) with three — the grid is sizing itself to its data"
+        )
+    }
+
+    /// The ninety cells are `Button`s, and none of them is an `NSButton`.
+    ///
+    /// Recorded rather than assumed. SwiftUI draws a `.plain` button inside a
+    /// `Form` itself and never instantiates an AppKit control for it — the same
+    /// reason this suite cannot read the archive buttons' disabled state — so the
+    /// grid adds ninety hit targets and nothing at all to the control census.
+    /// The count is asserted as *unchanged* because that is the surprising half:
+    /// the day ninety `NSButton`s do appear here is the day the settings window
+    /// grew ninety tab stops, which is exactly what the one focus target on the
+    /// grid exists to prevent.
+    @MainActor
+    func testTheGridAddsNinetyTargetsAndNoControls() throws {
+        let store = try store()
+        seed(store, provider: "claude", windows: ["5-hour messages"])
+        let host = hosted(HistoryPane(store: store))
+
+        let all = controls(in: host)
+        XCTAssertEqual(
+            all.compactMap({ $0 as? NSButton }).count, 1,
+            "the grid's ninety cells became AppKit buttons: \(all.map { type(of: $0) })"
+        )
+        XCTAssertLessThan(
+            all.count, 10,
+            "ninety squares turned into ninety controls: \(all.count) of them"
+        )
+    }
+
+    // MARK: - The export
+
+    /// The export runs off the main actor now, and the file it writes is the same
+    /// file byte for byte.
+    ///
+    /// What made the switch safe is `until:`. The old one-argument call meant
+    /// "everything since the start of the range", so its answer depended on when
+    /// it ran and could not be moved off the thread that pressed the button
+    /// without changing what came out. With both ends captured, the range is a
+    /// property of the arguments and where the work happens stops mattering.
+    @MainActor
+    func testTheExportOffTheMainActorIsByteIdenticalToTheSynchronousOne() async throws {
+        let store = try store()
+        seed(store, provider: "claude", windows: ["5-hour messages", "Weekly limit"])
+        seed(store, provider: "gemini", windows: ["Daily prompts"])
+        let interval = HistoryRange.quarter.interval(ending: anchor.addingTimeInterval(120))
+
+        let here = store.exportCSV(since: interval.start, until: interval.end)
+        let (there, ranOnMain) = await Task.detached(priority: .userInitiated) {
+            (store.exportCSV(since: interval.start, until: interval.end), Thread.isMainThread)
+        }.value
+
+        XCTAssertFalse(ranOnMain, "the detached export ran on the main thread anyway")
+        XCTAssertGreaterThan(
+            here.split(separator: "\n", omittingEmptySubsequences: true).count, 1,
+            "the fixture exported nothing but a header, so byte-equality proves nothing"
+        )
+        XCTAssertEqual(
+            Array(here.utf8), Array(there.utf8),
+            "the same interval exported two different files depending on which thread asked"
+        )
+
+        // And `until:` bites, which is the whole reason the interval can be
+        // captured at all: an end before the readings leaves the header alone.
+        let closed = store.exportCSV(
+            since: interval.start, until: anchor.addingTimeInterval(-24 * 60 * 60)
+        )
+        XCTAssertEqual(
+            closed.split(separator: "\n", omittingEmptySubsequences: true).count, 1,
+            "the export ignored its upper bound: \(closed)"
+        )
+        XCTAssertTrue(closed.hasPrefix("grain,"))
+    }
+
     // MARK: - The figure rail
 
     /// The day table's figure columns are reserved, not measured, and this is the

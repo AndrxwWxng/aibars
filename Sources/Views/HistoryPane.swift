@@ -9,23 +9,37 @@ import UniformTypeIdentifiers
 // `UsageHistoryStore` (@MainActor, ObservableObject, `shared` — optional):
 //     isEnabled: Bool                                   the recording switch
 //     revision: Int                                     bumped when anything moved
-//     func series() -> [HistorySeriesID]
-//     func samples(for: HistorySeriesID, since: Date) -> [HistorySample]
-//     func days(for: HistorySeriesID, since: Date) -> [HistoryDay]
-//     func exportCSV(since: Date) -> String
 //     func forget(_ providerID: String)
+//   and, off the main actor, everything this pane reads:
+//     nonisolated func allSeries() async -> [HistorySeriesID]
+//     nonisolated func days(for: HistorySeriesID, sinceDayStarting: Date) async -> [HistoryDay]
+//     nonisolated func peaks(for: HistorySeriesID, from: Date, to: Date, count: Int) async -> [Double?]
+//     nonisolated func exportCSV(since: Date, until: Date) -> String
+//
+// The isolated `series()`, `samples(for:since:)` and `days(for:since:)` are
+// deliberately *not* on that list any more. All three are `queue.sync` on the
+// main actor, and this view called all three inside `body` — on the same serial
+// queue the writer holds a transaction on. A sweep of eleven providers landing
+// while the pane was open bumped `revision`, which re-ran `body`, which queued
+// three SQLite reads behind the insert that had just published the revision.
+// Nothing about this pane needs to be synchronous: it is a window somebody
+// opened to look at something. Everything it reads now arrives through `Load`.
 //
 // `HistoryRetention.sample` / `.day` — how long each grain survives. Read
 //     rather than repeated, because this pane tells the user those numbers and a
 //     second copy of them is a sentence that goes quietly out of date.
 //
-// `HistoryQuery.buckets` — the samples reduced to an even rail of peaks.
+// `HistoryQuery.heatmap` — ninety days laid out as weeks, for the grid. The only
+//     query this file calls itself; the bucketing that used to sit beside it went
+//     with `samples(for:since:)`, because `peaks(...)` above does both on the
+//     database's own queue rather than handing twenty thousand samples back for
+//     the main actor to reduce to twenty-four doubles.
 //
 // Recording, persistence, pruning and the CSV are the store's. The plot is
-// `HistoryChart`'s. What is left, and what this file owns, is: which series is
-// on screen, over what span, at which grain, what a day of it amounts to in a
-// table, and the three things a person can do to an archive — stop adding to
-// it, take a copy, throw it away.
+// `HistoryChart`'s and the grid is `HistoryHeatmap`'s. What is left, and what
+// this file owns, is: which series is on screen, over what span, at which grain,
+// what a day of it amounts to in a table, and the three things a person can do
+// to an archive — stop adding to it, take a copy, throw it away.
 // ---------------------------------------------------------------------------
 
 /// How far back the pane is looking.
@@ -205,42 +219,133 @@ private struct HistoryPaneContent: View {
     /// just pressed.
     @State private var exportNote: String?
 
-    var body: some View {
-        // One clock and one read of the store per pass, so the chart, the table
-        // and the export cannot each be describing a slightly different window.
-        // `store.revision` is observed, so a reading landing rebuilds this.
-        let interval = range.interval()
-        let all = store.series()
-        let current = resolved(in: all)
-        let days = current.map { store.days(for: $0, since: interval.start) } ?? []
+    // MARK: - What was read, and when
 
+    /// Everything the pane reads off the store, in one pass, loaded once per
+    /// change rather than once per render.
+    ///
+    /// It carries the *range* as well as the interval, and that is not
+    /// redundancy: the interval is the clock reading, the range is which
+    /// question was asked, and only the range knows the grain. A body drawn
+    /// between the picker moving and the read landing therefore draws the old
+    /// range's data, on the old range's axis, with the old range's grain note —
+    /// one consistent picture that is a moment stale, rather than three
+    /// half-updated ones.
+    ///
+    /// `peaks` and not points: the bucket rail comes back from the store with its
+    /// holes intact, and turning it into a line is the chart's business a few
+    /// lines down. Nothing in here is a drawing decision.
+    private struct Load: Equatable {
+        var all: [HistorySeriesID] = []
+        var days: [HistoryDay] = []
+        var peaks: [Double?] = []
+        var heatmap: [HistoryHeatmapCell] = []
+        var range: HistoryRange = .week
+        /// The window the four above were read for. The placeholder is an empty
+        /// interval at the distant past, which is what "not read yet" looks like
+        /// and is drawn as the empty state rather than as a range of no length.
+        var interval = DateInterval(start: .distantPast, duration: 0)
+    }
+
+    /// What a load is a function of. Anything that moves one of these three has
+    /// invalidated the whole load, and nothing else can: the store bumps
+    /// `revision` when a reading lands, the picker moves `range`, and the series
+    /// menu moves `chosen`.
+    private struct LoadKey: Hashable {
+        let revision: Int
+        let range: HistoryRange
+        let chosen: HistorySeriesID?
+    }
+
+    @State private var load = Load()
+
+    var body: some View {
         Form {
-            chartSection(all: all, current: current, days: days, interval: interval)
-            tableSection(current: current, days: days)
-            archiveSection(all: all, interval: interval)
+            chartSection()
+            heatmapSection()
+            tableSection()
+            archiveSection()
         }
         .formStyle(.grouped)
+        .task(id: LoadKey(revision: store.revision, range: range, chosen: chosen)) {
+            await reload()
+        }
         .confirmationDialog(
             "Delete every reading aibars has kept?",
             isPresented: $isConfirmingClear,
             titleVisibility: .visible
         ) {
-            Button("Clear History", role: .destructive) { clear(all) }
+            Button("Clear History", role: .destructive) { clear(load.all) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Every service, every window, however far back. Recording carries on, so the record starts again at the next refresh — and nothing about your subscriptions changes.")
         }
     }
 
+    /// One clock, one calendar and at most three reads, none of them on the main
+    /// actor, all of them landing in `load` at once.
+    ///
+    /// Assigned in a single write rather than field by field, so there is no pass
+    /// in which the chart has this minute's readings and the table last minute's
+    /// days.
+    @MainActor
+    private func reload() async {
+        let calendar = Calendar.current
+        let interval = range.interval(ending: Date(), calendar: calendar)
+        let all = await store.allSeries()
+        // `.task(id:)` cancels this task when the key moves, but a cancelled task
+        // still runs on to its next suspension — and every await here is behind
+        // one. Without the check, a reload for a range the user has already left
+        // can land *after* the one for the range they are looking at. Checked at
+        // both exits, because the early one is the assignment that would blank a
+        // pane with a series in it.
+        guard !Task.isCancelled else { return }
+        guard let current = resolved(in: all) else {
+            load = Load(all: all, range: range, interval: interval)
+            return
+        }
+
+        // One read for both the table and the grid rather than two. The table
+        // wants the selected range and the grid always wants the last ninety
+        // days, so the read is floored at whichever reaches further back and each
+        // consumer takes its own slice — ninety day-rows is a few kilobytes, and
+        // the second query would cost more than the rows do.
+        let tableFloor = calendar.startOfDay(for: interval.start)
+        let gridEnd = calendar.startOfDay(for: interval.end)
+        let gridFloor = calendar
+            .date(byAdding: .day, value: -(HistoryHeatmap.dayCount - 1), to: gridEnd) ?? tableFloor
+        let rows = await store.days(for: current, sinceDayStarting: min(tableFloor, gridFloor))
+
+        // Only at `.readings` grain. At `.dailyPeaks` the rollups above are
+        // already one point per day and are the only thing left once the readings
+        // behind them have been pruned, so bucketing them would be a second query
+        // for a worse answer.
+        var peaks: [Double?] = []
+        if case .readings = range.grain {
+            peaks = await store.peaks(
+                for: current, from: interval.start, to: interval.end, count: range.bucketCount
+            )
+        }
+
+        guard !Task.isCancelled else { return }
+        load = Load(
+            all: all,
+            days: rows.filter { $0.day >= tableFloor },
+            peaks: peaks,
+            heatmap: HistoryQuery.heatmap(
+                rows, endingOn: gridEnd, dayCount: HistoryHeatmap.dayCount, calendar: calendar
+            ),
+            range: range,
+            interval: interval
+        )
+    }
+
     // MARK: - The chart
 
     @ViewBuilder
-    private func chartSection(
-        all: [HistorySeriesID],
-        current: HistorySeriesID?,
-        days: [HistoryDay],
-        interval: DateInterval
-    ) -> some View {
+    private func chartSection() -> some View {
+        let all = load.all
+        let current = resolved(in: all)
         Section {
             if all.isEmpty {
                 Text(store.isEnabled
@@ -258,10 +363,11 @@ private struct HistoryPaneContent: View {
                 rangePicker
 
                 if let current {
-                    // Built once and handed to both the ink and the line: at
-                    // `.readings` grain this is a database read and a bucketing
-                    // pass, and doing it twice in one body would be two.
-                    let points = points(for: current, days: days, interval: interval)
+                    // Built once and handed to both the ink and the line. It is
+                    // arithmetic over what `Load` already holds now rather than a
+                    // database read, but it is still one allocation of up to
+                    // ninety-six points and there is no reason to make two.
+                    let points = points()
 
                     HistoryChart(
                         series: [
@@ -272,11 +378,11 @@ private struct HistoryPaneContent: View {
                                 points: points
                             )
                         ],
-                        range: interval.start...interval.end,
+                        range: load.interval.start...load.interval.end,
                         warningThreshold: appearance.warningThreshold
                     )
 
-                    Text(grainNote(interval))
+                    Text(grainNote())
                         .font(.system(size: Tokens.Ramp.caption, weight: .regular))
                         // Was `.tertiary`. There is no tertiary ink any more: a
                         // line either clears 4.5:1 on its own ground or it is not
@@ -310,34 +416,40 @@ private struct HistoryPaneContent: View {
         .pickerStyle(.segmented)
     }
 
-    /// The line's points, at whichever grain the range calls for.
+    /// The line's points, at whichever grain the load was read at.
     ///
-    /// At `.readings` grain the readings are bucketed rather than drawn raw: a
-    /// week at a thirty-second refresh is twenty thousand points through a 300pt
-    /// rail, and the peak of a bucket is the only reading in it anyone would
-    /// have acted on. An empty bucket is dropped rather than plotted at zero —
-    /// the chart is told a series may have holes in it, and "nothing was
-    /// recorded" is not "the window was empty".
+    /// At `.readings` grain the readings were bucketed by the store — a week at
+    /// a thirty-second refresh is twenty thousand points through a 300pt rail,
+    /// and the peak of a bucket is the only reading in it anyone would have acted
+    /// on. An empty bucket is dropped rather than plotted at zero: the chart is
+    /// told a series may have holes in it, and "nothing was recorded" is not "the
+    /// window was empty".
     ///
     /// At `.dailyPeaks` the rollups are already one point per day, and are the
     /// only thing left once the readings behind them have been pruned.
-    private func points(
-        for series: HistorySeriesID,
-        days: [HistoryDay],
-        interval: DateInterval
-    ) -> [HistorySample] {
-        switch range.grain {
+    ///
+    /// The grain is `load.range`'s and not `range`'s, because `load.peaks` and
+    /// `load.days` are the answers to the load's question. Reading the live
+    /// picker here would ask a 30-day question of a 7-day answer for the one pass
+    /// between the picker moving and the read landing.
+    ///
+    /// The `compactMap` is here rather than in `reload`, and stays here. Dropping
+    /// the empty buckets loses the rail's regularity — the chart lays its points
+    /// out evenly and a hole therefore shifts everything after it — and that is a
+    /// defect of its own with its own fix. What must not happen is for it to move
+    /// into the loader, where it would become a fact about what was *read*.
+    ///
+    /// It takes no series. A `Load` holds one window's readings and nothing else,
+    /// so a parameter naming which one would be a parameter nothing could
+    /// disagree with — and one this could quietly start trusting.
+    private func points() -> [HistorySample] {
+        switch load.range.grain {
         case .dailyPeaks:
-            return days.map { Self.point(at: $0.day, ratio: $0.peak) }
+            return load.days.map { Self.point(at: $0.day, ratio: $0.peak) }
         case .readings:
-            let count = range.bucketCount
-            let peaks = HistoryQuery.buckets(
-                store.samples(for: series, since: interval.start),
-                from: interval.start,
-                to: interval.end,
-                count: count
-            )
-            return peaks.enumerated().compactMap { slot, peak in
+            let count = load.peaks.count
+            let interval = load.interval
+            return load.peaks.enumerated().compactMap { slot, peak in
                 guard let peak else { return nil }
                 // Spread across the whole rail rather than placed at the
                 // bucket's own start: the chart divides its rail by `count - 1`,
@@ -370,23 +482,34 @@ private struct HistoryPaneContent: View {
     /// every refresh and a line that quietly changes colour while you look at it
     /// is reporting the clock rather than the data.
     private func colour(for series: HistorySeriesID, points: [HistorySample]) -> Color {
-        // `Ink.muted` is the fallback rather than `.secondary`: a provider that
-        // has been signed out of has no brand colour left to lend, and a line
-        // filled with a hierarchical style is a line whose colour depends on what
-        // is drawing it.
-        let accent = AppState.shared.provider(for: series.providerID)?.accentColor ?? Tokens.Ink.muted
-        return appearance.tint(for: points.map(\.percent).max() ?? 0, providerAccent: accent)
+        appearance.tint(
+            for: points.map(\.percent).max() ?? 0,
+            providerAccent: accent(for: series)
+        )
+    }
+
+    /// The provider's own colour, for the `.provider` ramp — asked for in three
+    /// places now (the line, the table's peak column, the grid's alarm cells) and
+    /// written once, so they cannot each fall back differently.
+    ///
+    /// `Ink.muted` is the fallback rather than `.secondary`: a provider that has
+    /// been signed out of has no brand colour left to lend, and a fill made from
+    /// a hierarchical style is a fill whose colour depends on what is drawing it.
+    private func accent(for series: HistorySeriesID?) -> Color {
+        series
+            .flatMap { AppState.shared.provider(for: $0.providerID) }?
+            .accentColor ?? Tokens.Ink.muted
     }
 
     /// What one point on the line is worth, said in the words the reader would
     /// use, and derived from the interval rather than written down beside the
     /// bucket count where the two could drift apart.
-    private func grainNote(_ interval: DateInterval) -> String {
-        switch range.grain {
+    private func grainNote() -> String {
+        switch load.range.grain {
         case .dailyPeaks:
             return "One point per day, at that day's peak. The readings themselves are kept for \(Self.dayCount(HistoryRetention.sample)) days, so anything longer is drawn from the daily summaries, which are kept for \(Self.dayCount(HistoryRetention.day)) days."
         case .readings:
-            let bucket = interval.duration / Double(max(1, range.bucketCount))
+            let bucket = load.interval.duration / Double(max(1, load.range.bucketCount))
             return "One point every \(Self.spanWords(bucket)), at the highest reading in it."
         }
     }
@@ -460,6 +583,47 @@ private struct HistoryPaneContent: View {
         return provider.browserOrigin ?? provider.accountID
     }
 
+    // MARK: - Ninety days
+
+    /// The grid, between the chart and the table.
+    ///
+    /// It **joins** the line chart rather than replacing it, and it deliberately
+    /// ignores the range picker. The chart answers *what shape did the selected
+    /// window have* and follows the picker; the grid answers *which days*, over a
+    /// fixed ninety. A seven-day heatmap is seven squares, which is a worse table
+    /// than the table already underneath it, and a grid that shrank with the
+    /// picker would be a control changing the question rather than the zoom.
+    ///
+    /// Drawn whatever `load` holds, including nothing. The first pass has an
+    /// empty grid in it and that is the correct picture of "not read yet": the
+    /// frame is the statement, and it is the same frame the answer arrives into.
+    private func heatmapSection() -> some View {
+        let filled = load.heatmap.reduce(into: 0) { total, cell in
+            if cell.peak != nil { total += 1 }
+        }
+        return Section {
+            HistoryHeatmap(
+                cells: load.heatmap,
+                accent: accent(for: resolved(in: load.all)),
+                // The same calendar `reload` laid the cells out in. Both read
+                // `Calendar.current`, which is one value for the life of a
+                // process, so the weekday down the left is the weekday the cell
+                // was filed under.
+                calendar: Calendar.current,
+                appearance: appearance
+            )
+
+            Text(HistoryHeatmap.coverage(filled: filled, of: HistoryHeatmap.dayCount))
+                .font(.system(size: Tokens.Ramp.caption, weight: .regular))
+                .foregroundStyle(Tokens.Ink.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            Text("Ninety days")
+        } footer: {
+            SectionFooter("Always the last ninety days, whichever range is selected above — the chart follows the picker and this does not, because seven squares is a worse table than the one below. One square a day, at that day's highest reading, on a neutral scale that only takes a colour at or over your warning threshold. A square with corners is a day the window crossed its cap.")
+        }
+    }
+
     // MARK: - The day rollup
 
     /// How many days get a row of their own.
@@ -471,14 +635,15 @@ private struct HistoryPaneContent: View {
     private static let dayLimit = 31
 
     @ViewBuilder
-    private func tableSection(current: HistorySeriesID?, days: [HistoryDay]) -> some View {
+    private func tableSection() -> some View {
+        let current = resolved(in: load.all)
         Section {
             // Newest first: the day being asked about is almost always today.
-            let ordered = days.sorted { $0.day > $1.day }
+            let ordered = load.days.sorted { $0.day > $1.day }
             if ordered.isEmpty {
                 Text(current == nil
                      ? "Nothing to summarise yet."
-                     : "Nothing was recorded in the last \(range.title).")
+                     : "Nothing was recorded in the last \(load.range.title).")
                     .font(.system(size: Tokens.Ramp.title, weight: .regular))
                     .foregroundStyle(Tokens.Ink.muted)
             } else {
@@ -516,10 +681,7 @@ private struct HistoryPaneContent: View {
     /// them. Under `.accent`, `.provider` and `.mono` it defers, because the user
     /// asked for a coloured column and gets one at every level.
     private func peakTint(_ day: HistoryDay, of series: HistorySeriesID?) -> Color {
-        let accent = series
-            .flatMap { AppState.shared.provider(for: $0.providerID) }?
-            .accentColor ?? Tokens.Ink.muted
-        return appearance.figureTint(for: day.peak, providerAccent: accent)
+        appearance.figureTint(for: day.peak, providerAccent: accent(for: series))
     }
 
     /// The peak's weight, which is the second channel the tint above cannot
@@ -543,13 +705,13 @@ private struct HistoryPaneContent: View {
 
     // MARK: - The archive
 
-    private func archiveSection(all: [HistorySeriesID], interval: DateInterval) -> some View {
+    private func archiveSection() -> some View {
         Section {
             Toggle("Record usage history", isOn: $store.isEnabled)
 
             LabeledContent("Archive") {
                 HStack(spacing: Tokens.Space.medium) {
-                    Button("Export CSV…") { export(interval) }
+                    Button("Export CSV…") { export(load.interval) }
                         .help("Saves every window, over the range shown above.")
                     Button("Clear History", role: .destructive) {
                         exportNote = nil
@@ -557,7 +719,7 @@ private struct HistoryPaneContent: View {
                     }
                 }
                 .controlSize(.small)
-                .disabled(all.isEmpty)
+                .disabled(load.all.isEmpty)
             }
 
             if let exportNote {
@@ -593,15 +755,43 @@ private struct HistoryPaneContent: View {
 
     /// Writes what is on screen, as it was when the button was pressed.
     ///
-    /// The text is built before the panel opens, so the file holds the range the
-    /// user was looking at rather than whatever a refresh added while the save
-    /// dialog was up.
+    /// The file holds the range the user was looking at rather than whatever a
+    /// refresh added while the save dialog was up. That used to be true because
+    /// the text was built *before* the panel opened, synchronously, on the main
+    /// actor: a `queue.sync` over the whole archive plus an ISO stamp and three
+    /// `String(format:)` calls per row, on the thread drawing the window whose
+    /// button had just been pressed. Ninety days of one busy account is tens of
+    /// thousands of rows, and the settings window sat still for all of them.
+    ///
+    /// It is true now because the *interval* is captured — both ends of it. The
+    /// `until:` is what makes the range a property of the arguments rather than
+    /// of when the work happens to run, which is what lets the work run anywhere.
+    @MainActor
     private func export(_ interval: DateInterval) {
         exportNote = nil
-        let csv = store.exportCSV(since: interval.start)
+        Task { @MainActor in
+            let csv = await Self.csv(from: store, over: interval)
+            save(csv, named: Self.exportName(on: interval.end))
+        }
+    }
 
+    /// The read and the formatting, off the main actor.
+    ///
+    /// `Task.detached` and not a plain `Task`: this is called from a main-actor
+    /// context, and a plain `Task` would inherit it and run the whole export on
+    /// exactly the thread this exists to free. `exportCSV` is `nonisolated` and
+    /// the store is a `@MainActor` class — hence `Sendable` — so the only things
+    /// crossing are the store, two dates and the string that comes back.
+    private static func csv(from store: UsageHistoryStore, over interval: DateInterval) async -> String {
+        await Task.detached(priority: .userInitiated) {
+            store.exportCSV(since: interval.start, until: interval.end)
+        }.value
+    }
+
+    @MainActor
+    private func save(_ csv: String, named name: String) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = Self.exportName(on: interval.end)
+        panel.nameFieldStringValue = name
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.isExtensionHidden = false
         // `begin` rather than `runModal`: a modal run loop started from inside a
