@@ -365,8 +365,8 @@ final class MenuBarStripRendererTests: XCTestCase {
     }
 
     /// Nothing reporting is a state the app spends its first seconds in, and the
-    /// fallback is keyed on height alone because a template has no colour to go
-    /// stale.
+    /// fallback is keyed on the mark's own box because a template has no colour to
+    /// go stale — the box is the whole key.
     @MainActor
     func testAnEmptyStripIsTheFallbackImage() {
         let empty = image([])
@@ -377,6 +377,48 @@ final class MenuBarStripRendererTests: XCTestCase {
         XCTAssertNotIdentical(
             MenuBarStripRenderer.fallbackImage(height: 13), MenuBarStripRenderer.fallbackImage(height: 15),
             "two heights shared one fallback"
+        )
+    }
+
+    /// The canvas is the mark's box and not the height that was asked for.
+    ///
+    /// `AppMark` draws in the largest even whole point that fits, so the shipped 13
+    /// is a 12pt mark 15pt wide. A 13pt canvas would hold 12pt of ink and then
+    /// hang on a half point: (22 − 13) / 2 = 4.5, which at 1× splits the baseline
+    /// and all four bar tops across two device rows each. Written as the size the
+    /// image actually carries rather than as an inequality, because the pair of
+    /// numbers *is* the fix.
+    @MainActor
+    func testTheFallbackIsSizedToTheMarksOwnBox() {
+        XCTAssertEqual(MenuBarStripRenderer.fallbackImage(height: 13).size, CGSize(width: 15, height: 12))
+        XCTAssertEqual(
+            MenuBarStripRenderer.fallbackImage(height: 13).size,
+            AppMarkGeometry(size: 13).drawn,
+            "the canvas and the mark disagree about how big the mark is"
+        )
+        let origin = (MenuBarIcon.barHeight - MenuBarStripRenderer.fallbackImage(height: 13).size.height) / 2
+        XCTAssertEqual(origin, origin.rounded(), "the fallback hangs at y = \(origin) in the bar")
+    }
+
+    /// And the memo keys on that box, not on the request: 13 and 12 are one mark,
+    /// so they are one bitmap rather than two identical ones. The half point is
+    /// there because the height tuner shipped with `step: 0.5` and a defaults
+    /// domain can still hold what it wrote.
+    @MainActor
+    func testHeightsThatDrawTheSameMarkShareOneFallback() {
+        XCTAssertIdentical(
+            MenuBarStripRenderer.fallbackImage(height: 13), MenuBarStripRenderer.fallbackImage(height: 12),
+            "one mark was rasterised twice"
+        )
+        XCTAssertIdentical(
+            MenuBarStripRenderer.fallbackImage(height: 13), MenuBarStripRenderer.fallbackImage(height: 13.5),
+            "a half point minted a second bitmap of the same mark"
+        )
+        // The other half of the claim, or "one bitmap" would be satisfied by never
+        // redrawing at all: two boxes are still two images.
+        XCTAssertNotIdentical(
+            MenuBarStripRenderer.fallbackImage(height: 13), MenuBarStripRenderer.fallbackImage(height: 14),
+            "12 and 14 are different marks and must be different images"
         )
     }
 

@@ -12,9 +12,22 @@ import Combine
 /// bar is, and which way the bar itself is currently painted.
 @MainActor
 public enum MenuBarIcon {
-    /// Status bar glyphs sit in a 22pt bar; 13pt of drawing with integral width
-    /// keeps the marks crisp.
-    nonisolated public static let height: CGFloat = 13
+    /// How tall the bar is. Twenty-two points, which is a platform measurement
+    /// and not a preference: it is what macOS gives a status item on every Mac
+    /// this app runs on, and nothing in the app gets to choose it.
+    ///
+    /// It was `13` and called `height`, which is the *glyph's* height and not the
+    /// bar's — a value this type's own doc described as "how tall the bar is"
+    /// while holding something else. Nothing read it (only its own test did), and
+    /// the rationale hung off it — "13pt of drawing with integral width keeps the
+    /// marks crisp" — had come loose from anything that draws: the strip's height
+    /// is `menuBarGlyphHeight`, and crispness is `AppMarkGeometry`'s to enforce.
+    ///
+    /// Re-cut to the fact rather than deleted, because the 22 is load-bearing at
+    /// one remove and nowhere else records it: it is why `AppMarkGeometry`'s box
+    /// is even. AppKit centres the status image in this bar, so the mark's origin
+    /// is (22 − box) / 2, and that is only a whole point when the box is even.
+    nonisolated public static let barHeight: CGFloat = 22
 
     /// Whether the menu bar is currently dark.
     ///

@@ -154,22 +154,34 @@ public enum MenuBarStripRenderer {
     }
 
     /// What the status item shows when there is nothing to say yet: no service
-    /// reporting, or a render that failed. The app's own mark with every bar
-    /// idle, as a template, rather than an empty slot the user cannot find or
-    /// click.
+    /// reporting, or a render that failed. The app's own mark, as a template,
+    /// rather than an empty slot the user cannot find or click.
     public static func fallbackImage(height: CGFloat) -> NSImage {
-        // Keyed on height alone: a template has no colour to go stale when the
-        // menu bar changes appearance.
-        if let fallback, fallback.height == height { return fallback.image }
+        // The mark's own box, and not the height that was asked for. `AppMark`
+        // draws in the largest even whole point that fits — 12 for the 13 the
+        // strip ships at — and a canvas of any other size hands the status item an
+        // image whose ink does not fill it. That matters twice over. An odd canvas
+        // centres in the 22pt bar on a half point, (22 − 13) / 2 = 4.5, which at 1×
+        // splits the baseline and all four bar tops across two device rows each;
+        // and `menuBarGlyphHeight` reaches here as a `Double` that has been through
+        // a slider, so a fractional canvas is a resample of the whole mark on every
+        // display, retina included.
+        let box = AppMarkGeometry(size: height).box
 
-        // `AppMark` is what the old `UsageMeterGlyph` became in the reskin: a
-        // fixed profile rather than live levels, which is what this slot wanted
-        // anyway — the fallback exists precisely when there are no levels.
-        let glyph = AppMark(size: height, tint: .black)
-        let image = render(glyph, height: height) ?? blankImage(height: height)
+        // Keyed on the box and not on the request, so the heights that draw the
+        // same mark share one bitmap instead of holding two identical ones. A
+        // template has no colour to go stale when the menu bar changes appearance,
+        // so the box is the whole key.
+        if let fallback, fallback.box == box { return fallback.image }
+
+        // `AppMark` is what the old `UsageMeterGlyph` became in the reskin: a fixed
+        // mark rather than live levels, which is what this slot wanted anyway —
+        // the fallback exists precisely when there are no levels.
+        let glyph = AppMark(size: box, tint: .black)
+        let image = render(glyph, height: box) ?? blankImage(height: box)
         image.isTemplate = true
         image.accessibilityDescription = MenuBarStripContent.accessibilityLabel([])
-        fallback = (height, image)
+        fallback = (box, image)
         return image
     }
 
@@ -227,7 +239,10 @@ public enum MenuBarStripRenderer {
     /// almost always with the same inputs; what matters is returning the same
     /// instance for the current state, not remembering old ones.
     private static var memo: Memo?
-    private static var fallback: (height: CGFloat, image: NSImage)?
+    /// The fallback's key is `AppMarkGeometry`'s box rather than the height that
+    /// was asked for, because that is the size the bitmap actually is: 13 and 12
+    /// resolve to the same 12pt mark and must therefore resolve to the same image.
+    private static var fallback: (box: CGFloat, image: NSImage)?
 
     private struct Memo {
         let segments: [StripSegment]
