@@ -26,10 +26,16 @@ public struct SessionCredential: Codable, Hashable {
 /// Stores session tokens in the Keychain, all of them in a single item keyed
 /// `aibars.tokens`. The SessionCredential metadata lives in UserDefaults, which
 /// is what answers "is this provider connected" without a Keychain read.
-public final class SessionStore {
+///
+/// `@unchecked Sendable` is honest rather than a silencer: every mutable field
+/// below is behind a `Lock`, the rest are `let`s, and `UserDefaults` is
+/// documented thread-safe. Saying so is what lets `AppState.refreshAll`'s task
+/// group and a `Task.detached` both hold this without each call site being
+/// asked to take it on faith.
+public final class SessionStore: @unchecked Sendable {
     public static let shared = SessionStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let metaKey = "aibars.sessionMeta"
 
     /// Sessions lifted from a browser cookie. Memory only — deliberately never
@@ -56,9 +62,52 @@ public final class SessionStore {
     /// never signed in", because the fix is completely different.
     private let accessDenied = Lock<Bool>(false)
 
+    /// Serialises the check-read-store in `loadPersisted`, and only that.
+    ///
+    /// Two locks, and the second one is not an oversight to be tidied away. The
+    /// obvious fix for the race `loadPersisted` used to have is to hold
+    /// `persisted`'s own lock across the whole load — and that deadlocks on the
+    /// first launch after an upgrade, because the load calls
+    /// `migrateLegacyItems` and then `persist`, and `persist` takes
+    /// `persisted`'s lock again. `Lock` is a plain non-recursive `NSLock`
+    /// (CookieExtractor.swift:602-604), so re-entering it inside its own
+    /// critical section hangs the app rather than failing.
+    ///
+    /// So this one guards the *decision to read* and `persisted` still guards
+    /// the value. Nothing executed while this lock is held ever waits on it,
+    /// which is what keeps the pair deadlock-free: `persist` takes only the
+    /// value lock, and it never takes this one.
+    private let loadGate = NSLock()
+
     private static let combinedKey = "aibars.tokens"
 
-    private init() {}
+    /// How a Keychain item is read: `KeychainStore.read` in the app, and a
+    /// counting stub in the one test that can prove the double check in
+    /// `loadPersisted` works. "Sixteen concurrent callers, one
+    /// `SecItemCopyMatching`" is a property of a race, and the only honest way
+    /// to assert it is to count the reads — timing them proves nothing on the
+    /// run where the race happens not to happen.
+    private let readItem: @Sendable (String) -> KeychainStore.ReadResult
+
+    private init() {
+        self.defaults = .standard
+        self.readItem = { KeychainStore.read($0) }
+    }
+
+    /// A store of its own, for tests.
+    ///
+    /// The defaults domain is a parameter alongside the reader because seeding
+    /// a pasted credential writes session metadata, and `loadPersisted` refuses
+    /// to read at all unless that metadata vouches for one — so a test cannot
+    /// reach the read without writing the metadata, and the shared instance's
+    /// domain is the developer's own preferences.
+    init(
+        reader: @escaping @Sendable (String) -> KeychainStore.ReadResult,
+        defaults: UserDefaults
+    ) {
+        self.defaults = defaults
+        self.readItem = reader
+    }
 
     // MARK: - Token CRUD
 
@@ -110,6 +159,22 @@ public final class SessionStore {
         saveMeta(meta)
     }
 
+    /// Forces the at-most-once Keychain read now, so every later `token(for:)`
+    /// is answered from memory.
+    ///
+    /// Call it off the main actor. On a locally signed build this is the read
+    /// that can raise the access dialog, and `AppState.attach` asks for a token
+    /// per discovered session while it is on the main actor — a blocking
+    /// `SecItemCopyMatching` there is a frozen panel, during the one sweep this
+    /// app documents as silent.
+    ///
+    /// Idempotent and free after the first call: it goes through the same cache
+    /// and the same refusal cache as every other reader, so warming a store
+    /// that has already loaded costs a lock and nothing else.
+    public func warm() {
+        _ = loadPersisted()
+    }
+
     /// Drops the in-memory copy, so the next read goes back to the Keychain.
     /// Only needed if something outside this process could have changed it, or
     /// to retry after the user refused an access prompt.
@@ -147,7 +212,30 @@ public final class SessionStore {
 
     /// Reads the pasted-key item, at most once, and only if there is reason to
     /// think it exists.
+    ///
+    /// "At most once" was a lie under load until the gate below. The cache was
+    /// checked under one lock, the Keychain read outside every lock, and the
+    /// answer stored under another — so the fifteen provider fetches
+    /// `AppState.refreshAll` starts at once all saw `nil`, and all fifteen
+    /// issued their own `SecItemCopyMatching`. On a locally signed build that is
+    /// fifteen access dialogs from one refresh, and a user who dismisses the
+    /// first one is marked denied for the other fourteen.
+    ///
+    /// One consequence is accepted deliberately: the single reader holds
+    /// `loadGate` while the dialog is on screen, so a `token(for:)` on the main
+    /// actor waits for the user's answer. That is the trade — they answer one
+    /// prompt instead of fifteen — and `AppState.adoptBrowserSessions` calls
+    /// `warm()` off the main actor before the sweep so the waiting is done on a
+    /// utility thread rather than under the panel.
     private func loadPersisted() -> [String: String] {
+        if let loaded = persisted.withLock({ $0 }) { return loaded }
+
+        loadGate.lock()
+        defer { loadGate.unlock() }
+        // Checked again now the gate is ours: whoever held it while we waited
+        // has finished the read, and their answer — including a cached refusal,
+        // which is an empty dictionary and not a `nil` — is the one to serve
+        // rather than a second dialog.
         if let loaded = persisted.withLock({ $0 }) { return loaded }
 
         // The metadata says whether anything was ever pasted. If nothing was,
@@ -160,7 +248,7 @@ public final class SessionStore {
         }
 
         var result: [String: String] = [:]
-        switch KeychainStore.read(Self.combinedKey) {
+        switch readItem(Self.combinedKey) {
         case .success(let data):
             if let data, let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
                 result = decoded
@@ -220,7 +308,7 @@ public final class SessionStore {
     private func migrateLegacyItems(into result: inout [String: String], irreplaceable: [String]) -> [String] {
         var moved: [String] = []
         for providerID in irreplaceable where result[providerID] == nil {
-            guard case .success(let data) = KeychainStore.read(tokenKey(providerID)),
+            guard case .success(let data) = readItem(tokenKey(providerID)),
                   let data,
                   let value = String(data: data, encoding: .utf8),
                   !value.isEmpty

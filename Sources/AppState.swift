@@ -80,6 +80,21 @@ public final class AppState: ObservableObject {
         didSet { userDefaults.set(refreshIntervalSeconds, forKey: intervalKey) }
     }
 
+    /// Where readings go to be judged against the user's thresholds and
+    /// budgets.
+    ///
+    /// `shared` in the app, and settable so a test can hand this state a centre
+    /// with its own defaults domain and its own budget store. That is not
+    /// tidiness: arming a budget against the shared one writes the amount into
+    /// the developer's own preferences and leaves it there, and the budget
+    /// fold is not assertable without arming one.
+    ///
+    /// `forgetHistory` below is the one path that still reaches
+    /// `AlertCenter.shared` directly, because it is static — `signOut()` calls
+    /// it from a provider, which has no state to ask. The two are the same
+    /// object everywhere but a test.
+    var alertCenter: AlertCenter = .shared
+
     private let userDefaults = UserDefaults.standard
     private let intervalKey = "aibars.refreshInterval"
     private var refreshTask: Task<Void, Never>?
@@ -99,6 +114,11 @@ public final class AppState: ObservableObject {
         self.refreshIntervalSeconds = stored == 0 ? 60 : stored
 
         self.providers = Self.services.map { $0.make(nil) }
+        // Every provider is told which state holds it, so that signing out can
+        // drop the reading as well as the credential. See
+        // `AnyUsageProvider.owner`; `attach` does the same for the accounts it
+        // discovers later.
+        for provider in providers { provider.owner = self }
     }
 
     /// One entry per service aibars knows how to read. `make` builds an
@@ -211,6 +231,18 @@ public final class AppState: ObservableObject {
                 }
             }
             for await (id, result) in group {
+                // A fetch that was torn down is not a fetch that failed. The
+                // catch-all above turns anything that is not a `ProviderError`
+                // into `.network(...)`, and `URLError.cancelled` arrives as
+                // exactly that (ProviderHTTP.swift:83-84) — so cancelling this
+                // task, which `stop()` does at terminate and on every interval
+                // change, used to write a failure snapshot over every provider
+                // still in flight and count it toward that provider's backoff.
+                //
+                // `continue`, not `break`: a success that landed before the
+                // cancellation is a real reading and still belongs on screen,
+                // and the group has to be drained either way.
+                if Task.isCancelled, case .failure = result { continue }
                 snapshots[id] = clarify(result)
                 fetchedAt[id] = Date()
                 noteOutcome(id, result)
@@ -238,20 +270,40 @@ public final class AppState: ObservableObject {
     /// the history store swallows its own write errors by design and is simply
     /// absent when its file could not be opened, and the alert centre swallows
     /// every delivery failure.
-    private func note(_ providerID: String, _ result: Result<UsageData, ProviderError>) async {
+    ///
+    /// Internal rather than private so `AppStateSweepTests` can put one sweep's
+    /// worth of readings through it. The fold below is only ever wrong in the
+    /// presence of a second account, and there is no other way into this path
+    /// that does not need a network and fifteen live credentials.
+    func note(_ providerID: String, _ result: Result<UsageData, ProviderError>) async {
         guard case .success(let data) = result,
               let provider = provider(for: providerID) else { return }
         UsageTrendStore.shared.record(data, for: providerID)
         UsageHistoryStore.shared?.record(data, for: providerID)
-        await AlertCenter.shared.consider(
+        await alertCenter.consider(
             data, providerID: providerID, displayName: provider.displayName
         )
         // Budgets are per service, not per account: two Claude subscriptions are
         // one bill to the person paying it, and an alert naming the account slot
         // would be reporting an internal id.
-        if let spend = data.spend {
-            await AlertCenter.shared.consider(
-                spend: spend, serviceID: provider.serviceID, displayName: provider.displayName
+        //
+        // Which is why the figure has to be the service's folded total and not
+        // this account's share of it. `BudgetAlertState` keeps one entry per
+        // service, so two accounts handing it their own halves overwrote each
+        // other's remembered fraction on every sweep: a $25 bill split $10/$15
+        // against a $20 budget left both halves under the line the sum had
+        // walked past, and a fraction that ping-ponged between the two re-armed
+        // the same crossing for as long as both accounts kept reporting.
+        //
+        // Both callers assign `snapshots[id]` before they arrive here (the
+        // sweep's consumer loop and `refresh(_:)`), so the fold already contains
+        // the reading that just landed. That is what makes calling once per
+        // account harmless rather than something to dedupe: every call in one
+        // sweep carries the identical total, and the second one sees
+        // `previous == current` and produces no crossing.
+        if let folded = spendReports.first(where: { $0.serviceID == provider.serviceID })?.report {
+            await alertCenter.consider(
+                spend: folded, serviceID: provider.serviceID, displayName: provider.displayName
             )
         }
     }
@@ -416,7 +468,16 @@ public final class AppState: ObservableObject {
         guard !queries.isEmpty else { return [] }
 
         let sessions = await Task.detached(priority: .utility) {
-            CookieExtractors.searchAll(queries, allowingKeychainPrompt: allowingKeychainPrompt)
+            // The process's one Keychain read, moved off the main actor and in
+            // front of the sweep that needs it. `attach` below asks for a token
+            // per discovered session while it is on the main actor, and on a
+            // locally signed build that read is the one that can raise the
+            // access dialog — a blocking `SecItemCopyMatching` there is a
+            // frozen panel during a sweep documented as never prompting.
+            // Cached and idempotent, refusals included, so every launch after
+            // the first read pays a lock for this and nothing more.
+            SessionStore.shared.warm()
+            return CookieExtractors.searchAll(queries, allowingKeychainPrompt: allowingKeychainPrompt)
         }.value
         // Deliberately not awaited. The census is a second full copy of every
         // browser's cookie database and nothing between here and the first fetch
@@ -472,9 +533,14 @@ public final class AppState: ObservableObject {
         // takes the slot of an account one of them would have recognised.
         let rules: [(AnyUsageProvider, BrowserCookie) -> Bool] = [
             { provider, cookie in
-                // Only browser-derived credentials are compared: the pasted ones
-                // are in the Keychain, and reading them here would raise a dialog
-                // during the silent launch sweep.
+                // Only browser-derived credentials are compared — and no longer
+                // because of what reading a pasted one would cost. `warm()`
+                // above has already done the read, and it reads one combined
+                // item covering every provider at once, so the cost is paid the
+                // moment any pasted credential exists whether or not this line
+                // looks at one. What survives is the comparison itself: a
+                // pasted key is not a browser cookie, and matching one against
+                // a cookie value would hand a session to the wrong account.
                 SessionStore.shared.credential(for: provider.id)?.source == .browserCookie
                     && SessionStore.shared.token(for: provider.id) == cookie.value
             },
@@ -506,6 +572,7 @@ public final class AppState: ObservableObject {
 
             let provider = providers.first { $0.id == id } ?? {
                 let created = service.make(accountID)
+                created.owner = self
                 providers.append(created)
                 return created
             }()
@@ -556,7 +623,35 @@ public final class AppState: ObservableObject {
         // The row is gone, so the samples and armed levels behind it belong to
         // nobody — and the id is about to be handed to whichever session turns
         // up next.
-        for id in ids { Self.forgetHistory(id) }
+        for id in ids {
+            forgetSnapshot(of: id)
+            Self.forgetHistory(id)
+        }
+    }
+
+    /// Drops the reading a row is drawn from, leaving the credential alone.
+    ///
+    /// Two callers, one reason each. Pruning reuses slot numbers, so a snapshot
+    /// left behind under `claude#2` is the previous account's figure drawn
+    /// under the next account's name. Signing out leaves the row on screen and
+    /// only unauthenticated, and `ProviderRow` reserves its detail box for any
+    /// row that is authenticated *or* holds a result — so a snapshot outliving
+    /// the credential freezes the last sentence the row said, usually "Session
+    /// expired", under a row the user disconnected on purpose.
+    ///
+    /// `fetchedAt` goes with it. The stamp is documented as when this
+    /// provider's snapshot was fetched, and a stamp for a snapshot that no
+    /// longer exists is that sentence being false.
+    func forgetSnapshot(of providerID: String) {
+        snapshots.removeValue(forKey: providerID)
+        fetchedAt.removeValue(forKey: providerID)
+    }
+
+    /// How many times in a row a provider has failed, for the test that a
+    /// cancelled fetch is not one of them. The dictionary stays private:
+    /// nothing outside this file has any business writing a backoff.
+    func consecutiveFailureCount(for providerID: String) -> Int {
+        consecutiveFailures[providerID, default: 0]
     }
 
     /// Refreshes a single provider, for the per-row refresh button and for the
@@ -574,7 +669,20 @@ public final class AppState: ObservableObject {
         // in-flight cue is the row's own refresh glyph becoming a spinner in the
         // 18pt box it already occupies.
         refreshingRows.insert(providerID)
-        defer { refreshingRows.remove(providerID) }
+        defer {
+            refreshingRows.remove(providerID)
+            // Stamped on every outcome, exactly as the sweep stamps its own,
+            // and for the same reason: `refresh(_:)` overwrites the snapshot on
+            // both catch branches below, so a row that fails by hand is in the
+            // same state as a row that fails on the timer, and reporting the
+            // age of a reading it no longer holds is the one thing the
+            // freshness line must not do. Both quantities move together because
+            // `lastRefresh` is derived from the stamps and nothing else — the
+            // minimum over every row, so this one getting newer only moves the
+            // line when this row was the stalest thing on screen.
+            fetchedAt[providerID] = Date()
+            lastRefresh = oldestSnapshotDate()
+        }
         // The user asked for this one by name, so any backoff it was serving goes.
         cooldownUntil[providerID] = nil
         consecutiveFailures[providerID] = 0
@@ -884,6 +992,15 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
     public let webLogin: WebLoginConfig?
     public let dashboardURL: URL?
 
+    /// The state holding this provider, so signing out can drop the reading as
+    /// well as the credential.
+    ///
+    /// A back-reference rather than a parameter because `signOut()` is called
+    /// on a provider and not on a state — the settings pane has the row, not
+    /// the list — and weak because `AppState.providers` is what owns these, so
+    /// a strong link here would be one retain cycle per row.
+    weak var owner: AppState?
+
     @Published public var isEnabled: Bool
     @Published public var isAuthenticated: Bool
     /// "Chrome · Profile 2" — which browser and profile this account's session
@@ -956,6 +1073,12 @@ public final class AnyUsageProvider: ObservableObject, Identifiable {
         // starts from no samples and no armed levels rather than picking up
         // whatever this one left behind.
         await AppState.forgetHistory(id)
+        // The reading goes with the credential. `ProviderRow` reserves its
+        // detail box for a row that is authenticated *or* holds a result, so a
+        // snapshot left here keeps a disconnected row at its full height with
+        // the last sentence it managed to say still in it — and that row now
+        // offers "Sign in" under a figure from the session the user just ended.
+        await owner?.forgetSnapshot(of: id)
     }
 
     public func setEnabled(_ enabled: Bool) {

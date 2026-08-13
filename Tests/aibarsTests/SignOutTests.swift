@@ -48,6 +48,32 @@ final class SignOutTests: XCTestCase {
         XCTAssertEqual(SessionStore.shared.token(for: "gemini"), "a-new-session")
     }
 
+    /// A row the user disconnected has to go back to its short form.
+    ///
+    /// The reading is what decides that, not the auth flag: `ProviderRow`
+    /// reserves its detail box for a row that is authenticated *or* holds a
+    /// result, so a snapshot outliving the credential leaves a disconnected row
+    /// at full height with the last sentence it managed to say still in it —
+    /// and a "Sign in" button under a figure from the session that just ended.
+    @MainActor
+    func testSigningOutDropsTheReadingTheRowWasDrawnFrom() async throws {
+        let state = AppState()
+        let gemini = try XCTUnwrap(state.provider(for: "gemini"))
+
+        try gemini.adoptBrowserSession("a-session-value")
+        state.snapshots["gemini"] = .success(UsageData(
+            providerID: "gemini",
+            primary: UsageMetric(label: "Daily", used: 40, limit: 100)
+        ))
+
+        try await gemini.signOut()
+
+        XCTAssertNil(
+            state.snapshots["gemini"],
+            "the row kept a reading from the session the user just ended"
+        )
+    }
+
     /// A provider with no credential must report that, not go looking for one.
     @MainActor
     func testGeminiWithoutATokenDoesNotAdoptOne() async throws {
