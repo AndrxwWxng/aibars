@@ -1,60 +1,10 @@
 import SwiftUI
 import AppKit
 
-/// One segment of the strip, as this file needs to draw it.
-///
-/// Every reference this file makes to `MenuBarEntry` goes through `init(_:)`,
-/// so the rasteriser is coupled to the strip model at exactly one line. The
-/// figure arrives already chosen and already formatted: which services are
-/// shown and how their numbers read belongs to the model, and a rasteriser
-/// that re-formatted them would be a second copy of those rules to keep in
-/// step.
-private struct StripSegment: Equatable {
-    let serviceID: String
-    let displayName: String
-    let figure: String
-    /// nil for a status-only service. Status-only services have no percentage
-    /// and must not be given a fake one, so this is what decides whether the
-    /// segment can take a usage tint at all — never a 0 standing in for it.
-    let percent: Double?
-
-    init(_ entry: MenuBarEntry) {
-        self.serviceID = entry.serviceID
-        self.displayName = entry.displayName
-        self.figure = entry.figure
-        self.percent = entry.percent
-    }
-
-    /// `serviceID` is the family, not the account, so two Claude subscriptions
-    /// resolve to the one mark without any unpicking here.
-    var brand: BrandMark? { BrandMark.mark(for: serviceID) }
-
-    /// What a service with no vector mark falls back to.
-    var initial: String {
-        let letter = displayName.prefix(1).uppercased()
-        return letter.isEmpty ? "?" : letter
-    }
-
-    /// Whether the strip is drawn in colour at all.
-    ///
-    /// A coloured image cannot be a template, so AppKit stops giving it the
-    /// menu bar's own light/dark and vibrancy treatment — which is why colour
-    /// is only spent when it is actually carrying a reading. Under
-    /// `.alertOnly` that means nothing is coloured until something crosses the
-    /// warning, and under `.perBar` a strip of status-only services still has
-    /// no number to colour.
-    static func coloured(
-        _ segments: [StripSegment],
-        colour: AppearanceSettings.MenuBarColour,
-        warningThreshold: Double
-    ) -> Bool {
-        switch colour {
-        case .monochrome: return false
-        case .alertOnly:  return segments.contains { ($0.percent ?? 0) >= warningThreshold }
-        case .perBar:     return segments.contains { $0.percent != nil }
-        }
-    }
-}
+// `StripSegment` was declared here, `private`, while there was one drawing. It
+// lives in `StripStyle.swift` and is public, because there are six drawings in
+// six files and the alternative to one shared segment type is six styles reaching
+// into `MenuBarEntry` and six chances to format a percentage differently.
 
 /// Rasterises the menu bar strip into the `NSImage` the status item wants.
 ///
@@ -74,20 +24,33 @@ public enum MenuBarStripRenderer {
     ///     own neutral against the menu bar's appearance.
     ///   - warningThreshold: where the ramp turns red, and the line `.alertOnly`
     ///     waits for.
+    ///   - style: which of the six drawings. The case rather than the box,
+    ///     because it is part of the memo key and an enum is comparable where a
+    ///     box of closures is not.
+    ///   - coloursMarks: `AppearanceSettings.coloursBrandMarks`. It reaches the
+    ///     drawing and therefore the key: it is the difference between a Claude
+    ///     mark in Anthropic's orange and the same mark in the bar's own ink.
     public static func image(
         entries: [MenuBarEntry],
         height: CGFloat,
         colour: AppearanceSettings.MenuBarColour,
-        warningThreshold: Double
+        warningThreshold: Double,
+        style: AppearanceSettings.MenuBarStyle,
+        coloursMarks: Bool
     ) -> NSImage {
-        // What survives the width cap, not what was asked for. Everything below
-        // is a statement about the strip on screen — the memo key, the template
-        // flag, the sentence VoiceOver reads — so all of it has to be made
-        // against the segments that actually get drawn. `MenuBarStripView` fits
-        // again, which is a no-op on an already-fitted list and is what keeps the
-        // Appearance pane's preview, which builds the view directly, showing the
-        // same segments the bar does.
-        let drawn = StripFit.fit(entries, limit: entries.count, height: height)
+        // Resolved once and handed on. `fit` needs the cell width and the style's
+        // ceiling, the view needs the drawing, and the sentence needs the shape —
+        // three questions, one table lookup, so the three cannot answer for
+        // different styles.
+        let box = StripStyleBox.box(for: style)
+        // What survives the width cap and the style's ceiling, not what was asked
+        // for. Everything below is a statement about the strip on screen — the
+        // memo key, the template flag, the sentence VoiceOver reads — so all of it
+        // has to be made against the segments that actually get drawn.
+        // `MenuBarStripView` fits again, which is a no-op on an already-fitted
+        // list and is what keeps the Appearance pane's preview, which builds the
+        // view directly, showing the same segments the bar does.
+        let drawn = StripFit.fit(entries, limit: entries.count, style: box, height: height)
         let segments = drawn.map(StripSegment.init)
         // Nothing to draw is a state the app spends its first seconds in, and a
         // zero-width status item is one the user can neither find nor click.
@@ -111,7 +74,8 @@ public enum MenuBarStripRenderer {
 
         if let memo, memo.matches(
             segments: segments, height: height, colour: colour,
-            warningThreshold: warningThreshold, dark: dark
+            warningThreshold: warningThreshold, dark: dark,
+            style: style, coloursMarks: coloursMarks
         ) {
             // The identical instance, not an equal one: AppKit compares the
             // image by identity and skips the status item update when it is
@@ -127,9 +91,11 @@ public enum MenuBarStripRenderer {
         let neutral: Color = coloured ? (dark ? .white : .black) : .black
         let strip = MenuBarStripView(
             entries: drawn,
+            style: box,
             height: height,
             colour: colour,
             warningThreshold: warningThreshold,
+            coloursMarks: coloursMarks,
             neutral: neutral
         )
         // `ImageRenderer` draws in the light appearance whatever the menu bar is
@@ -143,12 +109,21 @@ public enum MenuBarStripRenderer {
         // The strip model owns the wording, for the same reason it owns the
         // figures. What it is given is the fitted list: the sentence has to name
         // the services on screen, so a segment the width cap dropped must not be
-        // announced as though it were being shown.
-        image.accessibilityDescription = MenuBarStripContent.accessibilityLabel(drawn)
+        // announced as though it were being shown. And the shape is the style's,
+        // because three of the six draw their reading as a tint or a bar height
+        // and VoiceOver can hear neither.
+        //
+        // This is now the *only* sentence: `MenuBarLabel` reads it back off the
+        // image rather than building a second one from the unfitted list, which is
+        // what it used to do — three services announced, two drawn.
+        image.accessibilityDescription = MenuBarStripContent.accessibilityLabel(
+            drawn, sentence: box.sentence, warningThreshold: warningThreshold
+        )
 
         memo = Memo(
             segments: segments, height: height, colour: colour,
-            warningThreshold: warningThreshold, dark: dark, image: image
+            warningThreshold: warningThreshold, dark: dark,
+            style: style, coloursMarks: coloursMarks, image: image
         )
         return image
     }
@@ -180,7 +155,14 @@ public enum MenuBarStripRenderer {
         let glyph = AppMark(size: box, tint: .black)
         let image = render(glyph, height: box) ?? blankImage(height: box)
         image.isTemplate = true
-        image.accessibilityDescription = MenuBarStripContent.accessibilityLabel([])
+        // The empty-state sentence is the same in all three shapes — there is
+        // nothing to band and nothing to call closest to its cap — so which one is
+        // asked for here says nothing. `.figures` because that is the shipped
+        // style, and the fallback is not keyed on the style for the same reason it
+        // is not keyed on the colour: it is the app's mark and no style draws it.
+        image.accessibilityDescription = MenuBarStripContent.accessibilityLabel(
+            [], sentence: .figures, warningThreshold: 0
+        )
         fallback = (box, image)
         return image
     }
@@ -244,12 +226,23 @@ public enum MenuBarStripRenderer {
     /// resolve to the same 12pt mark and must therefore resolve to the same image.
     private static var fallback: (box: CGFloat, image: NSImage)?
 
+    /// Every input the drawing depends on, and the two that were added with the
+    /// styles are the two worth naming.
+    ///
+    /// A `style` or a `coloursMarks` in the signature but not in the key is the
+    /// worst shape this bug can take: the user picks a style, the Appearance
+    /// pane's preview updates because it builds the view directly, and the menu
+    /// bar keeps the previous bitmap because AppKit compares by identity and this
+    /// handed back the same instance. The setting looks broken while the preview
+    /// says it worked.
     private struct Memo {
         let segments: [StripSegment]
         let height: CGFloat
         let colour: AppearanceSettings.MenuBarColour
         let warningThreshold: Double
         let dark: Bool
+        let style: AppearanceSettings.MenuBarStyle
+        let coloursMarks: Bool
         let image: NSImage
 
         func matches(
@@ -257,23 +250,43 @@ public enum MenuBarStripRenderer {
             height: CGFloat,
             colour: AppearanceSettings.MenuBarColour,
             warningThreshold: Double,
-            dark: Bool
+            dark: Bool,
+            style: AppearanceSettings.MenuBarStyle,
+            coloursMarks: Bool
         ) -> Bool {
             self.segments == segments
                 && self.height == height
                 && self.colour == colour
                 && self.warningThreshold == warningThreshold
                 && self.dark == dark
+                && self.style == style
+                && self.coloursMarks == coloursMarks
         }
     }
 }
 
-/// The strip itself: one brand mark and one figure per service.
+/// The strip itself: one style's cell per service, laid out on the segment gap.
 ///
-/// Four abstract bars could not tell you which service was which. A mark and
-/// its own number can, and the mark is what makes the number legible at a
-/// glance — so the two travel together and the pair is what gets dropped when
-/// the strip has to get shorter.
+/// Four abstract bars could not tell you which service was which, so every
+/// segment now names the service it measures. What that segment *looks* like is
+/// the style's — six of them, one file each in `Sources/Views/StripStyles/` — and
+/// this view is what is left when the drawing is somebody else's: fit the list,
+/// resolve the colour rules once, lay the cells out, put the run's underlay
+/// behind them.
+///
+/// It used to hold a `switch` in `body`, a second in `markColour`, a third in
+/// `figureColour` and a fourth would have been needed for the sentence. All four
+/// are gone: `StripInk` answers the colour questions and `StripStyleBox` answers
+/// the rest, so a seventh style is a new file and one line in the registry rather
+/// than four branches spread over this one.
+///
+/// `mark(for:)` and `figure(for:)` went with them, to `StripMark` and
+/// `StripFigure` in `StripStyle.swift`: three of the six styles draw a mark and
+/// three draw a figure, so both are shared drawings rather than private methods
+/// here. `Tokens.Ramp.figureDesign` and `Tokens.Strip.figureCell` still name
+/// `MenuBarStripRenderer.figure(for:)` as where the leading-alignment rule is
+/// written down; it is `StripFigure`'s doc now, and those two references want
+/// correcting the next time `DesignSystem.swift` is open.
 ///
 /// Also the Appearance pane's preview, which is why the neutral colour is a
 /// parameter: in a window `.primary` is right, but a coloured strip is
@@ -283,16 +296,25 @@ public struct MenuBarStripView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private let segments: [StripSegment]
+    private let style: StripStyleBox
     private let height: CGFloat
     private let colour: AppearanceSettings.MenuBarColour
     private let warningThreshold: Double
+    private let coloursMarks: Bool
     private let neutral: Color
 
+    /// `style` and `coloursMarks` carry defaults for the reason `StripFit.width`
+    /// does: the Appearance pane builds this view directly and belongs to the
+    /// change that gives it a chooser. The defaults are what the strip drew before
+    /// there were six styles, so nothing the pane draws moves until it asks for
+    /// something else.
     public init(
         entries: [MenuBarEntry],
+        style: StripStyleBox = .markAndFigure,
         height: CGFloat,
         colour: AppearanceSettings.MenuBarColour,
         warningThreshold: Double,
+        coloursMarks: Bool = true,
         neutral: Color = .primary
     ) {
         // The width cap is applied here rather than by the caller so that the
@@ -301,135 +323,56 @@ public struct MenuBarStripView: View {
         // wider at a 16pt glyph than at a 10pt one. How many the user asked for
         // has already been settled upstream by `MenuBarStripContent.entries`, so
         // the limit passed here is the count in hand and what `fit` is being
-        // asked for is the width.
+        // asked for is the width — and, since the styles landed, the style's own
+        // ceiling as well.
         self.segments = StripFit
-            .fit(entries, limit: entries.count, height: height)
+            .fit(entries, limit: entries.count, style: style, height: height)
             .map(StripSegment.init)
+        self.style = style
         self.height = height
         self.colour = colour
         self.warningThreshold = warningThreshold
+        self.coloursMarks = coloursMarks
         self.neutral = neutral
     }
 
-    private var isDark: Bool { colorScheme == .dark }
-
-    private var coloured: Bool {
-        StripSegment.coloured(segments, colour: colour, warningThreshold: warningThreshold)
-    }
-
     public var body: some View {
-        // Both gaps come off `Tokens.Strip`, which is the scale `StripFit`
-        // measures the item with — they were two literals in this file, and a
-        // drawing that adds up its own numbers while something else adds up the
-        // width is a contract that can quietly stop being true. Why they are not
-        // on `Tokens.Space` is stated at the token: that scale is calibrated for a
-        // 300pt panel and this is a 22pt bar.
+        // The frame is stated rather than left to the sum of the cells, and that
+        // is what makes "the rasterised width is `ceil(StripFit.width(…))`" true by
+        // construction instead of by six styles each happening to add up to the
+        // number `StripFit` predicted for them.
+        let width = StripFit.width(segments: segments.count, style: style, height: height)
+        // Whole points, always. The height tuner offered half steps and the
+        // rasteriser rounds only the total, so an unrounded box put every interior
+        // boundary between pixels and a 13.5pt strip read softer than a 13pt one.
+        let box = Tokens.Strip.markBox(height: height)
+        let ink = StripInk(
+            neutral: neutral,
+            colour: colour,
+            warningThreshold: warningThreshold,
+            isDark: colorScheme == .dark,
+            coloursMarks: coloursMarks,
+            carriesColour: StripSegment.coloured(
+                segments, colour: colour, warningThreshold: warningThreshold
+            )
+        )
+
+        // The gap comes off `Tokens.Strip`, which is the scale `StripFit` measures
+        // the item with — it was a literal in this file, and a drawing that adds up
+        // its own numbers while something else adds up the width is a contract that
+        // can quietly stop being true. Why it is not on `Tokens.Space` is stated at
+        // the token: that scale is calibrated for a 300pt panel and this is a 22pt
+        // bar.
         HStack(spacing: Tokens.Strip.segmentGap) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                HStack(spacing: Tokens.Strip.markGap) {
-                    mark(for: segment)
-                    figure(for: segment)
-                }
+                style.cell(segment, height, ink)
             }
         }
-        .frame(height: height)
+        .frame(width: width, height: box)
+        // Behind the whole run rather than behind a cell: the micro bars' baseline
+        // is what binds n columns into one chart, and it is the only thing any
+        // style draws here. The underlay states its own alignment inside the box,
+        // because a background is centred and a baseline is not.
+        .background(style.underlay(width, height, ink))
     }
-
-    private func mark(for segment: StripSegment) -> some View {
-        Group {
-            if let brand = segment.brand {
-                SVGShape(pathData: brand.pathData, viewBox: brand.viewBox)
-                    .fill(markColour(brand))
-            } else {
-                // No vector for this provider, so its initial stands in. Drawn
-                // in the neutral rather than a brand colour: there is no path
-                // here whose luminance we could reason about.
-                Text(segment.initial)
-                    .font(.system(size: height * 0.8, weight: .semibold))
-                    .foregroundStyle(neutral)
-            }
-        }
-        .frame(width: height, height: height)
-    }
-
-    private func figure(for segment: StripSegment) -> some View {
-        // Monospaced: the figures tick every refresh and a proportional face
-        // would shift the whole strip sideways as they do. One point under the
-        // mark's box, because SF Mono's digits sit inside their line box and
-        // otherwise out-measure the logo beside them.
-        Text(segment.figure)
-            .font(.system(
-                size: Tokens.Strip.figureSize(height: height),
-                weight: .semibold,
-                design: .monospaced
-            ))
-            .foregroundStyle(figureColour(segment))
-            .lineLimit(1)
-            // A reserved cell, and the reason a tabular face was not enough on
-            // its own: drawn at its natural width, a service crossing 99 into 100
-            // widened the item by a whole cell and shoved every status icon to
-            // its left sideways — the same jitter the digits were chosen to
-            // prevent, an order of magnitude larger. The cell comes from the
-            // widest reading the strip can produce and never from the string in
-            // hand, because measuring the current string is what reintroduces it.
-            // Leading-aligned, and deliberately unlike every other figure rail in
-            // the app. Elsewhere a rail is a vertical column and trailing
-            // alignment lines its digits up on one edge. Here the figures are
-            // side by side, so there is no column to align to and trailing
-            // alignment spends the cell's slack between a figure and its own
-            // mark: measured in the bar, a one-digit reading sat markGap from the
-            // NEXT service's logo and two digit-widths from the logo it belongs
-            // to, which reads as "0 ChatGPT" rather than "Claude 0". The cell
-            // still reserves the widest reading, so 99 → 100 still cannot shove
-            // the status icons sideways; the slack just falls where it does no
-            // harm, in front of the next segment gap.
-            .frame(width: StripFit.figureCell(height: height), alignment: .leading)
-    }
-
-    /// The mark takes its brand colour only under `.perBar`. `.alertOnly` means
-    /// what it says: nothing carries colour until a service crosses the
-    /// warning, and then only the figure that crossed it does.
-    private func markColour(_ brand: BrandMark) -> Color {
-        guard coloured, colour == .perBar else { return neutral }
-        return brand.brandInk(dark: isDark)
-    }
-
-    /// The colour a figure is set in.
-    ///
-    /// The line is the user's, not the palette's. `UsageTint.color(for:)` samples
-    /// the ramp at its own fixed boundaries, so a user who moved the warning down
-    /// to 0.70 read amber at 0.75 in the bar while the row underneath was already
-    /// red — and under `.alertOnly` with the line under 0.60 the one figure that
-    /// crossed it was tinted resting teal, which is an alert drawn in the colour
-    /// of "you are fine". At or above the configured warning the figure therefore
-    /// takes the top of the ramp, which is the colour
-    /// `AppearanceSettings.menuBarTint(for:)` returns for the same reading. Below
-    /// it, `.alertOnly` stays neutral and `.perBar` takes the level's own colour.
-    ///
-    /// That function is restated here rather than called because this view is
-    /// handed the two facts as values rather than the settings object: the
-    /// rasteriser memoises on its inputs and an `ObservableObject` is not a key it
-    /// can compare, so `menuBarColour` and `warningThreshold` *are* that key. The
-    /// caution boundary stays the palette's, and only in `.perBar` — it is the one
-    /// input that does not reach here, and the distinction it draws, resting
-    /// against getting on, is a panel reading rather than a glance at a bar.
-    private func figureColour(_ segment: StripSegment) -> Color {
-        guard coloured, let percent = segment.percent else { return neutral }
-        switch colour {
-        // Stated rather than left to the `coloured` guard above to imply it: a
-        // monochrome strip is a template, and a template must not acquire a
-        // colour at any reading, however near its cap that reading is.
-        case .monochrome:
-            return neutral
-        case .alertOnly:
-            return percent >= warningThreshold ? Self.alarm : neutral
-        case .perBar:
-            return percent >= warningThreshold ? Self.alarm : UsageTint.color(for: percent)
-        }
-    }
-
-    /// The top of the ramp, asked for as a reading at the cap rather than as a
-    /// sample at 0.85: the shipped threshold is a setting, and a colour that
-    /// hardcoded it would ignore the user who moved the line.
-    private static var alarm: Color { UsageTint.color(for: 1) }
 }

@@ -242,16 +242,26 @@ struct MenuBarLabel: View {
     var body: some View {
         // A pre-rendered image, not the SwiftUI view: MenuBarExtra draws
         // Shape-based labels as nothing at all.
-        Image(nsImage: MenuBarStripRenderer.image(
+        //
+        // Hoisted into a local so the label below can be read off it. It used to
+        // be built inline and labelled from `entries` — the list that went *in* —
+        // which announced services the strip was not drawing: at a 16pt mark with
+        // three services the width cap leaves room for two, and the `Image`'s own
+        // `.accessibilityLabel` overrides the `accessibilityDescription` the
+        // renderer had already built correctly from the fitted list. There is one
+        // fit and one sentence now, and it survives the six styles by
+        // construction — three of them speak a different sentence shape, and this
+        // does not have to know which.
+        let strip = MenuBarStripRenderer.image(
             entries: entries,
             height: appearance.menuBarGlyphHeight,
             colour: appearance.menuBarColour,
-            warningThreshold: appearance.warningThreshold
-        ))
-        .padding(.horizontal, 1)
-        // What is on screen, not the panel's headline. The headline names one
-        // service; the strip names up to three, and VoiceOver should hear the
-        // ones that are actually being drawn.
-        .accessibilityLabel(MenuBarStripContent.accessibilityLabel(entries))
+            warningThreshold: appearance.warningThreshold,
+            style: appearance.menuBarStyle,
+            coloursMarks: appearance.coloursBrandMarks
+        )
+        Image(nsImage: strip)
+            .padding(.horizontal, 1)
+            .accessibilityLabel(strip.accessibilityDescription ?? "")
     }
 }

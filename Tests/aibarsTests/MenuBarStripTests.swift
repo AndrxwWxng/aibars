@@ -373,31 +373,112 @@ final class MenuBarStripContentTests: XCTestCase {
 /// lives in this string, so it has to name each service and each number, and it
 /// has to say the missing ones are missing rather than leave VoiceOver to
 /// announce an em dash as "dash" or as nothing at all.
+///
+/// Three sentence shapes since the styles landed, and the reason is the same one:
+/// `markOnly` draws its reading as a *tint* and `microBars` as a *bar height*,
+/// neither of which VoiceOver can hear, so those two say the band in words. Every
+/// call below names the shape it is asserting, because the shape is the style's
+/// answer rather than a default anyone may take.
 final class MenuBarStripAccessibilityTests: XCTestCase {
     private func entry(_ id: String, _ name: String, _ percent: Double?) -> MenuBarEntry {
         MenuBarEntry(serviceID: id, displayName: name, percent: percent)
     }
 
+    /// The shipped warning, so the band words below are measured against the line
+    /// the app actually draws.
+    private let warning = 0.85
+
     func testLabelNamesEveryServiceAndItsNumber() {
-        let label = MenuBarStripContent.accessibilityLabel([
-            entry("claude", "Claude", 0.924),
-            entry("gemini", "Gemini", 0.12)
-        ])
+        let label = MenuBarStripContent.accessibilityLabel(
+            [entry("claude", "Claude", 0.924), entry("gemini", "Gemini", 0.12)],
+            sentence: .figures, warningThreshold: warning
+        )
         XCTAssertEqual(label, "AI usage: Claude 92%, Gemini 12%")
     }
 
     func testAStatusOnlyServiceIsSaidToHaveNoQuota() {
-        let label = MenuBarStripContent.accessibilityLabel([
-            entry("claude", "Claude", 0.5),
-            entry("chatgpt", "ChatGPT", nil)
-        ])
+        let label = MenuBarStripContent.accessibilityLabel(
+            [entry("claude", "Claude", 0.5), entry("chatgpt", "ChatGPT", nil)],
+            sentence: .figures, warningThreshold: warning
+        )
         XCTAssertEqual(label, "AI usage: Claude 50%, ChatGPT reports no quota")
         XCTAssertFalse(label.contains(MenuBarEntry.noFigure), "VoiceOver was handed a dash to read")
         XCTAssertFalse(label.contains("ChatGPT 0"), "a service with no quota was given a number")
     }
 
     func testNothingReportedIsSaidRatherThanLeftSilent() {
-        XCTAssertEqual(MenuBarStripContent.accessibilityLabel([]), "AI usage: nothing reported yet")
+        // Every shape, because there is nothing to band and nothing to call
+        // closest to its cap: an empty strip says one thing however it is drawn.
+        for sentence in [MenuBarStripContent.Sentence.figures, .bands, .worst] {
+            XCTAssertEqual(
+                MenuBarStripContent.accessibilityLabel([], sentence: sentence, warningThreshold: warning),
+                "AI usage: nothing reported yet"
+            )
+        }
+    }
+
+    // MARK: - The band shape
+
+    /// The tint is the reading under `markOnly` and the bar height is under
+    /// `microBars`, and VoiceOver can hear neither — so the word is the drawing,
+    /// said out loud.
+    func testTheBandShapeSaysWhatTheTintMeans() {
+        let label = MenuBarStripContent.accessibilityLabel(
+            [
+                entry("claude", "Claude", 0.92),
+                entry("gemini", "Gemini", 0.64),
+                entry("chatgpt", "ChatGPT", nil)
+            ],
+            sentence: .bands, warningThreshold: warning
+        )
+        XCTAssertEqual(
+            label,
+            "AI usage: Claude 92%, near limit, Gemini 64%, in use, ChatGPT reports no quota"
+        )
+        // A service with no quota has no band, and inventing one for it would be
+        // the same lie as inventing a percentage.
+        XCTAssertFalse(label.contains("ChatGPT reports no quota, "), "a status-only service was banded")
+    }
+
+    /// The three words are the panel's own — `AppearanceSettings.grouped`'s
+    /// section titles — so the strip and the list under it call one state one
+    /// thing. Boundaries at the configured warning, not at the ramp's own stops.
+    func testTheBandWordsAreThePanelsAndTheLineIsTheUsers() {
+        func word(_ percent: Double, warning: Double) -> String {
+            MenuBarStripContent.accessibilityLabel(
+                [entry("claude", "Claude", percent)], sentence: .bands, warningThreshold: warning
+            )
+        }
+        XCTAssertTrue(word(0.85, warning: 0.85).hasSuffix("near limit"), "the boundary is exclusive")
+        XCTAssertTrue(word(0.8499, warning: 0.85).hasSuffix("in use"))
+        XCTAssertTrue(word(0, warning: 0.85).hasSuffix("idle"), "a genuine zero is not 'in use'")
+        // Moving the line moves the word. The failure this catches is a sentence
+        // that says "in use" about a service the strip has drawn red.
+        XCTAssertTrue(word(0.75, warning: 0.70).hasSuffix("near limit"))
+        XCTAssertTrue(word(0.75, warning: 0.95).hasSuffix("in use"))
+    }
+
+    // MARK: - The worst shape
+
+    /// One service, and why it is the one. It does not say how many were
+    /// considered — that is a number the strip does not draw.
+    func testTheWorstShapeNamesOneServiceAndSaysWhy() {
+        let label = MenuBarStripContent.accessibilityLabel(
+            [entry("claude", "Claude", 0.92)], sentence: .worst, warningThreshold: warning
+        )
+        XCTAssertEqual(label, "AI usage: Claude 92%, closest to its cap")
+        XCTAssertFalse(label.contains("1 of"), "the sentence counted the services it did not draw")
+    }
+
+    /// Nothing measured is connected, so there is no cap to be closest to. The
+    /// clause is dropped rather than attached to a service that has no reading.
+    func testTheWorstShapeDropsItsClauseWhenThereIsNoReading() {
+        XCTAssertEqual(
+            MenuBarStripContent.accessibilityLabel(
+                [entry("chatgpt", "ChatGPT", nil)], sentence: .worst, warningThreshold: warning
+            ),
+            "AI usage: ChatGPT reports no quota"
+        )
     }
 
     /// The strip's entire content can be status-only: a ChatGPT subscription, a
@@ -409,7 +490,9 @@ final class MenuBarStripAccessibilityTests: XCTestCase {
             from: [entry("chatgpt", "ChatGPT", nil), entry("copilot", "Copilot", nil)],
             limit: 3
         )
-        let label = MenuBarStripContent.accessibilityLabel(chosen)
+        let label = MenuBarStripContent.accessibilityLabel(
+            chosen, sentence: .figures, warningThreshold: warning
+        )
         XCTAssertEqual(label, "AI usage: ChatGPT reports no quota, Copilot reports no quota")
         XCTAssertFalse(label.contains("%"), "a service with no quota was given a percentage")
         XCTAssertFalse(label.contains("0"), "a service with no quota was given a number")
@@ -424,7 +507,9 @@ final class MenuBarStripAccessibilityTests: XCTestCase {
     func testTheOnlyServiceDrawnCanBeAStatusOnlyOne() {
         let chosen = MenuBarStripContent.entries(from: [entry("chatgpt", "ChatGPT", nil)], limit: 1)
         XCTAssertEqual(
-            MenuBarStripContent.accessibilityLabel(chosen),
+            MenuBarStripContent.accessibilityLabel(
+                chosen, sentence: .figures, warningThreshold: warning
+            ),
             "AI usage: ChatGPT reports no quota"
         )
     }
@@ -439,7 +524,9 @@ final class MenuBarStripAccessibilityTests: XCTestCase {
             entry("mistral", "Mistral", 0.6)
         ]
         let chosen = MenuBarStripContent.entries(from: candidates, limit: 2)
-        let label = MenuBarStripContent.accessibilityLabel(chosen)
+        let label = MenuBarStripContent.accessibilityLabel(
+            chosen, sentence: .figures, warningThreshold: warning
+        )
         XCTAssertEqual(label, "AI usage: Claude 90%, Gemini 80%")
         XCTAssertFalse(label.contains("Mistral"), "described a service the strip is not drawing")
     }
@@ -448,7 +535,9 @@ final class MenuBarStripAccessibilityTests: XCTestCase {
     /// then oddly worded, but it still has to carry the reading and it still has
     /// to be a string, not a crash.
     func testAnEmptyDisplayNameStillCarriesItsReading() {
-        let label = MenuBarStripContent.accessibilityLabel([entry("claude", "", 0.92)])
+        let label = MenuBarStripContent.accessibilityLabel(
+            [entry("claude", "", 0.92)], sentence: .figures, warningThreshold: warning
+        )
         XCTAssertTrue(label.contains("92%"), "lost the reading with the name")
     }
 }

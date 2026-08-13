@@ -104,19 +104,79 @@ public enum MenuBarStripContent {
         return Array(ranked.prefix(clamped(limit)))
     }
 
+    /// Which sentence the status item speaks.
+    ///
+    /// Three shapes rather than one, because three of the six styles draw their
+    /// reading as something VoiceOver cannot hear. A figure is its own
+    /// announcement; a tint and a bar height are not, so `markOnly`, `microBars`
+    /// and `markAndMeter` have to say the band in words or the user hears a
+    /// number and loses the only thing those styles are drawing. Which shape a
+    /// style takes is the style's own answer — `StripStyle.sentence` — so a
+    /// seventh style cannot be added without choosing.
+    public enum Sentence {
+        /// "Claude 92%, Gemini 64%". The reading is the drawing.
+        case figures
+        /// "Claude 92%, near limit". The reading is a tint or a bar height, and
+        /// the band word is what makes it audible.
+        case bands
+        /// "Claude 92%, closest to its cap". One service, and why it is the one.
+        case worst
+    }
+
     /// What VoiceOver reads out for the status item.
     ///
     /// Give it the entries the strip is actually drawing, so it describes what
-    /// is on screen rather than everything that was available to draw.
-    public static func accessibilityLabel(_ entries: [MenuBarEntry]) -> String {
+    /// is on screen rather than everything that was available to draw. The status
+    /// item used to be labelled from the *unfitted* list, so at a 16pt mark with
+    /// three services it announced three and drew two; the label is read back off
+    /// the rendered image now, which makes one fit and one sentence structural
+    /// rather than a thing two call sites have to keep agreeing about.
+    public static func accessibilityLabel(
+        _ entries: [MenuBarEntry],
+        sentence: Sentence,
+        warningThreshold: Double
+    ) -> String {
         guard !entries.isEmpty else { return "AI usage: nothing reported yet" }
-        let parts = entries.map { entry -> String in
-            // Spelled out rather than read as a dash, which VoiceOver announces
-            // as either "dash" or as nothing at all depending on its verbosity.
-            guard entry.percent != nil else { return "\(entry.displayName) reports no quota" }
-            return "\(entry.displayName) \(entry.figure)%"
+        switch sentence {
+        case .figures:
+            return "AI usage: " + entries.map(reading).joined(separator: ", ")
+        case .bands:
+            let parts = entries.map { entry -> String in
+                guard let percent = entry.percent else { return reading(entry) }
+                return "\(reading(entry)), \(band(percent, warningThreshold: warningThreshold))"
+            }
+            return "AI usage: " + parts.joined(separator: ", ")
+        case .worst:
+            // The first, because the style's ceiling is one and `StripFit` keeps
+            // the most urgent. Anything past it is not drawn and so is not said —
+            // and neither is how many there were, which is a number the strip does
+            // not draw either.
+            guard let only = entries.first else { return "AI usage: nothing reported yet" }
+            guard only.percent != nil else { return "AI usage: " + reading(only) }
+            return "AI usage: " + reading(only) + ", closest to its cap"
         }
-        return "AI usage: " + parts.joined(separator: ", ")
+    }
+
+    /// One service and its number, or the sentence a service with no quota gets.
+    ///
+    /// Spelled out rather than read as a dash, which VoiceOver announces as either
+    /// "dash" or as nothing at all depending on its verbosity.
+    private static func reading(_ entry: MenuBarEntry) -> String {
+        guard entry.percent != nil else { return "\(entry.displayName) reports no quota" }
+        return "\(entry.displayName) \(entry.figure)%"
+    }
+
+    /// The band word, on the panel's own boundaries.
+    ///
+    /// Lower-cased because it lands mid-sentence, but otherwise the three words
+    /// `AppearanceSettings.grouped(_:snapshots:)` labels its sections with — so the
+    /// strip and the list that opens under it call the same state the same thing.
+    /// The line is the user's configured warning, not the ramp's own 0.95, for the
+    /// same reason the tint is: someone who moved the warning to 0.70 must not hear
+    /// "in use" about a service the strip has drawn red.
+    private static func band(_ percent: Double, warningThreshold: Double) -> String {
+        if percent >= warningThreshold { return "near limit" }
+        return percent > 0 ? "in use" : "idle"
     }
 
     /// Status-only entries sort below every measured one: they carry no urgency,
