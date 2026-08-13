@@ -2701,9 +2701,17 @@ public struct RowActions: View {
                         .frame(width: Tokens.Control.rowIconButton,
                                height: Tokens.Control.rowIconButton)
                         .help(refreshHelp)
+                        // It stands where a named button stands, so it is named
+                        // too, and out of `HoverIconButton` so the header's
+                        // spinner and this one cannot come to say two things.
+                        .accessibilityLabel(HoverIconButton.inFlightName)
                 } else {
                     HoverIconButton(
                         systemName: "arrow.clockwise",
+                        // Already "Refresh Claude" / "Refresh ChatGPT", which is
+                        // the name as well as the hint here — the row is one of
+                        // nine and the service is the half that tells them apart.
+                        name: refreshHelp,
                         help: refreshHelp,
                         size: Tokens.Control.rowIconButton,
                         action: onRefresh
@@ -2712,6 +2720,7 @@ public struct RowActions: View {
                 if hasDashboard {
                     HoverIconButton(
                         systemName: "arrow.up.right",
+                        name: "Open usage page",
                         help: "Open usage page",
                         size: Tokens.Control.rowIconButton,
                         action: onOpenDashboard
