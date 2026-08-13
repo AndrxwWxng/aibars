@@ -54,6 +54,11 @@ public struct MenuBarContentView: View {
     /// gained its disclosure stays open; folding it by hand still sticks.
     @State private var uncollapsibleSections: Set<String> = []
 
+    /// The sentence the orientation slot opened with, or nil for a panel that had
+    /// nothing to orient. Written only by `latchOrientation` and cleared only when
+    /// the panel goes away.
+    @State private var latchedOrientation: String?
+
     /// Room the panel leaves the screen: the menu bar above it, its own header,
     /// and a margin at the bottom so the last row isn't flush with the dock.
     private static let screenReserve: CGFloat = 160
@@ -63,9 +68,42 @@ public struct MenuBarContentView: View {
 
     /// As much of the screen as the panel can reasonably take, rather than a
     /// fixed 560pt that clipped the list on every display.
+    ///
+    /// Handed a height rather than reading a screen, so the cap is a statement
+    /// that can be checked: a 887pt visible frame — a 14-inch display with the
+    /// menu bar and the Dock already taken off it — answers 887 − 160 = 727, and
+    /// the floor only comes into it under 480. `PanelLayoutTests` used to work
+    /// the same bound out from `NSScreen.main` in its own arithmetic, which on a
+    /// two-display machine is a test and a view reading two different screens;
+    /// both call this now.
+    static func availableListHeight(forScreenHeight height: CGFloat) -> CGFloat {
+        max(minimumListHeight, height - screenReserve)
+    }
+
+    /// The display the panel is opening on: the one under the pointer.
+    ///
+    /// Not `NSScreen.main`, which is the screen holding the key window — an app
+    /// with no Dock icon and no window of its own does not reliably hold one, and
+    /// the status item exists on *every* display's bar
+    /// (`MenuBarAppearance.statusBarWindows`), so the panel can open on a screen
+    /// the key window is not on. The pointer is over the item that was just
+    /// clicked, by definition, which makes it the one input that names the right
+    /// display. On a laptop beside a taller external the cap taken from the wrong
+    /// screen is larger than the screen the panel is on, so the `ScrollView` is
+    /// handed a height it can satisfy whole, never scrolls, and draws the rows
+    /// past the screen edge where nothing can reach them.
+    ///
+    /// Read on every `body` rather than observed: it can only matter at the
+    /// moment the panel is built, and `MenuBarExtra` rebuilds its content each
+    /// time it opens.
+    static var panelScreenHeight: CGFloat {
+        let pointer = NSEvent.mouseLocation
+        let host = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
+        return host?.visibleFrame.height ?? 800
+    }
+
     private var maximumListHeight: CGFloat {
-        let screen = NSScreen.main?.visibleFrame.height ?? 800
-        return max(Self.minimumListHeight, screen - Self.screenReserve)
+        Self.availableListHeight(forScreenHeight: Self.panelScreenHeight)
     }
 
     public var body: some View {
@@ -80,7 +118,7 @@ public struct MenuBarContentView: View {
             if sections.isEmpty {
                 emptyState
             } else {
-                if hasNothingConnected { orientation }
+                if let latchedOrientation { orientation(latchedOrientation) }
                 list(sections)
             }
         }
@@ -94,6 +132,13 @@ public struct MenuBarContentView: View {
         // list's own structure does — never when a percentage changes.
         .onAppear { adoptExpansion(of: sections) }
         .onChange(of: shape(of: sections)) { _ in adoptExpansion(of: sections) }
+        // And the orientation slot is decided once per opening. The panel already
+        // trusts `onAppear` for expansion, so the latch is seeded from the same
+        // hook; `onChange` is the upward half and `onDisappear` ends the
+        // presentation. See `latchOrientation`.
+        .onAppear { latchOrientation() }
+        .onChange(of: hasNothingConnected) { _ in latchOrientation() }
+        .onDisappear { latchedOrientation = nil }
     }
 
     /// The panel's ground: one material, and an opaque-enough scrim over it.
@@ -335,8 +380,9 @@ public struct MenuBarContentView: View {
                     // The button's own footprint, so the cluster doesn't shuffle
                     // sideways for the length of a refresh.
                     .frame(width: Tokens.Control.iconButton, height: Tokens.Control.iconButton)
+                    .accessibilityLabel(HoverIconButton.inFlightName)
             } else {
-                HoverIconButton(systemName: "arrow.clockwise", help: "Refresh all · \(updatedText) (⌘R)") {
+                HoverIconButton(.refreshAll, help: "Refresh all · \(updatedText) (⌘R)") {
                     Task { await state.refreshAll(userInitiated: true) }
                 }
                 .keyboardShortcut("r")
@@ -347,16 +393,16 @@ public struct MenuBarContentView: View {
             // last left on. A chart is the one thing in Settings the panel
             // routinely wants, and making the user find it under a gear is how
             // ninety days of readings stay unread.
-            HoverIconButton(systemName: "chart.xyaxis.line", help: "Usage history") {
+            HoverIconButton(.history, help: "Usage history") {
                 SettingsWindowController.show(state: state, pane: .history)
             }
 
-            HoverIconButton(systemName: "gearshape", help: "Settings (⌘,)") {
+            HoverIconButton(.settings, help: "Settings (⌘,)") {
                 showSettings = true
             }
             .keyboardShortcut(",")
 
-            HoverIconButton(systemName: "power", help: "Quit aibars (⌘Q)") {
+            HoverIconButton(.quit, help: "Quit aibars (⌘Q)") {
                 NSApp.terminate(nil)
             }
             .keyboardShortcut("q")
@@ -483,6 +529,41 @@ public struct MenuBarContentView: View {
         state.lockedAccounts.values.reduce(0, +)
     }
 
+    /// Decide the orientation slot, once, for the length of one opening.
+    ///
+    /// The slot used to be `if hasNothingConnected`, read live. That value flips
+    /// as the launch sweep lands, and the slot is two wrapped lines plus 6pt of
+    /// padding above the list — `MenuBarExtra` sizes its window to its content,
+    /// so the window moved by exactly that under the pointer. Measured at the
+    /// shipped 356pt panel, cozy, 100% type: 948pt with the sentence against
+    /// 914pt without it, a **34pt** jump. It is the one resize left in a panel
+    /// where every other part reserves space to avoid exactly this.
+    ///
+    /// Latched rather than reserved: holding the sentence's height open with
+    /// `.hidden()` would spend those 34pt on every connected panel forever, for a
+    /// line only a first launch ever reads.
+    ///
+    /// Self-correcting upward and never downward. A last session expiring flips
+    /// the value *to* true, and that sentence is worth growing the window once;
+    /// the sweep landing flips it to false, and that is the flip this exists to
+    /// swallow. A panel is short-lived, so "for the rest of this opening" is the
+    /// right unit — `onDisappear` clears the latch and the next open asks again.
+    ///
+    /// The *wording* is latched with the presence, which is the half a boolean
+    /// latch misses. `lockedAccounts` is filled by the census `adoptBrowserSessions`
+    /// starts and never waits for, so `lockedSessionCount` goes 0 → n after the
+    /// sweep and the slot swaps to the longer of the two sentences while
+    /// `hasNothingConnected` stays true throughout: a different number of wrapped
+    /// lines in the same slot, which is the same resize with the boolean standing
+    /// still. The first open therefore says the general thing and the next one
+    /// says "3 sessions were found but could not be read", which is the right way
+    /// round — an instruction the user has to act on can wait one opening, and a
+    /// sentence changing length under the pointer cannot be read at all.
+    private func latchOrientation() {
+        guard latchedOrientation == nil, hasNothingConnected else { return }
+        latchedOrientation = orientationSentence
+    }
+
     /// The one sentence a first launch gets.
     ///
     /// `emptyState` holds the panel's only other explanatory copy and it is
@@ -503,10 +584,17 @@ public struct MenuBarContentView: View {
     /// instruction reaches the screen nowhere at all. It goes here instead, in the
     /// slot that exists for exactly this — a panel of fifteen identical rows and
     /// no idea what to do about them.
-    private var orientation: some View {
-        Text(lockedSessionCount > 0
-             ? "\(lockedSessionCount) browser \(lockedSessionCount == 1 ? "session was" : "sessions were") found but could not be read. Unlock a browser in Settings."
-             : "aibars reads the sessions already open in your browsers. You don't need to sign in again.")
+    ///
+    /// A string rather than a view, because which of the two it is has to be
+    /// decided at the moment the slot is latched and then held.
+    private var orientationSentence: String {
+        lockedSessionCount > 0
+            ? "\(lockedSessionCount) browser \(lockedSessionCount == 1 ? "session was" : "sessions were") found but could not be read. Unlock a browser in Settings."
+            : "aibars reads the sessions already open in your browsers. You don't need to sign in again."
+    }
+
+    private func orientation(_ sentence: String) -> some View {
+        Text(sentence)
             .font(.system(size: appearance.metrics.detailSize, weight: .regular))
             .foregroundColor(Tokens.Ink.muted)
             // The sentence wraps at any panel width, and a wrapped Text inside a
@@ -592,40 +680,57 @@ public struct PanelHeader<Trailing: View>: View {
         // caption stacked under it is the dated treatment, and it also spent a
         // second line of the panel's height on something that is chrome rather
         // than a reading. Everything the header says now says it on one baseline.
-        HStack(spacing: Tokens.Space.medium) {
-            // `Tokens.Control.headerGlyph`, not `menuBarGlyphHeight`: that
-            // setting exists because the menu bar's row height is the system's
-            // and the mark has to be tuned into it. A header sets its own
-            // height, so the setting does not apply here — and the mark sits at
-            // the gutter with no nudge of its own, which puts it on the same
-            // left edge as every logo in the list below.
-            //
-            // `Ink.body`, and there is no longer an app colour to prefer over
-            // it. The closed list Arc used to head — this mark, the About mark,
-            // a text link, the sign-in affordance, the connect dialog's buttons
-            // — is closed by deletion: the palette keeps two hues, amber and
-            // red, and both mean alarm, so identity is carried by the mark's
-            // silhouette, which is what a mark is for. `body` rather than `mark`
-            // because the header is where the app names itself rather than
-            // labels something, and it is the same rung the wordmark beside it
-            // takes — the two are one masthead and were being inked two ways.
-            AppMark(size: Tokens.Control.headerGlyph, tint: Tokens.Ink.body)
+        let column = PanelAxis.leadingColumn(for: appearance)
+        return HStack(spacing: Tokens.Space.medium) {
+            // The masthead is the header's leading column and its name, and it is
+            // laid out as a row's leading column and its name: `column` is the
+            // rows' own measurement and the gap after the mark is the rows' own
+            // gap, so the wordmark begins on the same x as every service name
+            // below it whatever the logo settings are.
+            HStack(spacing: Tokens.Space.leadingColumn) {
+                if column > 0 {
+                    // `Tokens.Control.headerGlyph`, not `menuBarGlyphHeight`: that
+                    // setting exists because the menu bar's row height is the
+                    // system's and the mark has to be tuned into it. A header sets
+                    // its own height, so the setting does not apply here.
+                    //
+                    // Centred in the rows' box rather than laid against its
+                    // leading edge, because a `ProviderLogo` centres its glyph
+                    // inside its own box too (glyphSide is 0.76 of the box before
+                    // the optical correction). Leading-aligned, the two boxes
+                    // would share an edge and the two *inks* would sit about 2pt
+                    // apart, which is the offset a reader can actually see.
+                    //
+                    // `Ink.body`, and there is no longer an app colour to prefer
+                    // over it. The closed list Arc used to head — this mark, the
+                    // About mark, a text link, the sign-in affordance, the connect
+                    // dialog's buttons — is closed by deletion: the palette keeps
+                    // two hues, amber and red, and both mean alarm, so identity is
+                    // carried by the mark's silhouette, which is what a mark is
+                    // for. `body` rather than `mark` because the header is where
+                    // the app names itself rather than labels something, and it is
+                    // the same rung the wordmark beside it takes — the two are one
+                    // masthead and were being inked two ways.
+                    AppMark(size: Tokens.Control.headerGlyph, tint: Tokens.Ink.body)
+                        .frame(width: column - Tokens.Space.leadingColumn, alignment: .center)
+                }
 
-            // A wordmark, so it takes `Ramp.title` rather than the panel's
-            // scaled `titleSize`: the text-scale slider sizes the reading
-            // matter, and a masthead that grows with it starts competing with
-            // the figures it is a label for. Set at the same size and weight as
-            // a service name, because it is the same kind of thing — a name.
-            Text(Wordmark.text)
-                .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
-                .foregroundColor(Tokens.Ink.body)
-                // A wrapped title grows the header, which pushes the rule and
-                // every row below it down and makes the window resize to follow.
-                .lineLimit(1)
-                // Measured, never squeezed. The name is the header; it is two
-                // words shorter than anything else on the line and there is no
-                // width at which shortening it to "aiba…" is the right answer.
-                .fixedSize()
+                // A wordmark, so it takes `Ramp.title` rather than the panel's
+                // scaled `titleSize`: the text-scale slider sizes the reading
+                // matter, and a masthead that grows with it starts competing with
+                // the figures it is a label for. Set at the same size and weight
+                // as a service name, because it is the same kind of thing — a name.
+                Text(Wordmark.text)
+                    .font(.system(size: Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
+                    .foregroundColor(Tokens.Ink.body)
+                    // A wrapped title grows the header, which pushes the rule and
+                    // every row below it down and makes the window resize to follow.
+                    .lineLimit(1)
+                    // Measured, never squeezed. The name is the header; it is two
+                    // words shorter than anything else on the line and there is no
+                    // width at which shortening it to "aiba…" is the right answer.
+                    .fixedSize()
+            }
 
             if appearance.showsHeaderSummary, !candidates.isEmpty {
                 // The line's only flexible element, which is the fix: the
@@ -654,13 +759,17 @@ public struct PanelHeader<Trailing: View>: View {
             }
             .fixedSize()
         }
-        // The rows' own padding and not the raw gutter, so the header's mark and
-        // its wordmark stand on the same two vertical axes as every row's mark
-        // and name. Measured before this: the header sat at 12 and 38 while the
-        // rows sat at 15 and 40 — four axes down a 356pt panel, straddling a
-        // rule that bleeds the full width. It also has to be the metric rather
-        // than a constant, because the rows' padding moves with density and a
-        // fixed header would come back out of line at every preset but one.
+        // The rows' own padding, which is the outer half of the same alignment
+        // `column` makes above: the padding puts the mark's box on the rows' mark
+        // axis and the column puts the wordmark on the rows' name axis. Between
+        // them the header takes both of its axes from the rows' own measurement,
+        // so neither can drift when `logoSize`, `logoStyle` or `meterStyle`
+        // moves — which is the whole of the repair. It used to hand-roll the
+        // second axis as a 14pt mark and a `Space.medium`, and the two were
+        // measured against a mark that has since narrowed to 15pt: at the shipped
+        // gutter the wordmark stood at 12 + 15 + 8 = 35 while a row's name stood
+        // at 12 + 18 + 10 = 40, and at a 40pt logo the gap was 27pt. The pair
+        // agreed at no logo size at all.
         .padding(.horizontal, appearance.metrics.rowHorizontalPadding)
         // A point asymmetric: the rule beneath reads as the header's own bottom
         // edge rather than as the list's top one, so the gap down to it is the
@@ -703,6 +812,45 @@ public struct PanelHeader<Trailing: View>: View {
     }
 }
 
+/// The one leading column the panel has, taken from a row.
+///
+/// Outside `PanelHeader` for the same reason `Wordmark` is: that type is generic
+/// over its trailing view, and `PanelAxis.leadingColumn(for:)` would then have to
+/// be spelled with a placeholder at every call site including the tests'.
+enum PanelAxis {
+    /// The rows' leading column — whatever is in it, plus the gap to the text
+    /// after it — for the settings the panel is being drawn with.
+    ///
+    /// `RowGeometry` and not arithmetic of its own. That is the point: the header
+    /// held a private copy of this sum, the copy was written against a mark and a
+    /// gap that have both since moved, and the two columns had drifted apart at
+    /// every logo size. There is one arithmetic now and the header is a caller of
+    /// it, so the header cannot be left behind by a change to the rows again.
+    ///
+    /// `lines: []` because the answer does not depend on them — `leadingWidth` is
+    /// the logo, the dial and one gap, none of which is a line — and a header has
+    /// no lines to declare. `ProviderRow` asks the same question the same way when
+    /// it needs a text column without knowing its own lines yet.
+    ///
+    /// Zero has a meaning and it is honoured: with the logos hidden and the meter
+    /// off the dial, a row draws no leading column at all, and a header mark
+    /// standing in front of a list with no marks in it is the "indent in front of
+    /// nothing" the row itself refuses.
+    @MainActor
+    static func leadingColumn(for appearance: AppearanceSettings) -> CGFloat {
+        RowGeometry(
+            metrics: appearance.metrics,
+            showsPercentage: appearance.showsPercentage,
+            meterStyle: appearance.meterStyle,
+            logoStyle: appearance.logoStyle,
+            logoSize: CGFloat(appearance.logoSize),
+            panelWidth: CGFloat(appearance.panelWidth),
+            rowActions: appearance.rowActions,
+            lines: []
+        ).leadingWidth
+    }
+}
+
 /// The panel's masthead.
 ///
 /// Outside `PanelHeader` because that type is generic over its trailing view and
@@ -737,6 +885,30 @@ struct DisclosureHeader: View {
 
     private static let labelSpacing: CGFloat = Tokens.Space.small
 
+    /// Open or folded, as a word, because the only other place the state was
+    /// written was the chevron's `rotationEffect` and a rotation is not spoken.
+    ///
+    /// An `accessibilityValue` and deliberately not a trait. `.isToggle` is the
+    /// trait that means this and it is macOS 14, a version above the floor
+    /// `project.yml` pins. `.isSelected` reads as "selected", which is the word
+    /// `DesignSystem`'s sidebar rows already use for the chosen Settings pane —
+    /// a folded group and a chosen pane would then sound identical. And
+    /// `DisclosureGroup`, which would carry the trait for free, animates its
+    /// content in: `MenuBarExtra` sizes its window to its content, so animating
+    /// rows in makes the window chase a moving target, which is the thing the
+    /// toggle below deletes on purpose.
+    static func expansionValue(isExpanded: Bool) -> String {
+        isExpanded ? "Expanded" : "Collapsed"
+    }
+
+    /// What pressing it would do, which is the other half of the same sentence.
+    /// The counted form both ways round: the folded tooltip said "Show 3 more"
+    /// and the open one said "Hide", one word naming neither the subject nor
+    /// what it would leave behind.
+    static func expansionHint(isExpanded: Bool, count: Int) -> String {
+        isExpanded ? "Hides \(count) services" : "Shows \(count) services"
+    }
+
     var body: some View {
         Button {
             // Deliberately not animated. MenuBarExtra resizes its window to fit
@@ -765,6 +937,11 @@ struct DisclosureHeader: View {
                     // turning on a different clock from the plate under it is two
                     // clocks in one gesture.
                     .animation(Tokens.Motion.hover, value:isExpanded)
+                    // Out of the spoken name. A chevron is how the state is drawn
+                    // and `accessibilityValue` is how it is said; leaving the
+                    // symbol in the combined label puts "chevron.right" between
+                    // the group's name and its count.
+                    .accessibilityHidden(true)
                 SectionLabel(title: title, count: count, fontSize: fontSize)
             }
             .padding(.leading, Tokens.Space.gutter)
@@ -779,7 +956,9 @@ struct DisclosureHeader: View {
         ))
         .onHover { isHovered = $0 }
         .animation(Tokens.Motion.hover, value:isHovered)
-        .help(isExpanded ? "Hide" : "Show \(count) more")
+        .accessibilityValue(Self.expansionValue(isExpanded: isExpanded))
+        .accessibilityHint(Self.expansionHint(isExpanded: isExpanded, count: count))
+        .help(isExpanded ? "Hide \(count) services" : "Show \(count) more")
     }
 }
 
@@ -839,10 +1018,58 @@ struct SectionLabel: View {
     }
 }
 
+/// The header's cluster, as a closed list of what each control is called.
+///
+/// Refresh, history, settings and quit are never hideable — they are the only
+/// way out of an app with no Dock icon and no window — and they are enumerated
+/// here rather than written as four literals at the call site because "what it is
+/// called" is exactly the thing that went missing: every one of them announced
+/// its SF Symbol to VoiceOver. A case cannot be added without answering both
+/// questions below, and `PanelA11yTests` walks `allCases`, so the list the header
+/// builds from and the list under test are one list.
+///
+/// The symbol and the name only. One of the four interpolates the refresh age
+/// into its tooltip and all four carry a closure, so the hint and the action stay
+/// at the call site where they can be read beside what they do.
+enum HeaderControl: CaseIterable {
+    case refreshAll, history, settings, quit
+
+    var systemName: String {
+        switch self {
+        case .refreshAll: return "arrow.clockwise"
+        case .history:    return "chart.xyaxis.line"
+        case .settings:   return "gearshape"
+        case .quit:       return "power"
+        }
+    }
+
+    /// What VoiceOver calls it. A noun where the control *is* the thing —
+    /// "Settings", "Usage history" — and a verb where it acts on the whole panel,
+    /// because "Refresh all" and "Quit aibars" are not places to arrive at.
+    var name: String {
+        switch self {
+        case .refreshAll: return "Refresh all"
+        case .history:    return "Usage history"
+        case .settings:   return "Settings"
+        case .quit:       return "Quit aibars"
+        }
+    }
+}
+
 /// A borderless icon button that reveals a rounded hover background, matching
 /// the affordances in system menu bar panels.
 struct HoverIconButton: View {
     let systemName: String
+    /// What the button *is*, for VoiceOver.
+    ///
+    /// Required, and that is the fix rather than an implementation detail of it.
+    /// The label used to be a bare `Image(systemName:)` and the only text on the
+    /// button was `.help`, which sets the accessibility *hint* — the sentence
+    /// about what clicking would do. A hint is not a name, so all six of these
+    /// announced their SF Symbol: "arrow.clockwise", "gearshape", "power". A
+    /// defaulted parameter would have closed the six that exist and left the
+    /// seventh nameless, which is exactly how these six happened.
+    let name: String
     let help: String
     /// The whole button, hover plate included — not a frame wrapped around a
     /// larger one. A header button stands alone and takes the default; a button
@@ -853,6 +1080,46 @@ struct HoverIconButton: View {
     /// plate ran under the trailing percentage.
     var size: CGFloat = Tokens.Control.iconButton
     let action: () -> Void
+
+    /// What the spinner that stands in for one of these is called while a fetch
+    /// is out.
+    ///
+    /// Written once because it is the same claim in two files: the header's
+    /// cluster and a row's actions each replace a named button with a bare
+    /// `ProgressView`, which announces as an unlabelled progress indicator — the
+    /// one control in the panel that reports what the app is doing, saying
+    /// nothing, for as long as the fetch takes.
+    static let inFlightName = "Refreshing"
+
+    init(
+        systemName: String,
+        name: String,
+        help: String,
+        size: CGFloat = Tokens.Control.iconButton,
+        action: @escaping () -> Void
+    ) {
+        self.systemName = systemName
+        self.name = name
+        self.help = help
+        self.size = size
+        self.action = action
+    }
+
+    /// One of the header's four, which carry their own symbol and name.
+    init(
+        _ control: HeaderControl,
+        help: String,
+        size: CGFloat = Tokens.Control.iconButton,
+        action: @escaping () -> Void
+    ) {
+        self.init(
+            systemName: control.systemName,
+            name: control.name,
+            help: help,
+            size: size,
+            action: action
+        )
+    }
 
     @State private var isHovered = false
 
@@ -876,6 +1143,10 @@ struct HoverIconButton: View {
         // The plate arrives rather than appearing. One of the five things in the
         // panel that animate, and at the same duration as a row card's own fill.
         .animation(Tokens.Motion.hover, value: isHovered)
+        // Both channels, and in that order: the name says which control this is,
+        // the hint says what pressing it would do. `.help` alone gave the second
+        // and left the first to the symbol.
+        .accessibilityLabel(name)
         .help(help)
     }
 }

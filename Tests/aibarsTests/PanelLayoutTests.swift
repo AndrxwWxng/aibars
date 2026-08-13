@@ -12,8 +12,20 @@ import AppKit
 /// frame, which is exactly the thing the real window does not do. These tests
 /// measure the intrinsic size, with nothing imposed.
 final class PanelLayoutTests: XCTestCase {
+    /// A scratch appearance rather than `AppearanceSettings.shared`.
+    ///
+    /// The two-argument initialiser takes the shared object, which persists to
+    /// `UserDefaults.standard` — one domain shared by every test in the process
+    /// and by every run on the machine. `PanelWidthContractTests` walks
+    /// `panelWidth` through 300, 356, 420 and 520 on that same object and puts
+    /// it back in a `defer`, so a run that ends inside the loop leaves the key
+    /// where it stopped and every later run "restores" the wrong value
+    /// faithfully. Seen: `testWidthIsFixed` measuring a 420pt panel after a
+    /// snapshot harness was interrupted. The width under test here is the
+    /// default, so the fixture states it by having no stored one rather than by
+    /// hoping nobody else wrote one.
     @MainActor
-    private func panel(connected: Int) -> NSHostingView<AnyView> {
+    private func panel(connected: Int, name: String = "layout") throws -> NSHostingView<AnyView> {
         let state = AppState()
         for (index, provider) in state.providers.prefix(connected).enumerated() {
             provider.isAuthenticated = true
@@ -26,14 +38,18 @@ final class PanelLayoutTests: XCTestCase {
                 )
             )
         }
-        let view = MenuBarContentView(state: state, showSettings: .constant(false))
-            .environmentObject(state)
+        let view = MenuBarContentView(
+            state: state,
+            showSettings: .constant(false),
+            appearance: try scratchAppearance(name)
+        )
+        .environmentObject(state)
         return NSHostingView(rootView: AnyView(view))
     }
 
     @MainActor
-    func testPanelAsksForEnoughHeightToShowItsRows() {
-        let host = panel(connected: 3)
+    func testPanelAsksForEnoughHeightToShowItsRows() throws {
+        let host = try panel(connected: 3, name: "layout.rows")
         let height = host.fittingSize.height
         XCTAssertGreaterThan(
             height, 200,
@@ -42,9 +58,9 @@ final class PanelLayoutTests: XCTestCase {
     }
 
     @MainActor
-    func testTallerContentAsksForMoreRoom() {
-        let short = panel(connected: 1).fittingSize.height
-        let tall = panel(connected: 4).fittingSize.height
+    func testTallerContentAsksForMoreRoom() throws {
+        let short = try panel(connected: 1, name: "layout.short").fittingSize.height
+        let tall = try panel(connected: 4, name: "layout.tall").fittingSize.height
         XCTAssertGreaterThan(tall, short, "height doesn't track the number of rows")
     }
 
@@ -52,16 +68,165 @@ final class PanelLayoutTests: XCTestCase {
     /// of scrolling. The ceiling follows the display rather than a fixed number,
     /// so the invariant is "fits on screen with room for the menu bar", not any
     /// particular height.
+    ///
+    /// Through the view's own accessor rather than `NSScreen.main`, which is what
+    /// this line used to read. The panel takes its cap from the screen under the
+    /// pointer — the one the status item was clicked on — so on any machine with
+    /// two displays of different heights the test and the code were measuring
+    /// different screens, and the disagreement showed up as a flake on a laptop
+    /// beside an external rather than as a defect anybody could name.
     @MainActor
-    func testHeightStaysOnScreen() {
-        let available = NSScreen.main?.visibleFrame.height ?? 800
-        let host = panel(connected: 9)
+    func testHeightStaysOnScreen() throws {
+        let available = MenuBarContentView.panelScreenHeight
+        let host = try panel(connected: 9, name: "layout.screen")
         XCTAssertLessThanOrEqual(host.fittingSize.height, available - 60)
     }
 
+    /// The cap itself, stated rather than inferred from a rendered panel.
+    ///
+    /// Not `@MainActor`, deliberately: the arithmetic is a pure function of a
+    /// height, and a case that could only run on the main actor would mean it had
+    /// gone back to reading a screen. 887 is a 14-inch display's visible frame
+    /// with the menu bar and the Dock already taken off it, and 887 − 160 = 727.
+    /// The floor is the other end and it is exact at 480: 480 − 160 = 320, which
+    /// is `minimumListHeight`, so anything shorter answers the floor.
+    func testTheListCapIsTheScreenLessWhatThePanelLeavesIt() {
+        XCTAssertEqual(MenuBarContentView.availableListHeight(forScreenHeight: 887), 727)
+        XCTAssertEqual(MenuBarContentView.availableListHeight(forScreenHeight: 480), 320)
+        XCTAssertEqual(MenuBarContentView.availableListHeight(forScreenHeight: 400), 320)
+        // A cap that shrank with the screen past its own floor would put a
+        // 320pt list in a 240pt window, which is the panel becoming a slot.
+        XCTAssertEqual(MenuBarContentView.availableListHeight(forScreenHeight: 0), 320)
+    }
+
     @MainActor
-    func testWidthIsFixed() {
-        XCTAssertEqual(panel(connected: 3).fittingSize.width, 356)
+    func testWidthIsFixed() throws {
+        XCTAssertEqual(try panel(connected: 3, name: "layout.width").fittingSize.width, 356)
+    }
+}
+
+// MARK: - The sentence above the list
+
+/// The orientation slot must not resize the window while it is open.
+///
+/// It is the last thing in the panel keyed on a value that flips mid-session:
+/// `hasNothingConnected` is true when the panel opens on a first launch and false
+/// a moment later when the sweep adopts a session, and the slot is two wrapped
+/// lines and 6pt of padding. `MenuBarExtra` sizes its window to its content, so
+/// the flip resized the window under the pointer — the resize every other part of
+/// this panel reserves space to avoid.
+final class PanelOrientationLatchTests: XCTestCase {
+
+    /// A panel of rows that have all already earned their box, none of them
+    /// connected.
+    ///
+    /// Two things are held still so that the slot is the only thing left that can
+    /// move, and both of them are settings a user can be on.
+    ///
+    /// `grouping: .flat` with the disconnected rows `.shown`, so the list is one
+    /// block of every service whether or not any of them holds a credential. The
+    /// shipped default folds the not-connected rows behind a disclosure the moment
+    /// the first session lands, which takes fourteen rows off the panel — a real
+    /// resize, deliberate, documented on `uncollapsibleSections`, and nothing to
+    /// do with the sentence under test.
+    ///
+    /// And every provider is handed a failure rather than left empty:
+    /// `ProviderRow.lines` reserves a row's detail block for
+    /// `isAuthenticated || result != nil`, so a row already holding one measures
+    /// the same before and after its credential arrives.
+    @MainActor
+    private func panel(
+        suite: String,
+        connected: Bool = false
+    ) throws -> (state: AppState, host: NSHostingView<AnyView>) {
+        let state = AppState()
+        for provider in state.providers {
+            provider.isAuthenticated = connected
+            state.snapshots[provider.id] = .failure(.parse("timed out"))
+        }
+        let appearance = try scratchAppearance(suite)
+        appearance.grouping = .flat
+        appearance.disconnectedServices = .shown
+        let view = MenuBarContentView(
+            state: state,
+            showSettings: .constant(false),
+            appearance: appearance
+        )
+        let host = NSHostingView(rootView: AnyView(view))
+        host.layoutSubtreeIfNeeded()
+        return (state, host)
+    }
+
+    /// The sweep landing must not move the window.
+    ///
+    /// The flip is driven the way the real sweep drives it — a credential arrives
+    /// on one provider and a snapshot is written for it, which is what republishes
+    /// through `AppState` — so `hasNothingConnected` really does go false between
+    /// the two measurements. Without the latch the panel loses the sentence and
+    /// the 34pt the case below measures with it.
+    @MainActor
+    func testTheSweepLandingDoesNotResizeThePanel() throws {
+        let (state, host) = try panel(suite: "latch.flip")
+        let before = host.fittingSize.height
+
+        let provider = try XCTUnwrap(state.providers.first)
+        provider.isAuthenticated = true
+        state.snapshots[provider.id] = .failure(.parse("timed out"))
+        host.layoutSubtreeIfNeeded()
+        let after = host.fittingSize.height
+
+        XCTAssertEqual(
+            before, after, accuracy: 0.5,
+            "the panel measured \(before)pt with nothing connected and \(after)pt once a session "
+            + "was adopted — the orientation sentence has moved the window under the pointer"
+        )
+    }
+
+    /// And the premise: the slot really is drawn, and it really is worth a
+    /// resize. Without this the case above would pass on a panel that never
+    /// showed the sentence at all, which is the way a latch test dies quietly.
+    ///
+    /// The slot measures 34pt on this fixture — 948pt against 914pt — which is
+    /// two wrapped lines of `detailSize` plus the 6pt above them. Asserted as a
+    /// floor of 20 rather than as that figure, because the sentence wraps to one
+    /// line on a wide panel and to three on a narrow one at 130% type, and the
+    /// number under test is "the window jumped", not "by how much".
+    @MainActor
+    func testTheSlotIsWorthLatching() throws {
+        let (_, disconnected) = try panel(suite: "latch.premise.off")
+        let (_, connected) = try panel(suite: "latch.premise.on", connected: true)
+
+        XCTAssertGreaterThan(
+            disconnected.fittingSize.height, connected.fittingSize.height + 20,
+            "a panel that opens with nothing connected is \(disconnected.fittingSize.height)pt "
+            + "against \(connected.fittingSize.height)pt for the same list connected — it is not "
+            + "drawing the orientation sentence, so the cases either side of this one are "
+            + "measuring a slot that was never there"
+        )
+    }
+
+    /// The wording is latched with the presence.
+    ///
+    /// `lockedAccounts` is filled by the census `adoptBrowserSessions` starts and
+    /// never waits for, so `lockedSessionCount` goes 0 → n *after* the panel is
+    /// on screen while `hasNothingConnected` stays true throughout. The two
+    /// sentences are different lengths and wrap differently, so a latch that held
+    /// only the boolean would still let the slot change height — the same resize
+    /// with the boolean standing still.
+    @MainActor
+    func testALockedSessionArrivingDoesNotResizeThePanel() throws {
+        let (state, host) = try panel(suite: "latch.wording")
+        let before = host.fittingSize.height
+
+        state.lockedAccounts = ["chrome": 3]
+        host.layoutSubtreeIfNeeded()
+        let after = host.fittingSize.height
+
+        XCTAssertEqual(
+            before, after, accuracy: 0.5,
+            "the panel measured \(before)pt and then \(after)pt when the census reported three "
+            + "locked sessions — the slot swapped to the longer sentence while it was being read"
+        )
     }
 }
 
@@ -259,15 +424,23 @@ final class RowStateLayoutTests: XCTestCase {
         return try rowHeight(result(reading, provider: provider), appearance: appearance, name: name)
     }
 
-    /// `showsCountdowns` is forced on over the preset rather than left to it.
-    /// Minimal switches it off, and a metered row with no caption is one line
-    /// shorter — a fact about a setting rather than about a state, and the
-    /// busier layout is the one worth measuring.
+    /// The preset as it ships, with nothing forced over the top of it.
+    ///
+    /// It used to switch `showsCountdowns` on afterwards, on the argument that
+    /// the busier layout is the one worth measuring. What that actually did was
+    /// excuse the one preset the height law did not hold for: Minimal turns
+    /// amounts and countdowns both off, `lines` asked the landed *reading*
+    /// whether the caption had content, and a metered row was therefore a whole
+    /// `lineBox` shorter than the same row a second earlier. Forcing the setting
+    /// on put every case below on a preset no user is running.
+    ///
+    /// `ProviderRow.reservesWindowLine` asks the settings now, so Minimal
+    /// reserves no window line in *any* state and the law holds without the
+    /// prop. Every case in this class measures the five presets as shipped.
     @MainActor
     private func presetSettings(_ preset: AppearanceSettings.Preset) throws -> AppearanceSettings {
         let appearance = try scratchAppearance("state.\(preset.rawValue)")
         appearance.apply(preset)
-        appearance.showsCountdowns = true
         return appearance
     }
 

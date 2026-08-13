@@ -102,6 +102,132 @@ final class PanelShellTests: XCTestCase {
         }
     }
 
+    // MARK: - The header's two axes
+
+    /// The header's wordmark begins exactly where a row's name begins, at every
+    /// logo size the slider can reach.
+    ///
+    /// The header used to spell its own leading column out — a 14pt `AppMark` and
+    /// a `Space.medium` — while a row spells its as the logo and a
+    /// `Space.leadingColumn`. Two sums for one column, so the two axes could only
+    /// agree by coincidence, and once the mark's grid was made whole and the mark
+    /// came out 15pt wide they agreed nowhere: the wordmark stood at
+    /// 12 + 15 + 8 = 35 against a name at 12 + logoSize + 10, which is 38, 40, 44
+    /// and 62 at the four sizes below. There is one sum now and the header is a
+    /// caller of it.
+    ///
+    /// Computed on both sides rather than read off a render. The two runs are
+    /// "aibars" and a service's name, whose glyphs carry different left side
+    /// bearings, so a rendered comparison has about a point of slop in it — and at
+    /// the shipped 18pt logo the error being watched for is five.
+    @MainActor
+    func testTheHeadersWordmarkBeginsOnTheRowsNameAxis() {
+        let appearance = settings("axis")
+        // Both ends of the slider's 16...40 range, the shipped 18, and the 22 the
+        // Comfortable preset carries.
+        let expected: [Double: CGFloat] = [16: 38, 18: 40, 22: 44, 40: 62]
+        for logoSize in expected.keys.sorted() {
+            appearance.logoSize = logoSize
+            let padding = appearance.metrics.rowHorizontalPadding
+
+            let header = padding + PanelAxis.leadingColumn(for: appearance)
+            let row = padding + RowGeometry(
+                metrics: appearance.metrics,
+                showsPercentage: appearance.showsPercentage,
+                meterStyle: appearance.meterStyle,
+                logoStyle: appearance.logoStyle,
+                logoSize: CGFloat(appearance.logoSize),
+                panelWidth: CGFloat(appearance.panelWidth),
+                rowActions: appearance.rowActions,
+                // The row directly under the header, which has landed a reading
+                // and drawn both of its optional lines. The header asks the same
+                // arithmetic with `lines: []`, so an equal answer also pins that
+                // the leading column is not a function of them — the day it
+                // becomes one, the header starts measuring a row that isn't there.
+                lines: [.meter, .window]
+            ).leadingWidth
+
+            XCTAssertEqual(
+                header, row, accuracy: 0.001,
+                "at a \(logoSize)pt logo the wordmark starts at \(header)pt and a service name at "
+                + "\(row)pt — the header and the rows are laid out to two different axes"
+            )
+            // Written twice, as this file's own rule: the sum, and the number the
+            // sum comes to.
+            XCTAssertEqual(
+                row,
+                Tokens.Space.gutter + CGFloat(logoSize) + Tokens.Space.leadingColumn,
+                accuracy: 0.001
+            )
+            XCTAssertEqual(row, expected[logoSize] ?? 0, accuracy: 0.001)
+
+            // The premise: the arithmetic this replaced really did answer
+            // something else, and answered the same something at every size.
+            let retired = padding
+                + AppMarkGeometry(size: Tokens.Control.headerGlyph).width
+                + Tokens.Space.medium
+            XCTAssertEqual(
+                retired, 35, accuracy: 0.001,
+                "the retired sum is the gutter, the mark's own drawn width and the line's gap — "
+                + "12 + 15 + 8 — and it is what the wordmark stood on at every logo size"
+            )
+            XCTAssertNotEqual(
+                retired, row, accuracy: 0.001,
+                "the header's own arithmetic already agreed with the rows at \(logoSize)pt, so "
+                + "this case cannot see the drift it exists for"
+            )
+        }
+    }
+
+    /// With the logos hidden and the meter off the dial, a row draws no leading
+    /// column — and neither does the header. A mark standing in front of a list
+    /// with no marks in it is the same indent in front of nothing `ProviderRow`
+    /// already refuses.
+    @MainActor
+    func testTheHeaderKeepsNoColumnTheRowsHaveGivenUp() {
+        let appearance = settings("axis-hidden")
+        appearance.logoStyle = .hidden
+        appearance.meterStyle = .bar
+        XCTAssertEqual(
+            PanelAxis.leadingColumn(for: appearance), 0,
+            "the header still reserves a column for a mark the list below it does not draw"
+        )
+
+        // Under the ring the dial *is* the column, on every row whether or not it
+        // has a reading — so the header keeps one too and stands its mark in it.
+        appearance.meterStyle = .ring
+        XCTAssertEqual(
+            PanelAxis.leadingColumn(for: appearance),
+            appearance.metrics.ringDiameter + Tokens.Space.leadingColumn,
+            accuracy: 0.001
+        )
+    }
+
+    /// And the column the mark now sits in changes nothing about how tall the
+    /// header is. It is a width frame around a mark that keeps its own
+    /// `Control.headerGlyph` height, so the rule under the header and every row
+    /// beneath it stay where they are at any logo size.
+    @MainActor
+    func testTheLogoSizeDoesNotMoveTheHeaderDown() {
+        let appearance = settings("axis-height")
+        var heights: [Double: CGFloat] = [:]
+        for logoSize in [16.0, 18.0, 22.0, 40.0] {
+            appearance.logoSize = logoSize
+            let header = PanelHeader(appearance: appearance, summary: "updated 12s ago") {
+                Image(systemName: "arrow.clockwise")
+            }
+            heights[logoSize] = NSHostingView(
+                rootView: AnyView(header.frame(width: 356))
+            ).fittingSize.height
+        }
+        let spread = (heights.values.max() ?? 0) - (heights.values.min() ?? 0)
+        XCTAssertLessThanOrEqual(
+            spread, 0.01,
+            "the header measured \(heights) across the logo slider — its mark's box is growing "
+            + "the masthead as well as widening it"
+        )
+    }
+
     // MARK: - The header rule
 
     /// One neutral hairline under the header, at every usage level up to and
