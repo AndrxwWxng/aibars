@@ -424,6 +424,41 @@ final class TokensTests: XCTestCase {
              | channel { $0.blueComponent }
     }
 
+    // MARK: - The keyboard's row
+
+    /// A selected row draws the pressed plane, under every background setting and
+    /// over every hover step.
+    ///
+    /// There is deliberately no `Fill.selected`, and this case is where that
+    /// decision is pinned: a fourth plane between `cardHover` 0.09 and `pressed`
+    /// 0.12 would be a 1.5% step nobody can see, asking the reader to tell apart
+    /// two states that never appear on the same row anyway — the pointer's hover
+    /// follows the pointer and the selection follows the arrow keys. The two are
+    /// the same sentence, "this is the row the next action lands on", and they get
+    /// the same number.
+    func testASelectedRowDrawsThePressedFill() {
+        XCTAssertEqual(Tokens.rowBackground(.plain, isHovered: false, isSelected: true), Tokens.Fill.pressed)
+        for style in [AppearanceSettings.RowBackground.plain, .hover, .always] {
+            for hovered in [false, true] {
+                XCTAssertEqual(
+                    Tokens.rowBackground(style, isHovered: hovered, isSelected: true),
+                    Tokens.Fill.pressed,
+                    "selection did not outrank \(style)/\(hovered ? "hovered" : "resting")"
+                )
+            }
+        }
+        // And a press still outranks the selection, which is the order the
+        // function documents: the two resolve to one value, so the only way to
+        // see the precedence is that neither branch can produce anything else.
+        XCTAssertEqual(
+            Tokens.rowBackground(.always, isHovered: true, isPressed: true, isSelected: true),
+            Tokens.Fill.pressed
+        )
+        // The default keeps every existing call site exactly where it was.
+        XCTAssertEqual(Tokens.rowBackground(.plain, isHovered: false), 0)
+        XCTAssertEqual(Tokens.rowBackground(.always, isHovered: true), Tokens.Fill.cardHover)
+    }
+
     // MARK: - Increased contrast
 
     func testRulesAndBordersStepUpUnderIncreasedContrast() {

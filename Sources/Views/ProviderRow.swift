@@ -20,6 +20,13 @@ public struct ProviderRow: View {
     /// whole panel: the reading was dropped first, the row collapsed to its
     /// loading height, and the window resized under the pointer.
     public let isRefreshing: Bool
+    /// The row the keyboard is on: the one Return would act on.
+    ///
+    /// A fill and an accessibility trait, and nothing else. It is not an input to
+    /// `RowGeometry` and must never become one — see the note on `geometry` — so a
+    /// panel with a selection measures exactly the same as the same panel without
+    /// one, and arrowing down a list cannot resize the window.
+    public let isSelected: Bool
 
     /// The budgets, read plainly rather than observed — the reasoning
     /// `ForecastLine` writes down for the trend store applies unchanged here.
@@ -50,6 +57,9 @@ public struct ProviderRow: View {
         showsPlanName: Bool? = nil,
         isRefreshing: Bool = false,
         appearance: AppearanceSettings? = nil,
+        // Ahead of the three stores rather than after them, so no existing call
+        // site has to reorder an argument to gain a defaulted one.
+        isSelected: Bool = false,
         budgets: BudgetStore? = nil,
         trend: UsageTrendStore? = nil,
         sparklines: RowSparklineStore? = nil
@@ -62,6 +72,7 @@ public struct ProviderRow: View {
         self.showsAllWindows = showsAllWindows
         self.showsPlanName = showsPlanName
         self.isRefreshing = isRefreshing
+        self.isSelected = isSelected
         // Resolved here rather than as default arguments: a default argument is
         // evaluated at the call site, and all four shared objects are
         // main-actor isolated, so that would constrain who is allowed to build
@@ -89,6 +100,12 @@ public struct ProviderRow: View {
     /// reservation that disagreed with the drawing sat there for two releases
     /// with every test in the suite green; `RowReservationTests` reads it here so
     /// the reservation is checked against the same states the drawing is.
+    ///
+    /// `isSelected` is absent from this list for the same reason `result` is, and
+    /// it must stay absent. A selection changes one card's fill and nothing else,
+    /// so it cannot change a row's height — the moment it could, arrowing down a
+    /// filtered list would resize the window under the reader's eye, which is the
+    /// resize this whole model exists to forbid.
     var geometry: RowGeometry { rowGeometry(lines: lines) }
 
     /// The same measurements at a stated set of lines.
@@ -235,10 +252,16 @@ public struct ProviderRow: View {
             RowButtonStyle(
                 radius: geometry.cardRadius,
                 style: appearance.rowBackground,
-                isHovered: isHovered
+                isHovered: isHovered,
+                isSelected: isSelected
             )
         )
         .onHover { isHovered = $0 }
+        // The second channel, and the one that is actually missing today from
+        // every selectable thing in the app that is not a `SelectableChip`: the
+        // fill is a drawing and a drawing is not spoken. The same line
+        // `SelectableChip` carries, for the same reason.
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .help(rowHelp)
         // The panel is the only place a row can be dismissed from. A user who
         // subscribes to two of eleven services otherwise has to find Settings →
@@ -2855,16 +2878,32 @@ struct RowButtonStyle: ButtonStyle {
     /// Appearance pane's sample cannot come to disagree about any of them.
     let style: AppearanceSettings.RowBackground
     let isHovered: Bool
+    /// The keyboard's row. It resolves to `Fill.pressed`, the same plane a press
+    /// lands on, and there is deliberately no fourth token between them — the two
+    /// are the same sentence, "this is the row the next action lands on", arriving
+    /// from the arrow keys in one case and the pointer in the other.
+    ///
+    /// One drawn channel is correct here, and the reason is worth having in
+    /// writing so nobody "fixes" it: the two-and-three-channel rule in this
+    /// codebase belongs to the near-cap contract (`nearCapChannels`), which is a
+    /// *measurement* that has to survive greyscale, colour blindness and
+    /// `ColorRamp.mono`. A selection is a transient interaction state the user
+    /// made half a second ago with an arrow key, at most one row carries it, and
+    /// it has no hue at all — so greyscale takes nothing away from it. The second
+    /// channel it does need is for assistive tech, and that is the `.isSelected`
+    /// trait on the row's own Button.
+    var isSelected: Bool = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let resting = Tokens.rowBackground(style, isHovered: isHovered)
+        let resting = Tokens.rowBackground(style, isHovered: isHovered, isSelected: isSelected)
         return configuration.label
             .background(
                 Tokens.surface(radius)
                     .fill(Tokens.quiet(Tokens.rowBackground(
                         style,
                         isHovered: isHovered,
-                        isPressed: configuration.isPressed
+                        isPressed: configuration.isPressed,
+                        isSelected: isSelected
                     )))
                     // Down at once and up over 0.12s. A press is the user's own
                     // action and has already happened by the time it is drawn;
@@ -2874,6 +2913,13 @@ struct RowButtonStyle: ButtonStyle {
                                value: configuration.isPressed)
                     // And the hover step on the same duration, short enough to
                     // read as the card lighting up rather than as a fade.
+                    //
+                    // The selection plate arrives on this same curve rather than
+                    // on a second `.animation` of its own, because `resting` now
+                    // folds `isSelected` in: moving the selection changes that
+                    // value, so it is already the thing being watched. It is the
+                    // same kind of event from the user's side as a hover, and the
+                    // Motion list is closed at five.
                     .animation(Tokens.Motion.hover, value: resting)
                     // Held inside the gutter so a hovered card floats rather than
                     // touching the window edge.

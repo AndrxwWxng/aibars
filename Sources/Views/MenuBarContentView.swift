@@ -15,10 +15,27 @@ public struct MenuBarContentView: View {
         self.init(state: state, showSettings: showSettings, appearance: .shared)
     }
 
-    public init(state: AppState, showSettings: Binding<Bool>, appearance: AppearanceSettings) {
+    /// The two seeded parameters are for the tests and nothing else, and both
+    /// default — so `PanelLayoutTests`, `PanelShellTests`, `PanelWidthContractTests`
+    /// and `ZZPanelSnapshot` keep compiling untouched.
+    ///
+    /// `restingListHeight` in particular cannot be reached any other way: the real
+    /// value is measured off a completed layout pass (see `RestingListHeight`), and
+    /// a test measuring a panel with `fittingSize` gets one pass and no chance to
+    /// feed the measurement back. Injecting it is what makes "a query that removes
+    /// rows does not change the list box" an assertion rather than an eyeball.
+    public init(
+        state: AppState,
+        showSettings: Binding<Bool>,
+        appearance: AppearanceSettings,
+        keyboard: PanelKeyboardState = .resting,
+        restingListHeight: CGFloat? = nil
+    ) {
         self._state = ObservedObject(wrappedValue: state)
         self._appearance = ObservedObject(wrappedValue: appearance)
         self._showSettings = showSettings
+        self._keyboard = State(initialValue: keyboard)
+        self._restingListHeight = State(initialValue: restingListHeight)
     }
 
     /// The panel is drawn over the desktop, so its ground is a material and the
@@ -58,6 +75,33 @@ public struct MenuBarContentView: View {
     /// nothing to orient. Written only by `latchOrientation` and cleared only when
     /// the panel goes away.
     @State private var latchedOrientation: String?
+
+    /// The query, whether the filter line is showing, and which row the keyboard
+    /// is on — one struct rather than three flags, so `PanelKeyboard.reduce` can be
+    /// handed the whole thing `inout` and checked without a view.
+    @State private var keyboard: PanelKeyboardState
+
+    /// How tall the list drew itself while nothing was being filtered.
+    ///
+    /// Measured, never computed. Adding up `RowGeometry.height` over the visible
+    /// rows is the obvious implementation and it is wrong: a metered row draws
+    /// about a point taller than the reservation and a row with `rowActions ==
+    /// .never` runs three to five points the other way, which `PanelLayoutTests`
+    /// states outright — "the first thing that lays a row out by it will clip a
+    /// caption by a point". This must not be that thing.
+    @State private var restingListHeight: CGFloat?
+
+    /// The rows on screen, in drawn order, as ids.
+    ///
+    /// `@State` rather than a `body` local because the monitor's closure has to
+    /// read it: a value computed in `body` and captured in `onAppear` is a snapshot
+    /// of whenever `onAppear` last ran, and the arrow keys would then be navigating
+    /// yesterday's list.
+    @State private var drawnRowIDs: [String] = []
+
+    /// A reference type in `@State`: created once per view identity, publishing
+    /// nothing. That is right — nothing about it drives layout.
+    @State private var monitor = PanelKeyMonitor()
 
     /// Room the panel leaves the screen: the menu bar above it, its own header,
     /// and a margin at the bottom so the last row isn't flush with the dock.
@@ -110,16 +154,26 @@ public struct MenuBarContentView: View {
         // Ordering, account collapsing, the quotaless and disconnected
         // policies, and grouping all happen in one pass inside
         // AppearanceSettings; the panel only draws what comes back.
-        let sections = appearance.sections(from: state.rankedProviders, snapshots: state.snapshots)
+        let all = appearance.sections(from: state.rankedProviders, snapshots: state.snapshots)
+        // And then the query, which narrows what is drawn without touching what
+        // was arranged. `all` is what the expansion bookkeeping below reads; the
+        // outcome is what the list draws. Keeping the two apart is not tidiness —
+        // see the note on `adoptExpansion`.
+        let outcome = PanelFilter.apply(
+            query: keyboard.isFiltering ? keyboard.query : "",
+            to: all,
+            all: state.providers,
+            snapshots: state.snapshots
+        )
         return VStack(spacing: 0) {
-            header(firstRow: sections.first?.providers.first)
+            header(firstRow: all.first?.providers.first, matchCount: outcome.rows.count)
             headerRule
 
-            if sections.isEmpty {
+            if all.isEmpty {
                 emptyState
             } else {
                 if let latchedOrientation { orientation(latchedOrientation) }
-                list(sections)
+                list(outcome)
             }
         }
         .frame(width: CGFloat(appearance.panelWidth))
@@ -128,17 +182,86 @@ public struct MenuBarContentView: View {
         // ladder, and is also why the base has to be a value rather than
         // whatever wallpaper happens to be behind the window.
         .background { ground }
+        // Zero-sized, hit-testing nothing, and the only way this view learns which
+        // window it is in. See `PanelKeyMonitor`.
+        .background(
+            PanelWindowProbe { window in
+                guard let window else { monitor.detach(); return }
+                monitor.attach(to: window)
+            }
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+        )
         // Expansion follows the shape of the list, so it can only move when the
-        // list's own structure does — never when a percentage changes.
-        .onAppear { adoptExpansion(of: sections) }
-        .onChange(of: shape(of: sections)) { _ in adoptExpansion(of: sections) }
+        // list's own structure does — never when a percentage changes, and never
+        // when a query does.
+        .onAppear { adoptExpansion(of: all) }
+        .onChange(of: shape(of: all)) { _ in adoptExpansion(of: all) }
         // And the orientation slot is decided once per opening. The panel already
         // trusts `onAppear` for expansion, so the latch is seeded from the same
         // hook; `onChange` is the upward half and `onDisappear` ends the
         // presentation. See `latchOrientation`.
         .onAppear { latchOrientation() }
         .onChange(of: hasNothingConnected) { _ in latchOrientation() }
-        .onDisappear { latchedOrientation = nil }
+        // No loop: `reconcile` moves `selection`, which changes one card's fill
+        // and never the key below.
+        //
+        // Keyed on the query as well as the ids, and the query is the half that is
+        // easy to leave out. A keystroke clears the selection because the rows are
+        // about to move under it — but a refinement that narrows *nothing*, "cod"
+        // to "code" over the same three rows, moves no id at all. Watching the ids
+        // alone, the handler would not run, the selection would stay cleared, and
+        // Return would do nothing for the rest of the query.
+        .onChange(of: PanelRows(ids: outcome.rows.map(\.id), query: keyboard.query)) { rows in
+            drawnRowIDs = rows.ids
+            PanelKeyboard.reconcile(&keyboard, rows: rows.ids)
+        }
+        .onAppear {
+            drawnRowIDs = outcome.rows.map(\.id)
+            wireKeyboard()
+        }
+        .onDisappear {
+            monitor.detach()
+            latchedOrientation = nil
+            // Without this, `MenuBarExtra` keeping its content view alive between
+            // openings means the next open shows yesterday's query with yesterday's
+            // rows filtered out — and the user has no idea why four services
+            // vanished.
+            keyboard = .resting
+        }
+    }
+
+    /// Hand the monitor the reducer, and the reducer's answers back to the panel.
+    ///
+    /// The closure captures this view value, which is legitimate for exactly the
+    /// properties it touches: a `@State` read or write goes through the shared
+    /// storage box, so it always sees current state. It must therefore touch
+    /// **only** `@State`, the monitor, and the two reference dependencies — never
+    /// a `let` computed in `body`, which would be frozen at whenever `onAppear`
+    /// last ran. `drawnRowIDs` exists for precisely that reason.
+    ///
+    /// Idempotent, because `MenuBarExtra` may or may not rebuild its content per
+    /// opening and `onAppear` is the only hook either way.
+    private func wireKeyboard() {
+        monitor.onCommand = { command in
+            var next = keyboard
+            switch PanelKeyboard.reduce(command, into: &next, rows: drawnRowIDs) {
+            case .ignored:
+                return false
+            case .handled:
+                keyboard = next
+            case .activate(let id):
+                keyboard = next
+                activate(id)
+            case .close:
+                keyboard = .resting
+                monitor.dismissPanel()
+            }
+            return true
+        }
+        // The panel losing the keyboard is the panel being finished with, whether
+        // it was closed or the user clicked away.
+        monitor.onResignKey = { keyboard = .resting }
     }
 
     /// The panel's ground: one material, and an opaque-enough scrim over it.
@@ -210,6 +333,13 @@ public struct MenuBarContentView: View {
         sections.map { "\($0.id):\($0.isCollapsible)" }.joined(separator: "|")
     }
 
+    /// **Fed the unfiltered sections, always.** This is the single easiest thing
+    /// to get wrong in the filter: hand it the filtered shape and a query that
+    /// leaves one connected row makes the disconnected block "the only block",
+    /// which marks it uncollapsible — and then clearing the filter force-expands
+    /// nine rows the user had deliberately folded away, with no keystroke of
+    /// theirs between the two states. `PanelFilter.apply` returns an empty
+    /// `sections` while filtering partly so that this cannot be done by accident.
     private func adoptExpansion(of sections: [PanelSection]) {
         // A lone block loses its disclosure whatever it asked for, so it counts
         // as drawn whole here too — the same rule `block(_:isFirst:isOnly:)`
@@ -224,18 +354,62 @@ public struct MenuBarContentView: View {
 
     // MARK: - List
 
-    private func list(_ sections: [PanelSection]) -> some View {
+    private func list(_ outcome: PanelFilter.Outcome) -> some View {
+        ScrollViewReader { proxy in
+            list(outcome, scrolledBy: proxy)
+        }
+    }
+
+    private func list(_ outcome: PanelFilter.Outcome, scrolledBy proxy: ScrollViewProxy) -> some View {
         ScrollView {
             VStack(spacing: appearance.metrics.rowGap) {
-                ForEach(sections) { section in
-                    block(
-                        section,
-                        isFirst: section.id == sections.first?.id,
-                        isOnly: sections.count == 1
-                    )
+                if outcome.isFiltered {
+                    // One flat block, no group headers, and the collapsed block
+                    // opened. A filter has already answered "which rows", so a
+                    // header reading `Not connected 9` over one matching row is
+                    // furniture — and a chevron that hid a match would make the
+                    // filter lie about what it found.
+                    if outcome.rows.isEmpty {
+                        noMatches(outcome.hint)
+                    } else {
+                        ForEach(outcome.rows) { provider in
+                            row(for: provider)
+                        }
+                    }
+                } else {
+                    ForEach(outcome.sections) { section in
+                        block(
+                            section,
+                            isFirst: section.id == outcome.sections.first?.id,
+                            isOnly: outcome.sections.count == 1
+                        )
+                    }
                 }
             }
             .padding(.vertical, Tokens.Space.listMargin)
+            // Measured off the padded content stack rather than off the
+            // `ScrollView`, and that is what makes it free of feedback: the
+            // content's height is a function of the rows and the fixed panel
+            // width, and of nothing the imposed frame below does.
+            .background(
+                GeometryReader { geometry in
+                    Color.clear.preference(key: RestingListHeight.self, value: geometry.size.height)
+                }
+            )
+        }
+        // Unanimated, on purpose, and for the reason `DisclosureHeader` writes
+        // down: `MenuBarExtra` sizes its window to its content, so an animated
+        // scroll is the window chasing a moving target while the status item
+        // redraws mid-flight. `ForEach`'s own element identity is what this
+        // resolves — do not add `.id(provider.id)` to the row, it would give the
+        // row a second identity and break `ForEach` diffing.
+        .onChange(of: keyboard.selection) { id in
+            guard let id else { return }
+            proxy.scrollTo(id, anchor: .center)
+        }
+        .onPreferenceChange(RestingListHeight.self) { measured in
+            guard !keyboard.isFiltering, measured > 0 else { return }
+            restingListHeight = measured
         }
         // The cap has to sit *under* `fixedSize`, not over it. `fixedSize`
         // measures its child against no proposal and then lays it out at that
@@ -258,8 +432,47 @@ public struct MenuBarContentView: View {
         // Measuring the content and feeding the height back through a
         // preference also works, but only after a layout pass — so the window
         // opens short and visibly jumps.
+        //
+        // Which is exactly why the latch below spends the measurement and never
+        // supplies it at open: nothing is fed back on the way in. The panel still
+        // opens on `fixedSize`, at the height it always did, and the measured
+        // value is only ever read from the first keystroke — by which time it has
+        // been taken across at least one complete layout pass.
         .fixedSize(horizontal: false, vertical: true)
+        .frame(height: latchedHeight, alignment: .top)
         .scrollBounceBehaviorIfAvailable()
+    }
+
+    /// How tall the list box is held while a query is being typed.
+    ///
+    /// nil is "no opinion" — `frame(width:height:alignment:)` uses the child's own
+    /// dimension for a nil axis, so this modifier disappears when the panel is not
+    /// filtering and the resting behaviour is byte-for-byte what it was.
+    ///
+    /// **The list box is latched at its resting height the moment filter mode
+    /// opens, and held for as long as filtering lasts, and that is the whole
+    /// height policy.** `MenuBarExtra` sizes its window to its content, so a list
+    /// that resized on every keystroke would be a window resizing on every
+    /// keystroke — worse than no filter at all, and the one thing this rollout has
+    /// spent itself removing.
+    ///
+    /// Consequences, all of them intended:
+    ///
+    /// - A query that takes fifteen rows to one leaves fourteen rows of ground
+    ///   below the result. That is the price and it is the right one: the
+    ///   alternative moves every remaining row up the screen between two
+    ///   keystrokes, under the eye that is reading them.
+    /// - A list already past the cap was already pinned there, so filtering
+    ///   changes nothing for it.
+    /// - A refresh that adds a row *while* a filter is active cannot resize the
+    ///   window either, because the latch was taken before it. That falls out for
+    ///   free.
+    /// - Clearing the filter releases the latch and the panel sizes to content
+    ///   once, on a deliberate keystroke, which is exactly when a resize is
+    ///   legible.
+    private var latchedHeight: CGFloat? {
+        guard keyboard.isFiltering, let resting = restingListHeight else { return nil }
+        return min(resting, maximumListHeight)
     }
 
     /// One block of rows and the header it sits under.
@@ -349,13 +562,14 @@ public struct MenuBarContentView: View {
             onOpenDashboard: { open(provider.dashboardURL) },
             onRefresh: { Task { await state.refresh(provider.id) } },
             isRefreshing: state.refreshingRows.contains(provider.id),
-            appearance: appearance
+            appearance: appearance,
+            isSelected: keyboard.selection == provider.id
         )
     }
 
     // MARK: - Header
 
-    private func header(firstRow: AnyUsageProvider?) -> some View {
+    private func header(firstRow: AnyUsageProvider?, matchCount: Int) -> some View {
         // Longest first, and the header draws the longest one that fits rather
         // than cutting the tail off the only line it was handed.
         let summaries = headerSummaries(firstRow: firstRow)
@@ -364,7 +578,11 @@ public struct MenuBarContentView: View {
             levels: state.usageLevels,
             topPercent: state.topUsagePercent,
             summary: summaries.first,
-            alternates: Array(summaries.dropFirst())
+            alternates: Array(summaries.dropFirst()),
+            // The filter takes over the summary's slot rather than adding a
+            // control beside it. See `PanelHeader.summarySlot`.
+            filter: keyboard.isFiltering ? keyboard.query : nil,
+            matchCount: matchCount
         ) {
             // Refresh, history, settings and quit are never hideable: they are
             // the only way out of an app with no Dock icon and no window.
@@ -516,6 +734,45 @@ public struct MenuBarContentView: View {
         .padding(.vertical, Tokens.Space.huge)
     }
 
+    /// What a query that matched nothing says.
+    ///
+    /// Drawn **inside** the latched box, as a branch of the list's own content
+    /// stack rather than as a sibling of it, so the no-match state and the results
+    /// state occupy the same box and switching between them cannot move anything.
+    ///
+    /// No `square.dashed` mark. `emptyState` earns its 22pt one because it is a
+    /// window with nothing in it and no way forward; this is a transient state the
+    /// user typed themselves and will type out of on the next keystroke, and a
+    /// graphic that appears and disappears as you type is the panel flinching.
+    ///
+    /// Leading-aligned and top-padded rather than centred, because the box is now
+    /// as tall as the whole resting list: a message centred in 400pt of ground
+    /// would sit halfway down the window with no relationship to the line the user
+    /// is typing on.
+    private func noMatches(_ hint: String?) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.small) {
+            // `lineLimit(1)` and no `fixedSize`: the query is user text on a
+            // fixed-width panel, and the 32-character cap plus tail truncation is
+            // what keeps this inside `PanelWidthContract`.
+            Text("No service matches “\(keyboard.query)”")
+                .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.titleWeight))
+                .foregroundColor(Tokens.Ink.body)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            // Same voice and the same two destinations as `emptyState`'s copy.
+            // Without the hint, a user with `hidesQuotalessServices` on types
+            // "copilot", gets nothing, and concludes the filter is broken rather
+            // than that a setting is doing its job.
+            Text(hint ?? "Escape clears the filter.")
+                .font(.system(size: appearance.metrics.detailSize, weight: .regular))
+                .foregroundColor(Tokens.Ink.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, appearance.metrics.rowHorizontalPadding)
+        .padding(.top, Tokens.Space.large)
+    }
+
     private var hasEnabledServices: Bool {
         !state.rankedProviders.isEmpty
     }
@@ -620,6 +877,39 @@ public struct MenuBarContentView: View {
         guard let url else { return }
         NSWorkspace.shared.open(url)
     }
+
+    /// Return, on the selected row.
+    ///
+    /// A mirror of `ProviderRow`'s own Button action rather than a second opinion
+    /// about what a row does, so pressing Return and clicking the row cannot
+    /// diverge — a keyboard that opened a dashboard where a click would have
+    /// started a sign-in would be two apps in one panel.
+    ///
+    /// It does not close the panel. Opening a URL deactivates the app, which
+    /// dismisses the panel anyway, and `signIn` opens the login window over it.
+    private func activate(_ id: String) {
+        guard let provider = state.provider(for: id) else { return }
+        provider.isAuthenticated ? open(provider.dashboardURL) : signIn(provider)
+    }
+}
+
+/// What the keyboard has to be reconciled against: the rows on screen, and the
+/// query that chose them.
+private struct PanelRows: Equatable {
+    let ids: [String]
+    let query: String
+}
+
+/// How tall the list drew itself, reported upward from the content stack.
+///
+/// `max` rather than last-wins because the content stack is one subtree and the
+/// reduction should be the tallest thing that reported, not whichever the
+/// traversal happened to finish on.
+private struct RestingListHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }
 
 /// The panel's header: the app's mark, its name and its one-line summary, and
@@ -656,6 +946,22 @@ public struct PanelHeader<Trailing: View>: View {
     /// longest one that fits its own line, so a full sentence is dropped for a
     /// shorter sentence rather than losing its tail to an ellipsis.
     public let alternates: [String]
+    /// The query, when one is being typed, drawn in the summary's own slot.
+    ///
+    /// **There is no `TextField` and no fifth header button**, and the reasons are
+    /// height, width and chrome in that order. A field that is always there costs
+    /// a `lineBox` plus a gap at the top of a 300–500pt window, paid on every open
+    /// by every user who never filters. A fifth `iconButton` takes the cluster
+    /// from 94pt to 118pt of a 356pt line, which drops the summary's
+    /// `ViewThatFits` to its fifteen-character form at the default width — a
+    /// permanently worse header traded for a feature almost nobody clicks. And a
+    /// SwiftUI `TextField` brings a bezel, the system focus ring and the system's
+    /// own field font; `focusEffectDisabled()`, the only way to suppress the ring,
+    /// is macOS 14, and this app targets 13.
+    public let filter: String?
+    /// How many rows the query matched. Drawn on the same rail `SectionLabel`
+    /// gives its count, because it is the same kind of number in the same place.
+    public let matchCount: Int
 
     private let trailing: Trailing
 
@@ -665,6 +971,8 @@ public struct PanelHeader<Trailing: View>: View {
         topPercent: Double = 0,
         summary: String?,
         alternates: [String] = [],
+        filter: String? = nil,
+        matchCount: Int = 0,
         @ViewBuilder trailing: () -> Trailing
     ) {
         self._appearance = ObservedObject(wrappedValue: appearance)
@@ -672,6 +980,8 @@ public struct PanelHeader<Trailing: View>: View {
         self.topPercent = topPercent
         self.summary = summary
         self.alternates = alternates
+        self.filter = filter
+        self.matchCount = matchCount
         self.trailing = trailing()
     }
 
@@ -732,24 +1042,7 @@ public struct PanelHeader<Trailing: View>: View {
                     .fixedSize()
             }
 
-            if appearance.showsHeaderSummary, !candidates.isEmpty {
-                // The line's only flexible element, which is the fix: the
-                // `Spacer` that used to sit here took its width at priority 0,
-                // before a summary at priority −1 was measured at all, so the
-                // sentence was cut 22pt early with the empty space sitting
-                // beside it. Nothing between the summary and the buttons now —
-                // the summary's own frame is the gap.
-                ViewThatFits(in: .horizontal) {
-                    summaryText(at: 0)
-                    summaryText(at: 1)
-                    summaryText(at: 2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                // With no summary there is nothing flexible left to push the
-                // cluster onto the panel's right edge.
-                Spacer(minLength: Tokens.Space.medium)
-            }
+            summarySlot
 
             // One cluster, tight enough to read as a set rather than as four
             // unrelated controls scattered along the edge. Fixed, so a long
@@ -778,6 +1071,47 @@ public struct PanelHeader<Trailing: View>: View {
         .padding(.bottom, Tokens.Space.headerBottom)
     }
 
+    /// The one flexible slot on the header's line, held at exactly one line box.
+    ///
+    /// **The fixed box is what makes the whole filter safe.** Without it the slot
+    /// is as tall as whichever of a `Text` and an `Image`-plus-`Rectangle` is
+    /// taller, so it would grow by about a point the instant the user starts
+    /// typing — which is `MenuBarExtra` resizing the window on the first
+    /// keystroke. `Tokens.lineBox` is documented as existing for exactly this
+    /// ("a `ProgressView`, a status dot and a percentage are each taller than the
+    /// text beside them"); the header had the same latent problem and this closes
+    /// it.
+    ///
+    /// The filter line is drawn **regardless of `showsHeaderSummary`**: that
+    /// setting governs the summary, not the filter, and a user who turned the
+    /// summary off has not asked to be typing blind.
+    @ViewBuilder
+    private var summarySlot: some View {
+        Group {
+            if let filter {
+                FilterLine(query: filter, matchCount: matchCount, appearance: appearance)
+            } else if appearance.showsHeaderSummary, !candidates.isEmpty {
+                // The line's only flexible element, which is the fix: the
+                // `Spacer` that used to sit here took its width at priority 0,
+                // before a summary at priority −1 was measured at all, so the
+                // sentence was cut 22pt early with the empty space sitting
+                // beside it. Nothing between the summary and the buttons now —
+                // the summary's own frame is the gap.
+                ViewThatFits(in: .horizontal) {
+                    summaryText(at: 0)
+                    summaryText(at: 1)
+                    summaryText(at: 2)
+                }
+            } else {
+                // What the `Spacer` did: with no summary there is nothing
+                // flexible left to push the cluster onto the panel's right edge.
+                Color.clear.frame(minWidth: Tokens.Space.medium)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: Tokens.lineBox(appearance.metrics.detailSize))
+    }
+
     /// The lines the header may draw, longest first.
     ///
     /// Padded to three by repeating the last rather than assembled with `if`,
@@ -794,8 +1128,21 @@ public struct PanelHeader<Trailing: View>: View {
     ///
     /// SF Pro with tabular digits, not SF Mono: "updated 12s ago" is a run with
     /// words in it, and the mono face is reserved for runs that are only digits
-    /// and separators. The tabular figures still matter — this line counts up
-    /// every second the panel is open.
+    /// and separators. The tabular figures still matter, because the age does move
+    /// — but not on a clock. Nothing republishes this on a timer: `updatedText`
+    /// reads `Date()` during body evaluation, and the only things that re-render
+    /// the panel are `AppState`'s published properties, which move on a refresh.
+    /// Open the panel five seconds after a sweep and it reads "updated 5s ago" for
+    /// a full minute and then jumps to "updated 1m ago". The clause claiming a
+    /// per-second count described a timer that has never existed, and it is
+    /// corrected here rather than left because the filter takes over this slot:
+    /// the filter line re-renders because `keyboard` is `@State` on the panel, and
+    /// that is the only reason it does.
+    ///
+    /// The tooltip is the whole of the filter's discoverability. No banner, no
+    /// hint line, no first-run coach mark — a hint that costs a line of the panel
+    /// to teach a feature that costs nothing to discover by accident is the wrong
+    /// trade, and the summary is exactly the surface the affordance takes over.
     private func summaryText(at index: Int) -> some View {
         let lines = candidates
         let line = lines.indices.contains(index) ? lines[index] : (lines.last ?? "")
@@ -809,6 +1156,78 @@ public struct PanelHeader<Trailing: View>: View {
             // Reached only by the last candidate, and only if the panel is
             // narrower than fifteen characters of caption.
             .truncationMode(.tail)
+            .help("Type to filter · ⌘F")
+    }
+}
+
+/// The query, drawn in the slot the header summary already occupies.
+///
+/// Revealed by the first keystroke and gone again on Escape or a backspace past
+/// the first character, so it costs nothing at all to a user who never filters —
+/// which is the point of putting it here rather than in a permanent control.
+///
+/// **No `fixedSize()` anywhere in this view.** Every run is `lineLimit(1)` inside
+/// the header's own padding, and that is what keeps it inside the panel-width
+/// contract at 300pt with a 32-character query in it.
+private struct FilterLine: View {
+    let query: String
+    let matchCount: Int
+    @ObservedObject var appearance: AppearanceSettings
+
+    var body: some View {
+        let metrics = appearance.metrics
+        return HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.snug) {
+            // A fixed 12pt column so the query starts on one x whatever the glyph
+            // renders at — the same argument `DisclosureHeader.chevronColumn`
+            // makes for its chevron.
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.titleWeight))
+                .foregroundColor(Tokens.Ink.muted)
+                .frame(width: Tokens.Space.large, alignment: .leading)
+                .alignmentGuide(.firstTextBaseline) {
+                    ProviderRow.controlBaseline($0, titleSize: metrics.detailSize)
+                }
+
+            // Empty is context and takes `Ink.muted` at `.regular`; a real query
+            // is the answer and takes `Ink.body` at `titleWeight`, which is the
+            // ramp's whole rule. `.head` truncation because the tail is what was
+            // just typed, so the head is the part that may go.
+            Text(query.isEmpty ? "Filter" : query)
+                .font(.system(
+                    size: metrics.detailSize,
+                    weight: query.isEmpty ? .regular : Tokens.Ramp.titleWeight
+                ))
+                .foregroundColor(query.isEmpty ? Tokens.Ink.muted : Tokens.Ink.body)
+                .lineLimit(1)
+                .truncationMode(.head)
+
+            // **It does not blink.** `Tokens.Motion` closes the list of five
+            // animations in this app, and a caret at 0.5Hz would be a sixth
+            // running continuously in a panel whose premise is stillness. It does
+            // not need to: it is only ever on screen while a hand is on the
+            // keyboard.
+            Rectangle()
+                .fill(Tokens.Ink.body)
+                .frame(width: Tokens.Space.hairline, height: metrics.detailSize)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+
+            Spacer(minLength: Tokens.Space.small)
+
+            Text("\(matchCount)")
+                .font(.system(
+                    size: metrics.detailSize,
+                    weight: .regular,
+                    design: Tokens.Ramp.figureDesign
+                ))
+                .foregroundColor(Tokens.Ink.muted)
+                .frame(width: Tokens.figureWidth(metrics.detailSize, digits: 2), alignment: .trailing)
+        }
+        // One element, not five: a magnifier, a word, a rule and a number read
+        // back one after another is four announcements for one line of state.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Filter")
+        .accessibilityValue(query.isEmpty ? "empty" : query)
+        .accessibilityHint("\(matchCount) matching \(matchCount == 1 ? "service" : "services")")
     }
 }
 

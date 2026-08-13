@@ -162,6 +162,109 @@ final class PanelWidthContractTests: XCTestCase {
         )
     }
 
+    // MARK: - The filter is new content on a width-locked panel
+
+    /// A 32-character query is the widest run the header can be asked to hold, and
+    /// the header is the one line in the panel with four fixed controls already on
+    /// it.
+    ///
+    /// The cap is what makes the claim finite: `PanelKeyboard.queryLimit` is a
+    /// width contract rather than a taste, so the case asserts against the same
+    /// constant the reducer enforces instead of a literal that could drift away
+    /// from it.
+    @MainActor
+    func testAFilterQueryCannotWidenThePanel() throws {
+        let appearance = AppearanceSettings.shared
+        let originalWidth = appearance.panelWidth
+        let originalScale = appearance.textScale
+        defer {
+            appearance.panelWidth = originalWidth
+            appearance.textScale = originalScale
+        }
+
+        let state = Self.pathologicalState()
+        let query = String(repeating: "w", count: PanelKeyboard.queryLimit)
+        var failures: [String] = []
+
+        for width in Self.widths {
+            for scale in Self.scales {
+                appearance.panelWidth = width
+                appearance.textScale = scale
+                let panel = MenuBarContentView(
+                    state: state,
+                    showSettings: .constant(false),
+                    appearance: appearance,
+                    keyboard: .filtering(query)
+                )
+                if let escape = Self.inkOutside(AnyView(panel), panelWidth: CGFloat(width)) {
+                    failures.append(String(
+                        format: "%.0fpt panel at %.0f%% type: the filter line puts %.0fpt past the %@ edge",
+                        width, scale * 100, escape.overhang, escape.edge
+                    ))
+                }
+            }
+        }
+
+        XCTAssertTrue(
+            failures.isEmpty,
+            "the filter line escaped the panel ground:\n" + failures.joined(separator: "\n")
+        )
+    }
+
+    /// And the same query when it matches nothing, which is the wider case of the
+    /// two: the no-match block quotes the query back inside a title-sized line, so
+    /// the longest run on screen is 32 characters at `titleSize` rather than at
+    /// `detailSize`.
+    @MainActor
+    func testTheNoMatchBlockCannotWidenThePanel() throws {
+        let appearance = AppearanceSettings.shared
+        let originalWidth = appearance.panelWidth
+        let originalScale = appearance.textScale
+        defer {
+            appearance.panelWidth = originalWidth
+            appearance.textScale = originalScale
+        }
+
+        let state = Self.pathologicalState()
+        let query = String(repeating: "w", count: PanelKeyboard.queryLimit)
+        // The premise, so the case cannot pass by quietly matching something.
+        XCTAssertTrue(
+            PanelFilter.apply(
+                query: query,
+                to: appearance.sections(from: state.rankedProviders, snapshots: state.snapshots),
+                all: state.providers,
+                snapshots: state.snapshots
+            ).rows.isEmpty,
+            "the query this case is built on matches a row, so the no-match block is never drawn"
+        )
+
+        var failures: [String] = []
+        for width in Self.widths {
+            for scale in Self.scales {
+                appearance.panelWidth = width
+                appearance.textScale = scale
+                let panel = MenuBarContentView(
+                    state: state,
+                    showSettings: .constant(false),
+                    appearance: appearance,
+                    keyboard: .filtering(query),
+                    restingListHeight: 400
+                )
+                if let escape = Self.inkOutside(AnyView(panel), panelWidth: CGFloat(width)) {
+                    failures.append(String(
+                        format: "%.0fpt panel at %.0f%% type: the no-match block puts %.0fpt past the %@ edge",
+                        width, scale * 100, escape.overhang, escape.edge
+                    ))
+                }
+            }
+        }
+
+        XCTAssertTrue(
+            failures.isEmpty,
+            "the no-match block escaped the panel ground:\n" + failures.joined(separator: "\n")
+        )
+    }
+
     // MARK: - The reading a window with no ceiling prints
 
     /// **A limit of zero is "no ceiling", and it may not be drawn as a
