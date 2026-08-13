@@ -5,33 +5,36 @@ A native macOS menu bar app that reads your usage out of fifteen AI services —
 Several apps do this. [How aibars compares](#how-this-compares) is further down, including the parts where the others are ahead.
 
 ```
-   ✳ 92  ◆ 64  ◍ —   the menu bar: a brand mark and its own figure per service
-╭────────────────────────────────────────────────╮
-│ ◈  AI USAGE                    ↻   ↗   ⚙   ⏻   │
-│    updated 12s ago                             │
-├────────────────────────────────────────────────┤
-│▌✳  Claude  work  Max 20×                  92%  │
-│    ███████████████████████▏█████░░░░░░░░░░░    │
-│    5h session                resets in 1h 20m  │
-│    on pace to cap in 40m                       │
-│    ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂░░░░░░░░░░░░░░    │
-│    Weekly · all models     resets in 2d 4h 61% │
-│                                                │
-│ ◆  Cursor  Pro                            64%  │
-│    ██████████████▏█████░░░░░░░░░░░░░░░░░░░░    │
-│    320 / 500 reqs           resets in 11d 23h  │
-│                                                │
-│ ◍  ChatGPT  Plus                               │
-│    ────────────────────────────────────────    │
-│    ● Subscription active        renews in 19d  │
-│                                                │
-│ ▸ NOT CONNECTED  7 ─────────────────────────── │
-╰────────────────────────────────────────────────╯
+   ✦ 97   ✳ 92   ◆ 64     the menu bar: a brand mark and its own figure per service
+╭──────────────────────────────────────────────────╮
+│ ▇▅▃▁ aibars  updated 12s ago         ↻  ⌁  ⚙  ⏻  │
+├──────────────────────────────────────────────────┤
+│ ✦  Gemini  Pro                              97%  │
+│    ███████████████████▏█                         │
+│    Daily · resets in 2h 59m                      │
+│                                                  │
+│ ✳  Claude  work · Max 20×                   92%  │
+│    ██████████████████░▏░                         │
+│    5h session · resets in 1h 19m   Weekly 61% +1 │
+│    on pace to cap in 40m                         │
+│                                                  │
+│ ◆  Cursor  andrew@… · Pro                   64%  │
+│    █████████████░░░░░░▏░                         │
+│    320 / 500 · resets in 8d 15h                  │
+│                                                  │
+│ ◍  ChatGPT  Plus                              ●  │
+│    Subscription active                           │
+│                                                  │
+│ ⌀  Grok                                       ⚠  │
+│    No response — will retry                      │
+│                                                  │
+│ ›  Not connected  7                              │
+╰──────────────────────────────────────────────────╯
 ```
 
-Two marks in there are the whole idea, and they are explained under [the bar with a slit in it](#the-bar-with-a-slit-in-it): the `▏` standing inside the fill is the reset clock, and the `▌` down the left edge of a row means that row wants you.
+The `▏` in each bar is the redline, and it is the one mark in there that has to be explained: a one-point notch of the panel's own ground, standing at your warning threshold and cut through the fill rather than drawn under it. Gemini's fill has run past it, Claude's has not, and Cursor's is nowhere near. [The meter](#the-meter) is the rest of it.
 
-Everything in that panel is configurable, including how much of it is drawn: five presets and thirty individual settings sit under Appearance, with a live preview of a real row.
+Everything in that panel is configurable, including how much of it is drawn: five presets and the thirty-two settings behind them sit under Appearance, with a live preview of a real row.
 
 ## Install
 
@@ -56,20 +59,71 @@ Xcode 16 is the floor because XcodeGen 2.45 and later write the project in a for
 
 ## It lives in the menu bar
 
-There is no Dock icon and no main window. After launch the only sign of aibars is a strip in your menu bar: one brand mark and its own figure per service, closest to its cap first, so you can tell which number is Claude's and which is Cursor's. Click it for the panel above.
+There is no Dock icon and no main window. After launch the only sign of aibars is a strip in your menu bar: by default one brand mark and its own figure per service, closest to its cap first, so you can tell which number is Claude's and which is Cursor's. Click it for the panel above.
+
+Six drawings are available under Appearance → Menu bar, chosen from a grid of chips that each carry the real strip rather than a picture of one:
+
+| Style | What it draws | Services |
+|-------|---------------|----------|
+| Mark + figure | A brand mark and its own reading per service. 127pt at three. | up to 3 |
+| Figures only | One number, no mark. | 1 |
+| Marks only | Silhouettes, tinted by how close each is to its cap. Nothing is tinted under Monochrome. | up to 3 |
+| Micro bars | One column per service on a shared baseline. The only style that still measures under Monochrome, and the only one that does not say which column is which. | up to 3 |
+| Mark + meter | A mark and a small column beside it — identity and a magnitude in 21pt a service. | up to 3 |
+| Closest to its cap | One service, whichever is nearest its cap, spelled out with its reading. | 1 |
+
+Two of them speak for exactly one service, and where they are chosen the services stepper is greyed out rather than left to move a number nothing reads. The count you had set is kept, so trying one and going back restores it.
 
 The strip is disciplined about width, because it shares a 22pt bar with everyone else's status items:
 
-- **Up to three services**, your choice of one, two or three under Appearance → Menu bar.
+- **Up to three services**, your choice of one, two or three under Appearance → Menu bar, for the four styles that can carry more than one.
 - **A reserved cell per figure**, three characters wide, sized once from the widest reading the strip can produce and never measured from the string in hand. A service crossing 99 into 100 does not widen the item and does not shove the icons to its left sideways.
 - **A total cap of 148pt of drawing.** Over that, the least urgent segment is dropped until the item fits, because an item that keeps growing starts pushing other people's status items off a notched laptop.
 - **A dash for a service that reports no quota.** ChatGPT reports a subscription and Copilot reports a seat; neither is a percentage, and an invented 0 reads as plenty left while an invented 100 reads as capped.
 
 Two accounts of one service collapse to one segment in the strip — the busier of the two — because the same mark twice with two numbers reads as a rendering fault. The panel underneath is where accounts are told apart.
 
-Refresh, history, settings and quit are the four buttons in the panel's header; ⌘R refreshes, ⌘, opens Settings, ⌘Q quits. The history button goes straight to the chart rather than to whichever pane Settings was last left on.
+Refresh, history, settings and quit are the four buttons in the panel's header; ⌘R refreshes, ⌘, opens Settings, ⌘Q quits. The history button goes straight to the chart rather than to whichever pane Settings was last left on. The panel can also be opened by a shortcut and driven without the mouse at all — see [the keyboard](#the-keyboard).
 
 If you can't find the strip, the menu bar is probably full: macOS hides items it has no room for. Widen it by quitting something else in the bar, or move aibars leftwards by ⌘-dragging it.
+
+## The keyboard
+
+### A shortcut to open it
+
+Settings → General → Keyboard. Nothing is bound until you record one: a menu bar app that takes a system-wide key combination before anyone asked is the same imposition as priming notifications at launch, which this app also refuses to do.
+
+It goes over Carbon's `RegisterEventHotKey`, and that is the whole reason it is shippable. `NSEvent.addGlobalMonitorForEvents` and `CGEvent.tapCreate` both need Accessibility permission — a TCC prompt and a trip to System Settings, for a keyboard shortcut — and neither takes the keystroke away from the app in front, so your combination would also type into whatever was frontmost. Carbon needs no permission and no entitlement, and the WindowServer withholds the combination from everyone else while aibars holds it.
+
+The honest limit: nothing on macOS can answer "who owns this combination". `RegisterEventHotKey` returns success even when another app already has it. So the recorder refuses the slice that can be refused — the shortcuts macOS itself holds, read live out of `com.apple.symbolichotkeys` — and for the rest the footer says in words that a combination another app took first will simply do nothing. There is deliberately no "test this shortcut" button, because it could only ever report silence, which is what pressing the key already told you.
+
+### Type to filter
+
+Start typing with the panel open. The first printable character turns the header's summary into a filter line — no text field, no fifth button, no bezel and no focus ring — and the list narrows as you go. The count on the right is how many rows matched.
+
+A query matches a row's name, its initials (`cc` finds Claude Code, `gc` GitHub Copilot), a short list of aliases per service, the account label and the plan — every one of them a string the row actually prints, so the filter never matches on something invisible. Ranking is banded, first hit wins: an exact name, then a prefix, then an alias, then initials, then a substring, then the account, then the plan, and last a subsequence, which is what finds Claude Code from `clcd`. Not a sum of bonuses, because a number arrived at by adding four of them cannot be explained to the person looking at the list. Ties keep whatever order the panel was already in, so two equally good matches cannot swap places between keystrokes.
+
+Initials need two characters and a subsequence needs three. Below that they hit nearly every row, so the list would reorder without narrowing — which is the worst thing a filter can do, because the row your eye had already found moves.
+
+Two rules it holds:
+
+- **A filter never resurrects a row your settings hid.** If the best match is a service you switched off or a quotaless row you hid, the panel names it and says which pane it went to, rather than returning nothing and reading as broken.
+- **The panel does not resize while you type.** `MenuBarExtra` sizes its window to its content, so a list that re-measured on every keystroke would be worse than no filter at all. The list box is latched at its resting height the moment filtering opens and held until it closes: a panel filtered to one match measures exactly the same as the same panel filtered to three.
+
+### The keys
+
+| Key | What it does |
+|-----|--------------|
+| any character | begins filtering |
+| ⌘F | begins filtering with nothing typed |
+| ↑ ↓ | moves the selection; it clamps at both ends rather than wrapping |
+| Home, End | first row, last row |
+| ⌘1–⌘9 | selects the nth row on screen — selects, never activates |
+| Return | opens the selected row's dashboard, or starts its sign-in |
+| Esc | clears the filter and the selection; again to close the panel |
+| ⌘R / ⌘, / ⌘Q | refresh, Settings, quit |
+
+Everything carrying ⌘ is passed straight through to macOS except ⌘1–⌘9 and ⌘F. That is not tidiness: key equivalents are dispatched after every local event monitor, so a panel that swallowed ⌘Q would leave an app with no Dock icon and no window unquittable except by Force Quit. There is a test whose only job is to assert that it doesn't.
 
 ## What it reads
 
@@ -95,32 +149,55 @@ One row per account, not per service. If you are signed into the same service in
 
 Three response shapes are understood by the generic provider; they are written out above `MiniMaxUsageParser.parse`. Anything else reads as 0/0.
 
-Rows that report a state rather than a quota — ChatGPT, Copilot, and every figure Claude Code reports — draw a status line instead of a bar, are never counted towards the menu bar strip, are not recorded in the history, and are never forecast or alerted on. A service with no ceiling has nothing to run out of, and a hairline where the bar would be says that out loud: "reports no quota" and "is at 0%" are different statements and the panel has to be able to make both.
+Rows that report a state rather than a quota — ChatGPT, Copilot, and every figure Claude Code reports — draw a status line instead of a bar, are never counted towards the menu bar strip, are not recorded in the history, and are never forecast or alerted on. A service with no ceiling has nothing to run out of: "reports no quota" and "is at 0%" are different statements and the panel has to be able to make both. The meter's slot is still held open on those rows, and it draws nothing at all — an empty track would say 0% and a rule would read as a table divider, so the row says it in words and spends the space on the seam below instead.
 
 The two local sources are honest about what they are. Claude Code's transcripts are the only place on the machine that says what the local agent has spent — the web endpoints know nothing about it — so those numbers are complete for this Mac and say nothing about another one. OpenCode is the same shape with a sharper edge: its caps are the published plan limits, which are facts about the product, but the numerator is only what this machine recorded, so a Go account also used from a second Mac reads low here. The row says "this Mac" for exactly that reason.
 
-## The bar with a slit in it
+## The meter
 
-Every usage window carries two quantities, and everyone else draws one. How much is spent is the first. How much of the *window* is spent is the second, and it is the one that decides whether 60% at lunchtime is fine or a problem.
+A progress bar fills towards something you want. A quota meter empties towards a cliff, so the informative half of the reading is the part that is *left* — and a plain bar gives that half the least ink. At 92% you get a long bright bar and a sliver of track, which pre-attentively reads "plenty", which is the opposite of what it says.
 
-aibars draws both, in one instrument:
+Two things answer that:
 
-- **the track is the reset clock.** The part of the window already gone is a shade heavier than the part remaining.
-- **a riser stands at the boundary** — 1pt, running through the bar and a point or two proud of it.
-- **when the fill overtakes the riser, the fill is cut.** A slit of the panel's own graphite is punched clean through the colour so the riser survives being drawn over, and the length of fill past the slit is exactly how far ahead of pace you are — read off the bar, with no number attached to it.
-
-The riser is only ever drawn where the provider stated how long the window is. A mark on an inferred duration would be an inferred instrument, so a window nobody described gets a plain track and the row says what it knows in words instead. The slit needs a bar at least 5pt thick: the Compact preset's 4pt bar keeps the riser and drops the cut, because a gap as wide as the bar is tall reads as a broken bar rather than as a mark.
+- **The redline.** A one-point notch stands at your warning threshold, drawn in the panel's own ground and drawn *over* the fill rather than under it, so it survives being overtaken. Below the threshold it stands in the empty track; at it the fill's edge meets it; above it the fill visibly runs past. It is a position channel, which is why it is worth having: a tick the fill either has or has not reached survives greyscale exactly, survives deuteranopia exactly, survives Monochrome exactly, and is legible on a 5pt bar.
+- **The bar stops growing.** The track is capped at 160pt and leading-aligned, so every bar in the panel starts on the same edge and none of them gets longer when you widen the window. It used to be 304pt of a 356pt panel — 85% of the window, aspect 61:1 — and 468pt at the top of the width slider. At that length it read as a rule between a title and its own caption, it carried over 90% of all the colour in the panel, and it resolved a third of a percent per point against a figure that is only ever printed to the nearest whole one.
 
 A row at or above the warning threshold says so four times over, and only one of the four is colour:
 
+- **position** — the fill has run past the redline,
 - **shape** — the fill's trailing end squares off,
 - **weight** — the figure goes from medium to semibold,
-- **the spine** — a 2pt bookmark at the row's leading edge, the only vertical coloured element in the panel,
 - **colour** — last, and never load-bearing on its own.
 
-Convert the panel to greyscale and the row is still identifiable. Set the ramp to Monochrome and it still is. The spine has exactly three reasons to appear — near a cap, needs you (locked, expired, or no credential), or the last request failed outright — and never a fourth, because a bookmark that appears for decoration stops meaning anything. The one thing the chrome never does is take an alarm colour: the row with the problem carries it, because a coloured edge across the header names no service and cannot be acted on.
+Convert the panel to greyscale and the row is still identifiable. Set the ramp to Monochrome and it still is.
 
-The rest is deliberately quiet. Warm graphite surfaces with one material in the whole app, one teal that is aibars' own accent turned down, brand colour confined to the logo marks, and every number set in SF Mono inside a reserved, right-aligned column — so nothing on screen shifts as the digits tick, including on rows with no figure, rows still loading and rows that will never report one. Prose stays in SF Pro with tabular figures: "resets in 1h 20m" is a sentence, not a reading. Under Increase Contrast the rules, the riser and the spine all widen; under Reduce Transparency the one material is dropped rather than covered.
+Two drawings that used to be here are gone, and it is worth saying which. The bar carried the reset clock in its track and a riser at the pace boundary, so it drew two quantities where everything else in the category draws one. It was a real idea and nobody could read it: an instrument nobody arrives already knowing has to be documented before it can be used, and a menu bar panel is not a thing people read documentation for. The pace still has a sentence under the meter, which is where a quiet interface puts it. The other was the spine — a coloured bookmark down a row's leading edge, meaning near-cap *or* needs-you *or* failed-outright, with no way to tell which from looking at it. A row that wants you now says `Sign in`, in words, in its own figure rail.
+
+## Colour
+
+There are exactly two hues in the whole application. Amber and red, and both mean alarm.
+
+Everything else is a grey. The grounds are near-black (`#0C0D11`) and near-white (`#F6F7FA`); text, marks and captions come off one ink ladder; the meter's resting fill, its track, and the heatmap's five steps are all points on the same greyscale. The app used to run three colour systems at once in 356 points — fifteen brand marks at full saturation, a usage ramp with its own amber and red, and a semantic green/amber/red beside them — and the raw brand hexes out-chromaed every colour that meant something, so an alert could not announce itself over the row's own logo. There is no green: a connected service that is not answering was never green, and the one dot that used to be green is now the body ink, because the dot's job is proof of connection rather than approval.
+
+The one exception is identity, and it is bounded. **A brand mark carries its own hue when its row is connected and reporting, and a grey when it is not** — the same muted grey the row's own name and caption take in that state, so colour on a row means the same thing colour means everywhere else in the panel: this one is live. Even then it is only hue. The live band holds the mark grey's exact lightness and caps chroma below the alarm amber's, so a logo can never out-shout a warning, and turning the hue off moves no contrast ratio anywhere in the app. Seven of the fifteen brands have no hue to carry — OpenAI's two, Cursor, Copilot, Grok, Z.ai, OpenCode — and they fall through to the mark grey, which is that same rule evaluated at zero chroma rather than an exception to it.
+
+Two things suppress it. The Monochrome preset, which is what that preset is for. And the Provider colour ramp, where the meter and the figure are already painted in the brand's hue — a row whose mark, bar and number are three shades of one colour is exactly what "chroma means measurement" exists to prevent, so brand hue appears at most once per row and the meter wins. There is no switch of its own for it, which is a gap: today the only way to have grey marks is to take the whole Monochrome preset.
+
+The rest is deliberately quiet. One material in the whole app, and every number set in SF Mono inside a reserved, right-aligned column — so nothing on screen shifts as the digits tick, including on rows with no figure, rows still loading and rows that will never report one. Prose stays in SF Pro with tabular figures: "resets in 1h 19m" is a sentence, not a reading. Under Increase Contrast the hairline rules and borders step up in opacity — 0.07 to 0.16 for a rule, 0.18 for a border; no line anywhere gets thicker. Under Reduce Transparency the material is dropped rather than covered, and the ground goes fully opaque.
+
+The one thing the chrome never does is take an alarm colour. The rule under the header stays neutral whatever the rows are doing, because a coloured edge across the top of the panel names no service and cannot be acted on.
+
+## The last day, on the row
+
+Off by default; Appearance → What each row shows → 24-hour sparkline turns it on for every connected row at once.
+
+Twenty-four hourly buckets of that row's headline window, one point an hour at the highest reading in it, in a fixed box under the meter. One neutral trace, and deliberately no usage colour: the meter beside it is the reading, and this is context. A row therefore reads past, present, future down the page — the trace, the bar, and the pace line.
+
+- **Gaps are cut, not bridged.** An hour nothing landed in is absent rather than zero, and the trace stops and restarts across it. A Mac that was asleep did not spend a quiet night at the floor, and joining across the gap would draw exactly that night.
+- **A window rolling over cuts it too**, at the same thirty-point drop the history chart splits its own line on, so the panel and the settings window agree about where a window began. Joined, a reset is a vertical plunge through the whole box, which reads as the app having lost the data rather than as a subscription renewing.
+- **The slot is reserved from the setting, never from whether there is anything in it.** Switch it on and every connected row grows by the same amount immediately, including the ones with no history yet — which is why the first day is an empty box rather than nothing. A row that grew when its own history arrived would resize the panel under the pointer a day after you connected the service.
+
+It reads a cache in front of the database rather than the database, rebuilt at most once every five minutes per row, so drawing eleven rows is eleven dictionary lookups instead of eleven synchronous SQLite queries on the thread doing the drawing.
 
 ## Pace
 
@@ -146,6 +223,20 @@ The same projection, in a shorter form, also goes in the panel header — "caps 
 Settings → History, or the chart button in the panel's header.
 
 One usage window at a time — every account listed separately, since two logins to one service are spent at their own rates — over 24 hours, 7 days, 30 days or 90, drawn as a line on a 0–100% axis with the warning threshold marked. Hovering reads out the bucket under the pointer. Under the chart, one row per day: the day's peak, the mean of its readings, how many times the window crossed its cap, and how many readings the first two rest on, because a mean over two samples and a mean over two hundred are not the same claim.
+
+### The ninety-day grid
+
+Between the chart and the table, ninety squares, one a day, at that day's peak. It joins the chart rather than replacing it: the chart answers what shape the selected window had, the grid answers which days. It ignores the range picker for the same reason — a seven-day heatmap is seven squares, which is a worse table than the one underneath it.
+
+Three things it deliberately does not do:
+
+- **It does not use a hue ramp.** The scale is one neutral getting darker in light and lighter in dark, and the only cells that take a colour are the ones at or over your own warning line. That is what keeps the coloured cells countable on a grid of ninety, and it is why the four filled steps are even quarters of the range *below* your threshold — move the threshold in Appearance and the whole ramp and its legend move with it.
+- **It does not draw a cap hit as a sixth colour.** A day the window crossed loses its corners instead, which is the one channel that survives greyscale, Monochrome and a reader who cannot separate the amber from the red.
+- **It does not resize.** The box is the same size whatever landed in it — no days, three days, ninety — so the first pass draws an empty grid and the answer arrives into the same frame. A three-day install gets all ninety squares and a line under them saying how many are real, because eighty-seven empty ones otherwise read as three months of doing nothing.
+
+The columns are pushed right so today's week is always the last one. Ninety days spans thirteen calendar weeks on two weekdays out of seven and fourteen on the other five, and left as it falls the blank week sits where today is, so the grid would appear to stop several days ago every Monday. Fourteen columns are drawn always, for the same reason: a grid that narrowed by a column twice a week is the settings window's version of the panel resizing under the pointer.
+
+It is one focus target and not ninety. Ninety tab stops between a picker and a toggle is hostile, so the grid takes focus as a whole and the arrows walk a pinned day by ±1 and ±7 through the cells themselves rather than through the calendar — which is what keeps them right across the spring-forward Sunday. Every cell still carries its own tooltip.
 
 What is kept, and for how long:
 
@@ -210,20 +301,21 @@ Registration genuinely fails in the common case: run the app straight out of Der
 
 What aibars does that the alternatives generally don't:
 
-- **The bar draws two quantities, not one.** The track behind the fill is the reset clock, the riser stands at the boundary, and the fill is cut where it has overtaken it. Nobody else's meter can say how far ahead of pace you are without a second number beside it.
 - **It reads each provider's own usage endpoint** using the session already sitting in your browser. There is no cookie to paste and no table of plan constants in the source to go stale — which is the failure mode that made every log-scraping tool in this niche start lying quietly the week a provider changed a limit. When a provider changes what it reports, the row changes with it.
 - **Fifteen services and several accounts per service**, discovered rather than configured. Two Claude logins in two browser profiles come up as two rows.
 - **It answers the forward-looking question.** Most of these apps tell you where you are now. The pace line tells you whether the cap arrives before the window resets, stated as a duration against that reset, and says nothing at all when the samples can't support a claim.
+- **The meter is a gauge rather than a progress bar.** A redline stands at your own warning threshold and the fill either has or has not run past it, so the empty half of the bar — the half that actually matters on a quota — is the half you read.
+- **Near-cap is said four ways and only one of them is colour.** Position, shape, weight, then hue. A greyscale screenshot of the panel is still readable, and so is the panel with the ramp set to Monochrome.
 - **It reads any browser you actually use** — Chromium and its forks, Firefox, Safari — rather than one.
 - **It runs on macOS 13.** The closest rival by provider coverage needs macOS 15.
 
-Four gaps closed in this release, which is worth saying because the ones still open are listed right after: Codex was the single biggest hole and has a row of its own now, Claude Code's local stats are read off this Mac with no network at all, there is a history view with a chart and a per-day table, and spend has budgets and their own alerts.
+Gaps closed since the last release, which is worth saying because the ones still open are listed right after: there is a global shortcut for the panel, a 90-day heatmap in the history pane, six menu bar strip styles rather than one, a per-row sparkline, and type-to-filter with full keyboard navigation.
 
 Where the others are ahead, plainly:
 
-- **openusage** ships as a signed, notarised universal DMG with in-app Sparkle updates and a Homebrew cask. aibars builds from source on your machine and has no update mechanism at all. It also has three things aibars does not: a one-shot CLI, a loopback HTTP API other tools can read, and a global keyboard shortcut for its popover. It documents ten providers and needs macOS 15.
-- **AIQuotaBar** ships a WidgetKit desktop widget and a 90-day heatmap window. aibars has no widget — that needs a second target, and the menu bar is the point — and its history is a line chart with a table rather than a heatmap.
-- **ClaudeMeter** offers six menu bar icon styles for Claude alone and is the most polished single-service option in the category. aibars draws one strip and spends its configuration on the panel instead.
+- **openusage** ships as a signed, notarised universal DMG with in-app Sparkle updates and a Homebrew cask. aibars builds from source on your machine and has no update mechanism at all. It still has two things aibars does not: a one-shot CLI, and a loopback HTTP API other tools can read. Its global keyboard shortcut is no longer one of them — aibars has one now, and it is opt-in rather than bound out of the box. openusage documents ten providers and needs macOS 15.
+- **AIQuotaBar** ships a WidgetKit desktop widget. aibars has no widget: that needs a second target, and the menu bar is the point. Its 90-day heatmap is no longer an advantage — aibars draws one too, under the chart rather than in a window of its own.
+- **ClaudeMeter** is still the most polished single-service option in the category. Its six menu bar icon styles are matched: aibars has six strip drawings too, and they generalise across all fifteen services rather than one. What ClaudeMeter has that aibars does not is the depth that comes of only ever having to be right about Claude.
 - **Antigravity, Devin and Pi** are covered elsewhere and not here. The first two are Codeium-lineage Connect RPC endpoints nobody has verified against a live account in this codebase, and shipping unverified network providers is how you end up with providers that report plausible-looking wrong numbers.
 - **Codex reset credits.** OpenAI exposes a route that spends one of an account's rate-limit reset credits to clear its windows early, and aibars deliberately does not call it. Reading an account and spending from it are different things, and a menu bar item should not be one mis-click from an irreversible purchase.
 
@@ -263,7 +355,7 @@ Pasted API keys can't be re-derived from anything, so those do go in the Keychai
 
 The usage history is the SQLite file described above, in `~/Library/Application Support/aibars`.
 
-Everything else is UserDefaults: which services are enabled, your appearance settings, the alert rules and their armed state, your budgets, the six-hour sample rings behind the forecast, and the watermarks that let Claude Code's index re-read only what has been appended since last time.
+Everything else is UserDefaults: which services are enabled, your appearance settings, the alert rules and their armed state, your budgets, the six-hour sample rings behind the forecast, and the watermarks that let Claude Code's index re-read only what has been appended since last time. The global shortcut is stored under `aibars.hotkey.*` rather than with the appearance settings, and that is load-bearing: the appearance domain is wiped once per generation of the look, so a shortcut filed there would be silently unbound by a release that only moved a default colour, with no symptom but a keystroke that stops doing anything.
 
 The local sources are read, never written. Claude Code's transcripts and OpenCode's database belong to those tools; aibars reads them where they are, copies OpenCode's database to a temporary file before querying it so it never contends with a live one, and deletes nothing.
 
@@ -272,16 +364,18 @@ No usage data leaves your Mac, there is no server, no telemetry and no analytics
 ## Settings
 
 - **Services** — connect, sign out, name an account, show or hide a service, a per-browser list of the sessions aibars can see with an Unlock button for the locked ones, and the two local sources with where each one reads from
-- **Appearance** — five presets (Comfortable, Compact, Minimal, Dashboard, Monochrome) over sections for Size, What each row shows, Usage meter, The list and Menu bar, with a live preview and a Reset that puts everything back to how it shipped
-- **History** — the chart, its range, the per-day table, and the three things you can do to an archive: stop adding to it, take a copy, throw it away
+- **Appearance** — five presets (Comfortable, Compact, Minimal, Dashboard, Monochrome) over sections for Size, Rows, What each row shows, Usage meter, The list and Menu bar, with a live preview and a Reset that puts everything back to how it shipped
+- **History** — the chart, its range, the ninety-day grid, the per-day table, and the three things you can do to an archive: stop adding to it, take a copy, throw it away
 - **Spend** — what each service says it cost, a cap per service and one overall, and the two warning levels
 - **Alerts** — the alert switch, both thresholds, the reset announcement, the pace line, macOS's permission state and the last five alerts with whether they were delivered
-- **General** — launch at login, and the refresh interval: 30 seconds, 1, 5, 15 or 30 minutes
+- **General** — launch at login, the global shortcut that opens the panel, and the refresh interval: 30 seconds, 1, 5, 15 or 30 minutes
 - **About** — version and links
 
-The menu bar strip is configured under Appearance → Menu bar: how many services it carries (one to three), its height (10–16pt), and whether it spends colour — monochrome, which keeps it a template image so the bar gives it its own light, dark and vibrancy treatment; colour only above the warning threshold; or colour on every figure.
+The menu bar strip is configured under Appearance → Menu bar: which of the six drawings it uses, how many services it carries (one to three, where the drawing can carry more than one), its height (10–16pt), and whether it spends colour — monochrome, which keeps it a template image so the bar gives it its own light, dark and vibrancy treatment; colour only above the warning threshold; or colour on every figure.
 
-Both previews in that pane are the real thing. The strip preview builds the same view the status item rasterises, through the same width fit, so it drops a segment exactly where the bar would. The panel preview is measured by the same `RowGeometry` a panel row is and draws the same riser and the same cut. A preview that disagrees with the thing it previews is worse than no preview, so there is one copy of that arithmetic and both call it.
+Every preview in that pane is the real thing. The six style chips each carry the status item's own view, not a picture of one, and they take the live colour setting, so moving the colour picker moves all six. The strip preview goes through the same width fit the bar does, so it drops a segment exactly where the bar would. The panel preview is measured by the same `RowGeometry` a panel row is. A preview that disagrees with the thing it previews is worse than no preview, so there is one copy of that arithmetic and both call it.
+
+Two settings have no control of their own and are set only by a preset, which is worth knowing before you go looking for them: whether brand marks carry their own hue — off under Monochrome, on everywhere else — and whether the header's summary reads the busiest service or the average across them, which is the average under Dashboard and the busiest under the other four.
 
 ## Project layout
 
@@ -299,8 +393,9 @@ aibars/
 │   ├── History/                the SQLite store and the queries the chart reads
 │   ├── Spend/                  budgets, and what a budget means
 │   ├── Notifications/          threshold and budget policies (pure) and their delivery
-│   ├── System/                 launch at login
+│   ├── System/                 launch at login, the global shortcut, the defaults domain
 │   ├── Views/                  design tokens, SwiftUI views, connect window, settings window
+│   │   └── StripStyles/        one file per menu bar drawing
 │   └── AppState.swift          AppState (service registry, polling) + AnyUsageProvider
 ├── SourcesApp/                 aibars app target (thin wrapper)
 │   ├── aibarsApp.swift         @main + MenuBarExtra scene + the status item's strip
@@ -308,7 +403,7 @@ aibars/
 └── Tests/                      XCTest for parsers, policy, forecast, geometry and layout
 ```
 
-The split exists so the app can ship with `@main` while unit tests run against the framework without bootstrapping the UI. The decisions worth testing are kept out of the views, and that now covers most of the visual system too: `UsageForecast`, `ThresholdPolicy`, `BudgetPolicy`, `HistoryQuery`, `RowGeometry`, `PaceGeometry`, `MeterCut`, `RowSpine`, `StripFit` and `MenuBarStripContent` are pure functions over their inputs, with no app state, no I/O and no notification centre in them. A row's height, a rail's width, whether a bar is cut, why a row spines and which segment the strip drops are all things a test can assert rather than a person eyeball.
+The split exists so the app can ship with `@main` while unit tests run against the framework without bootstrapping the UI. The decisions worth testing are kept out of the views, and that now covers most of the visual system too: `UsageForecast`, `ThresholdPolicy`, `BudgetPolicy`, `HistoryQuery`, `RowGeometry`, `MeterGeometry`, `AppMarkGeometry`, `SparklineLayout`, `HeatmapBand`, `PanelFilter`, `PanelKeyboard`, `StripFit` and `MenuBarStripContent` are pure functions over their inputs, with no app state, no I/O and no notification centre in them. A row's height, a rail's width, where a reading becomes a length, which cell a day falls in, what a keystroke does and which segment the strip drops are all things a test can assert rather than a person eyeball. There are around 1,580 of those tests; `make test` runs them in about a hundred seconds.
 
 ## Adding a new provider
 
@@ -355,10 +450,10 @@ public final class MyProvider: ObservableObject, UsageProvider {
                 // forecast or alerted on.
                 limit: ProviderNumber.coerce(raw["limit"]) ?? 0,
                 unit: "reqs",
-                // Both of the next two, or neither. The reset alone earns a
-                // countdown; the reset and the window's own length together
-                // earn the riser on the bar, and a guessed length would be a
-                // guess drawn as an instrument.
+                // The reset earns the countdown. The window's own length is
+                // recorded and nothing draws it today — the pace riser it was
+                // added for is gone — so supply it where the provider states
+                // it and never infer it.
                 resetDate: ProviderDate.parse(raw["resets_at"] as? String ?? ""),
                 windowDuration: 5 * 3600
             )
@@ -390,7 +485,7 @@ public final class MyProvider: ObservableObject, UsageProvider {
 ```
 
 2. Register it at the **end** of `AppState.services`: `Service(id: "myprovider") { AnyUsageProvider(MyProvider(accountID: $0)) }`. Declared order is the sort tiebreak and the fallback for a custom order, so slotting one in above an existing service reshuffles rows that have been sitting still for people who already use the app. Nothing else is needed to make token entry, multi-account discovery, forecasting, history, budgets or alerts work — `AnyUsageProvider` dispatches through the protocol rather than switching on the id, and the sampling, the history store and the threshold policy all key off `id` and the metrics you return.
-3. Give it a logo — either add a `BrandMark` entry in `Sources/Brand/BrandMarks.swift` (single-path SVG data plus its view box, 24×24 for simple-icons glyphs) or drop an image named `logo-myprovider` into an asset catalog. Without either, the row falls back to a lettermark in `accentColor`. The strip keys its mark off `serviceID`, so a service with no glyph is a single letter at 13pt.
+3. Give it a logo — either add a `BrandMark` entry in `Sources/Brand/BrandMarks.swift` (single-path SVG data plus its view box, 24×24 for simple-icons glyphs) or drop an image named `logo-myprovider` into an asset catalog. Without either, the row falls back to a lettermark, in the panel's mark grey rather than in `accentColor` — a letter has no brand hue to lend, and inventing one for it would be the one place colour on a row meant something other than "live". The strip keys its mark off `serviceID`, so a service with no glyph is a single letter at 13pt.
 4. Add a test in `Tests/aibarsTests/`, against a real captured response with the identifying parts removed. There is a file per provider's parser.
 
 If money is involved, return it as a `SpendReport` on `UsageData.spend` rather than as a metric, and set `confidence` honestly: `.measured` is the provider's own ledger, `.estimated` is arithmetic done here. That field is the only thing standing between a bill and a guess.
@@ -422,9 +517,15 @@ This is an unofficial project. Most of the usage endpoints aibars reads — Clau
 - ~~Launch at login~~ — done
 - ~~A history view~~ — done: 14 days of readings, 400 days of daily summaries, a chart and a table
 - ~~Per-window cost estimates in USD for the services that report money~~ — done, with budgets and their own alerts
+- ~~A global shortcut that opens the panel~~ — done, opt-in, over Carbon so it needs no Accessibility permission
+- ~~A 90-day heatmap~~ — done, under the chart in the History pane
+- ~~More than one drawing for the menu bar strip~~ — done: six, across all fifteen services
+- ~~Find a row without reaching for the mouse~~ — done: type to filter, arrows and Return to act
 - Antigravity, Devin and Pi, once their endpoints have been verified against a live account
 - A signed, notarised build and some way to update one, which is the largest single gap against the closest rival. Building from source is the only route today
+- A one-shot CLI and a local read-only HTTP endpoint, which is what openusage has and aibars does not. The providers are already a framework with no UI in them, so this is packaging rather than new reading
 - Saying in words that an account at 100% with extra usage switched on is not actually blocked. The overage spend is already read and shown; the sentence beside a full meter is not there yet
+- A switch for brand-mark colour of its own, instead of it being reachable only by taking the whole Monochrome preset
 - Swift Charts for the history view, if and only if the floor ever moves to macOS 14 — every interactive API worth adopting it for arrived there, and the hand-drawn chart is at least visible to VoiceOver
 - Not planned: a WidgetKit widget. It needs a separate target, and the menu bar is the point
 - Not planned: spending a Codex reset credit from the menu bar. Reading an account is not the same as buying from it

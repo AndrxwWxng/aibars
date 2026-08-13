@@ -21,10 +21,15 @@ private func settings(_ name: String, seed: [String: Any] = [:]) -> AppearanceSe
 /// above rather than copied beside it, so there is still exactly one description
 /// of what a fresh install's store looks like.
 private func scratchStore(_ name: String, seed: [String: Any] = [:]) -> UserDefaults {
-    let domain = "aibars.metrics-tests.\(name)"
+    let domain = "dev.aibars.test-scratch.metrics.\(name)"
+    // `fatalError`, not `XCTFail` and then `.standard`. Failing the case and then
+    // handing back the shared domain still performs the write the guard exists to
+    // prevent — and on this file that write goes through `AppearanceSettings`,
+    // whose `init` runs `adoptCurrentLook` and empties the appearance namespace
+    // of whoever ran the suite. The branch is unreachable: the name is neither
+    // empty, `NSGlobalDomain`, nor the current bundle id.
     guard let store = UserDefaults(suiteName: domain) else {
-        XCTFail("could not open a scratch defaults domain")
-        return .standard
+        fatalError("could not open the scratch defaults domain \(domain)")
     }
     store.removePersistentDomain(forName: domain)
     for (key, value) in seed { store.set(value, forKey: key) }

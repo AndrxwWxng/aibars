@@ -50,7 +50,7 @@ public final class PerplexityProvider: ObservableObject, UsageProvider {
     private static let cookieDomain = "perplexity.ai"
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     public init(accountID: String? = nil) {

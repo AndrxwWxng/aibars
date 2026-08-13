@@ -68,11 +68,13 @@ final class AppearancePaneTests: XCTestCase {
         fittingSize(view.frame(width: width)).height
     }
 
+    /// Never `?? .standard`, which is how this used to spell the failure branch.
+    /// A nil suite is the one case the guard is for, and falling back to the
+    /// shared domain turns it into the exact write the whole file exists to
+    /// avoid — silently, on a green run. `isolatedStore` fails the case instead.
     @MainActor
-    private func settings(_ suite: String) -> AppearanceSettings {
-        let store = UserDefaults(suiteName: suite) ?? .standard
-        store.removePersistentDomain(forName: suite)
-        return AppearanceSettings(store: store)
+    private func settings(_ suite: String) throws -> AppearanceSettings {
+        AppearanceSettings(store: try isolatedStore(suite))
     }
 
     /// The measurement a row is built from, assembled out of settings exactly as
@@ -100,10 +102,10 @@ final class AppearancePaneTests: XCTestCase {
     /// ratio written down once, and this is the only thing in the suite that asks
     /// the font whether that ratio is still true.
     ///
-    /// At the alert weight, which is the heaviest a figure goes. SF Mono's
+    /// At `Ramp.alertWeight`, which is the heaviest a figure goes. SF Mono's
     /// advance does not move with weight, so the answer is the same at
-    /// `emphasisWeight` — asking at the heavier one just means the test cannot be
-    /// wrong in the direction that matters.
+    /// `Ramp.titleWeight` — asking at the heavier one just means the test cannot
+    /// be wrong in the direction that matters.
     private func monoWidth(_ run: String, size: CGFloat) -> CGFloat {
         let font = NSFont.monospacedSystemFont(ofSize: size, weight: .semibold)
         return (run as NSString).size(withAttributes: [.font: font]).width
@@ -112,8 +114,8 @@ final class AppearancePaneTests: XCTestCase {
     // MARK: - The form
 
     @MainActor
-    func testThePaneInstantiatesItsControls() {
-        let appearance = settings("pane-tests")
+    func testThePaneInstantiatesItsControls() throws {
+        let appearance = try settings("pane-tests")
         let host = hosted(AppearancePane(appearance: appearance))
         let found = controls(in: host)
         XCTAssertGreaterThan(
@@ -125,8 +127,8 @@ final class AppearancePaneTests: XCTestCase {
     /// The pane has to survive being short. Squeezed between a preview strip and
     /// a small window, the form must still scroll rather than vanish.
     @MainActor
-    func testThePaneSurvivesAShortWindow() {
-        let appearance = settings("pane-tests-short")
+    func testThePaneSurvivesAShortWindow() throws {
+        let appearance = try settings("pane-tests-short")
         let host = hosted(AppearancePane(appearance: appearance), height: 300)
         XCTAssertGreaterThan(controls(in: host).count, 4, "the form collapsed in a short window")
     }
@@ -135,8 +137,8 @@ final class AppearancePaneTests: XCTestCase {
     /// hides the meter, the logos or the extra windows takes whole branches of
     /// the sample with it, and those branches are only ever exercised here.
     @MainActor
-    func testThePaneBuildsForEveryPreset() {
-        let appearance = settings("pane-presets-build")
+    func testThePaneBuildsForEveryPreset() throws {
+        let appearance = try settings("pane-presets-build")
         for preset in AppearanceSettings.Preset.allCases {
             appearance.apply(preset)
             let host = hosted(AppearancePane(appearance: appearance))
@@ -152,8 +154,8 @@ final class AppearancePaneTests: XCTestCase {
     /// Every preset must resolve to a usable panel: a width that fits a menu bar
     /// dropdown and metrics that are not degenerate.
     @MainActor
-    func testEveryPresetIsUsable() {
-        let appearance = settings("preset-sanity")
+    func testEveryPresetIsUsable() throws {
+        let appearance = try settings("preset-sanity")
         for preset in AppearanceSettings.Preset.allCases {
             appearance.apply(preset)
             XCTAssertGreaterThanOrEqual(appearance.panelWidth, 240, "\(preset.id) is too narrow")
@@ -168,8 +170,8 @@ final class AppearancePaneTests: XCTestCase {
     /// Applying a preset then reading it back has to name the same preset, or the
     /// settings pane cannot show which one is selected.
     @MainActor
-    func testPresetsRoundTrip() {
-        let appearance = settings("preset-roundtrip")
+    func testPresetsRoundTrip() throws {
+        let appearance = try settings("preset-roundtrip")
         for preset in AppearanceSettings.Preset.allCases {
             appearance.apply(preset)
             XCTAssertEqual(appearance.matchingPreset, preset, "\(preset.id) does not match itself")
@@ -177,8 +179,8 @@ final class AppearancePaneTests: XCTestCase {
     }
 
     @MainActor
-    func testResetReturnsToTheShippedConfiguration() {
-        let appearance = settings("preset-reset")
+    func testResetReturnsToTheShippedConfiguration() throws {
+        let appearance = try settings("preset-reset")
         appearance.apply(.dashboard)
         appearance.resetToDefaults()
         XCTAssertEqual(appearance.panelWidth, 356, "reset must restore the shipped panel width")
@@ -261,8 +263,8 @@ final class AppearancePaneTests: XCTestCase {
     /// stacks come out different heights and the preview quietly starts
     /// describing a panel the app does not draw.
     @MainActor
-    func testTheSampleRowIsTheHeightOfARealRow() {
-        let appearance = settings("sample-row-height")
+    func testTheSampleRowIsTheHeightOfARealRow() throws {
+        let appearance = try settings("sample-row-height")
         for preset in AppearanceSettings.Preset.allCases {
             // Both positions of the trace switch, because it is the one row
             // setting whose *drawing* differs between the two: the preview always
@@ -298,8 +300,8 @@ final class AppearancePaneTests: XCTestCase {
     /// so a trace inserted at a different spacing from the row's would agree
     /// about the reservation and disagree about the drawing.
     @MainActor
-    func testTheTraceCostsThePreviewWhatItCostsTheRow() {
-        let appearance = settings("sample-row-trace")
+    func testTheTraceCostsThePreviewWhatItCostsTheRow() throws {
+        let appearance = try settings("sample-row-trace")
         let sample = SampleService.claude
         let width = CGFloat(appearance.panelWidth)
 
@@ -323,8 +325,8 @@ final class AppearancePaneTests: XCTestCase {
     /// not move is indistinguishable, in this window, from a toggle that does
     /// nothing — which is the failure the whole preview column exists to catch.
     @MainActor
-    func testThePaneAndItsPreviewBuildWithTheTraceOn() {
-        let appearance = settings("pane-trace-on")
+    func testThePaneAndItsPreviewBuildWithTheTraceOn() throws {
+        let appearance = try settings("pane-trace-on")
         appearance.showsRowSparkline = true
         let host = hosted(AppearancePane(appearance: appearance))
         XCTAssertGreaterThan(
@@ -347,8 +349,8 @@ final class AppearancePaneTests: XCTestCase {
     /// buttons are reserved and only their opacity changes — which means "on
     /// hover" and "always" have to be the same height, and so does hovering.
     @MainActor
-    func testTheSampleRowHoldsItsHeightWhateverTheButtonsDo() {
-        let appearance = settings("sample-row-actions")
+    func testTheSampleRowHoldsItsHeightWhateverTheButtonsDo() throws {
+        let appearance = try settings("sample-row-actions")
         let width = CGFloat(appearance.panelWidth)
         let sample = SampleService.claude
 
@@ -384,8 +386,8 @@ final class AppearancePaneTests: XCTestCase {
     /// caption whose trailing half is a 37pt empty rail cannot be as wide as a
     /// 260pt chip run, whatever the panel is set to.
     @MainActor
-    func testTheSampleRowsCaptionCarriesItsChipsRatherThanSittingBesideThem() {
-        let appearance = settings("sample-row-caption-chips")
+    func testTheSampleRowsCaptionCarriesItsChipsRatherThanSittingBesideThem() throws {
+        let appearance = try settings("sample-row-caption-chips")
         appearance.secondaryWindows = .chips
         let sample = SampleService.claude
 
@@ -440,7 +442,7 @@ final class AppearancePaneTests: XCTestCase {
     /// it. What is being asserted is the caption, and the card is another test's.
     @MainActor
     func testTheSampleRowDrawsTheSameCaptionLineAsARealRow() throws {
-        let appearance = settings("sample-row-caption")
+        let appearance = try settings("sample-row-caption")
         appearance.rowBackground = .plain
         let sample = SampleService.claude
 
@@ -512,8 +514,8 @@ final class AppearancePaneTests: XCTestCase {
     /// pane as well as in `RowGeometryTests` — the preview is where a clamped
     /// corner would first be seen and first be wrong.
     @MainActor
-    func testTheSampleRowAndARealRowDrawTheSameCardCorner() {
-        let appearance = settings("sample-row-corner")
+    func testTheSampleRowAndARealRowDrawTheSameCardCorner() throws {
+        let appearance = try settings("sample-row-corner")
         for preset in AppearanceSettings.Preset.allCases {
             appearance.apply(preset)
             let sample = SampleService.claude
@@ -559,8 +561,8 @@ final class AppearancePaneTests: XCTestCase {
     /// measured in SF Mono at the sizes each preset sets it in rather than trusted
     /// to an advance ratio written down once in `Tokens`.
     @MainActor
-    func testTheFigureRailHoldsTheWidestReadingEitherRowCanPrint() {
-        let appearance = settings("sample-row-rail")
+    func testTheFigureRailHoldsTheWidestReadingEitherRowCanPrint() throws {
+        let appearance = try settings("sample-row-rail")
         for preset in AppearanceSettings.Preset.allCases {
             appearance.apply(preset)
             let metrics = appearance.metrics
@@ -597,8 +599,8 @@ final class AppearancePaneTests: XCTestCase {
     /// trailing end, the figure's weight, the colour — and in nothing else, so a
     /// height that moves between them moved because of one of those.
     @MainActor
-    func testCrossingTheWarningCostsARowNoHeight() {
-        let appearance = settings("sample-row-warning-height")
+    func testCrossingTheWarningCostsARowNoHeight() throws {
+        let appearance = try settings("sample-row-warning-height")
         let width = CGFloat(appearance.panelWidth)
         let quiet = claudeSample(headline: 0.46)
         let alerting = claudeSample(headline: 0.92)
@@ -622,8 +624,8 @@ final class AppearancePaneTests: XCTestCase {
     /// The strip has to build at every count the stepper offers, and the pane
     /// with it. One is a real choice for someone with one subscription.
     @MainActor
-    func testTheMenuBarSampleBuildsAtEveryServiceCount() {
-        let appearance = settings("menu-bar-sample")
+    func testTheMenuBarSampleBuildsAtEveryServiceCount() throws {
+        let appearance = try settings("menu-bar-sample")
         for count in MenuBarStripContent.range {
             appearance.menuBarServiceCount = count
             let host = hosted(AppearancePane(appearance: appearance))
@@ -652,8 +654,8 @@ final class AppearancePaneTests: XCTestCase {
     /// glyph three marks and three figures are wider than the budget, and dropping
     /// the least urgent is the behaviour rather than a failure.
     @MainActor
-    func testTheStripSampleBuildsAtEveryServiceCount() {
-        let appearance = settings("strip-sample")
+    func testTheStripSampleBuildsAtEveryServiceCount() throws {
+        let appearance = try settings("strip-sample")
         // The two ends of the range `menuBarGlyphHeight` clamps to, and the shipped
         // value between them: the bounds are where a width contract that has
         // quietly stopped holding shows up first.
@@ -743,8 +745,8 @@ final class AppearancePaneTests: XCTestCase {
     /// the pane. Every argument below is a setting or a token, so there is nothing
     /// the pane could be passing differently.
     @MainActor
-    func testEveryStyleDrawsAPreviewThatFitsItsChip() {
-        let appearance = settings("style-chip-fit")
+    func testEveryStyleDrawsAPreviewThatFitsItsChip() throws {
+        let appearance = try settings("style-chip-fit")
         // `SelectableChip` spends `Space.medium` either side of whatever it is
         // handed, so this is the width the accessory actually gets.
         let room = Tokens.Control.stripStyleChip - 2 * Tokens.Space.medium
@@ -832,8 +834,8 @@ final class AppearancePaneTests: XCTestCase {
     /// preview that is not moves under the pointer as though it worked, so the
     /// user goes looking at the menu bar for a bug that is in this window.
     @MainActor
-    func testThePaneAndItsLivePreviewFollowTheChosenStyle() {
-        let appearance = settings("style-chooser-live")
+    func testThePaneAndItsLivePreviewFollowTheChosenStyle() throws {
+        let appearance = try settings("style-chooser-live")
         var measured: Set<CGFloat> = []
 
         for style in AppearanceSettings.MenuBarStyle.allCases {
@@ -898,8 +900,8 @@ final class AppearancePaneTests: XCTestCase {
     /// answering differently — and a seventh single-service style then arrives
     /// with the control already correct.
     @MainActor
-    func testTheServiceCountStepperIsDisabledExactlyWhenTheStyleShowsOneService() {
-        let appearance = settings("style-stepper")
+    func testTheServiceCountStepperIsDisabledExactlyWhenTheStyleShowsOneService() throws {
+        let appearance = try settings("style-stepper")
         for style in AppearanceSettings.MenuBarStyle.allCases {
             appearance.menuBarStyle = style
             let ceiling = StripStyleBox.box(for: style).segmentCeiling
@@ -943,8 +945,8 @@ final class AppearancePaneTests: XCTestCase {
     /// `Mark + figure`, and their three services have become one with nothing
     /// having said so.
     @MainActor
-    func testChoosingASingleServiceStyleDoesNotRewriteTheStoredCount() {
-        let appearance = settings("style-count-kept")
+    func testChoosingASingleServiceStyleDoesNotRewriteTheStoredCount() throws {
+        let appearance = try settings("style-count-kept")
         appearance.menuBarServiceCount = 3
         appearance.menuBarStyle = .worstOnly
         XCTAssertEqual(appearance.menuBarServiceCount, 3, "the count was rewritten behind the greyed stepper")
@@ -984,8 +986,8 @@ final class AppearancePaneTests: XCTestCase {
     /// agreeing is the toggle being absent — and the counts diverging again is
     /// the toggle, or something like it, coming back.
     @MainActor
-    func testTheGradientControlIsGone() {
-        let appearance = settings("meter-gradient-gone")
+    func testTheGradientControlIsGone() throws {
+        let appearance = try settings("meter-gradient-gone")
 
         appearance.meterStyle = .bar
         let bar = controls(in: hosted(AppearancePane(appearance: appearance))).count

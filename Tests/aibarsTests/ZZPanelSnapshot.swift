@@ -59,16 +59,37 @@ enum DebugHarness {
 /// `DebugHarness`, above, and reports skipped otherwise.
 final class ZZPanelSnapshot: XCTestCase {
 
+    /// The shipped defaults on a scratch domain, never `AppearanceSettings.shared`.
+    ///
+    /// Two reasons, and the first is the one that bit. This harness *writes* to
+    /// the object — `testWritePanelWidthExtremes` walks `panelWidth` to 300 and
+    /// 520 — and it restored the value in a `defer`, which does not run when the
+    /// process is killed. Being interrupted is the normal way a render session
+    /// ends: you look at the PNGs and stop the run. `PanelLayoutTests` records the
+    /// consequence in its own doc — `testWidthIsFixed` measuring a 420pt panel
+    /// after this harness was interrupted.
+    ///
+    /// The second is what the pictures are for. A render is read as "this is what
+    /// the app draws", so it has to be what the app draws on a *fresh install* and
+    /// not what it draws for whoever happened to run it. Two reviewers comparing
+    /// before-and-after PNGs were comparing two panels' settings as well as two
+    /// panels.
+    @MainActor
+    private func defaults() throws -> AppearanceSettings {
+        try isolatedSettings("panel-snapshot")
+    }
+
     @MainActor
     func testWritePanelSnapshot() throws {
         try DebugHarness.skipUnlessAsked("write panel PNGs")
 
+        let appearance = try defaults()
         let state = Self.populatedState()
         for (name, scheme) in [("dark", ColorScheme.dark), ("light", ColorScheme.light)] {
             let view = MenuBarContentView(
                 state: state,
                 showSettings: .constant(false),
-                appearance: AppearanceSettings.shared
+                appearance: appearance
             )
             try Self.write(
                 AnyView(view),
@@ -84,23 +105,28 @@ final class ZZPanelSnapshot: XCTestCase {
     func testWritePanelWidthExtremes() throws {
         try DebugHarness.skipUnlessAsked("write panel PNGs")
 
-        let appearance = AppearanceSettings.shared
-        let original = appearance.panelWidth
-        defer { appearance.panelWidth = original }
-
+        let appearance = try defaults()
         let state = Self.populatedState()
+        // Both appearances at both extremes, not dark alone. The width slider is
+        // where a reserved-width contract breaks first and the light palette is
+        // where a *contrast* one does — the two hues are cut against different
+        // grounds in the two appearances and the light half has the less room —
+        // so a change reviewed at one width in one appearance has been reviewed
+        // at a quarter of the cases the panel actually ships.
         for width in [300.0, 520.0] {
             appearance.panelWidth = width
-            let view = MenuBarContentView(
-                state: state,
-                showSettings: .constant(false),
-                appearance: appearance
-            )
-            try Self.write(
-                AnyView(view),
-                to: "aibars_panel_w\(Int(width)).png",
-                scheme: .dark
-            )
+            for (name, scheme) in [("", ColorScheme.dark), ("_light", ColorScheme.light)] {
+                let view = MenuBarContentView(
+                    state: state,
+                    showSettings: .constant(false),
+                    appearance: appearance
+                )
+                try Self.write(
+                    AnyView(view),
+                    to: "aibars_panel_w\(Int(width))\(name).png",
+                    scheme: scheme
+                )
+            }
         }
     }
 
@@ -215,6 +241,28 @@ final class ZZPanelSnapshot: XCTestCase {
         if let grok = provider("grok") {
             grok.isAuthenticated = true
             state.snapshots[grok.id] = .failure(.network("the host is not answering"))
+        }
+
+        // Gemini — the state no shipped screenshot has ever contained.
+        //
+        // `warningThreshold` defaults to 0.95 and the highest reading in this
+        // fixture was Claude's 92, so every claim the near-cap contract makes —
+        // the fill's square trailing cap, the figure at `Ramp.alertWeight`, the
+        // ramp's red stop, and now the fill running past the redline — went
+        // unlooked-at for two releases because the picture could not hold the
+        // state. 97 is inside the band at both ends: over the threshold by two
+        // and under the cap by three, so the square cap is drawn against a track
+        // that is still visibly not full.
+        if let gemini = provider("gemini") {
+            gemini.isAuthenticated = true
+            state.snapshots[gemini.id] = .success(UsageData(
+                providerID: gemini.id,
+                planName: "Pro",
+                primary: UsageMetric(
+                    label: "Daily", used: 97, limit: 100, unit: "%",
+                    resetDate: now.addingTimeInterval(3 * 3_600)
+                )
+            ))
         }
 
         state.lastRefresh = now.addingTimeInterval(-12)

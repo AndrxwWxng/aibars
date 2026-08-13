@@ -8,10 +8,15 @@ import Carbon.HIToolbox
 /// reach the shortcut the person running the suite actually uses. The pattern is
 /// the one `AppearanceMetricsTests` established.
 private func scratch(_ name: String, seed: [String: Any] = [:]) -> UserDefaults {
-    let domain = "aibars.hotkey-tests.\(name)"
+    let domain = "dev.aibars.test-scratch.hotkey-store.\(name)"
+    // `fatalError`, not `XCTFail` and then `.standard`. Failing the case and
+    // *then* handing back the shared domain still performs the write the guard
+    // exists to prevent — on this file that is the user's own keyboard shortcut.
+    // The branch is unreachable: `UserDefaults(suiteName:)` answers nil only for
+    // an empty name, `NSGlobalDomain` or the current bundle id, and this is none
+    // of the three.
     guard let store = UserDefaults(suiteName: domain) else {
-        XCTFail("could not open a scratch defaults domain")
-        return .standard
+        fatalError("could not open the scratch defaults domain \(domain)")
     }
     store.removePersistentDomain(forName: domain)
     for (key, value) in seed { store.set(value, forKey: key) }
@@ -212,12 +217,9 @@ final class HotkeyStoreTests: XCTestCase {
     /// that prefix would be inside the wipe, and the only symptom the user would
     /// ever see is a keystroke that stops doing anything after an update.
     ///
-    /// Asserted on the prefix rather than on `Key.allCases` because that enum is
-    /// `private` — `@testable` raises internal to public and leaves private
-    /// alone, so the enum is not nameable from here. The prefix is the property
-    /// that actually holds the line, and it holds it for every case at once:
-    /// no case of `Key` can equal one of these three without first being in the
-    /// appearance namespace, which this proves none of them is.
+    /// The prefix half. It is the property that actually holds the line, and it
+    /// holds it for every case at once: no key can be inside the wipe without
+    /// first being inside the namespace, which this proves none of these is.
     func testTheAppearanceWipeCannotReachThese() {
         let appearancePrefix = "aibars.appearance."
         for key in [HotkeyStore.keyCodeKey, HotkeyStore.modifiersKey, HotkeyStore.enabledKey] {
@@ -227,6 +229,31 @@ final class HotkeyStoreTests: XCTestCase {
             )
             XCTAssertTrue(key.hasPrefix("aibars.hotkey."), "\(key) is not in the hotkey namespace")
         }
+    }
+
+    /// And the direct half, over the set the wipe actually iterates.
+    ///
+    /// This could not be written while `AppearanceSettings.Key` was `private`:
+    /// `@testable` raises internal to public and leaves private alone, so the
+    /// enum was not nameable here and the case above had to stand in for it. The
+    /// two are not the same claim. The prefix test says these three keys are
+    /// outside a namespace; this one says they are not in the collection
+    /// `adoptCurrentLook` loops over — which stays true if a future appearance
+    /// key is filed somewhere other than `aibars.appearance.*`, and the prefix
+    /// test would not notice.
+    ///
+    /// The exemption list is asserted too, and it is the sharper end: a key that
+    /// survives the wipe is one `adoptCurrentLook` deliberately skips, so a
+    /// hotkey key appearing there would be inside the enum and outside the
+    /// deletion at the same time — which reads as safe and is not.
+    func testNoAppearanceKeyCollidesWithTheBinding() {
+        let binding = Set([HotkeyStore.keyCodeKey, HotkeyStore.modifiersKey, HotkeyStore.enabledKey])
+        let appearance = Set(AppearanceSettings.Key.allCases.map(\.rawValue))
+        XCTAssertTrue(
+            appearance.isDisjoint(with: binding),
+            "these keys are in both stores: \(appearance.intersection(binding).sorted())"
+        )
+        XCTAssertFalse(appearance.isEmpty, "the enum came back empty, so the assertion measured nothing")
     }
 
     /// And the same thing driven rather than asserted: a domain holding both an

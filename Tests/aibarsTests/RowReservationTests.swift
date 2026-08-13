@@ -530,10 +530,19 @@ final class RowReservationTests: XCTestCase {
         )
     }
 
+    /// `static`, so it cannot reach `XCTestCase.isolatedStore` — but the rule that
+    /// helper exists for still applies, and the failure branch is where it used to
+    /// be broken. This returned `.standard` when the suite could not be opened:
+    /// the one case the `guard` is for, answered with the domain the whole fixture
+    /// exists to stay out of, and answered silently on a green run. It fails
+    /// outright now, because a reservation measured against the developer's own
+    /// budgets and trends is not a weaker result — it is a different test.
     @MainActor
     private static func scratchDefaults(_ name: String) -> UserDefaults {
-        let domain = "aibars.row-reservation-tests.\(name)"
-        guard let store = UserDefaults(suiteName: domain) else { return .standard }
+        let domain = "dev.aibars.test-scratch.row-reservation.\(name)"
+        guard let store = UserDefaults(suiteName: domain) else {
+            fatalError("could not open the scratch defaults domain \(domain)")
+        }
         store.removePersistentDomain(forName: domain)
         return store
     }

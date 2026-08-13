@@ -26,7 +26,7 @@ public final class DeepSeekProvider: ObservableObject, UsageProvider {
     @Published public private(set) var isAuthenticated: Bool = false
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     /// The documented balance endpoint.

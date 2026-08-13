@@ -24,6 +24,14 @@ import AppKit
 /// header's summary and a row's identity run are `ViewThatFits`. So the panel
 /// is drawn into a canvas wider than itself and the margins are inspected: ink
 /// outside the ground is content that escaped, and nothing else is.
+///
+/// Every case here sweeps `panelWidth`, `textScale` and `showsRowSparkline`, and
+/// it does that on an `isolatedSettings()` of its own. It used to do it on
+/// `AppearanceSettings.shared` and put the three values back in a `defer` — which
+/// is safe against a failed assertion and not against the process being killed,
+/// so an interrupted run left the shared `panelWidth` wherever the sweep had got
+/// to and every later run on the machine restored *that*. `TestIsolation.swift`
+/// carries the full argument; this file is the suite that made it.
 final class PanelWidthContractTests: XCTestCase {
 
     /// How much clear canvas is left on each side of the panel. Wide enough to
@@ -65,15 +73,7 @@ final class PanelWidthContractTests: XCTestCase {
 
     @MainActor
     func testNothingDrawsOutsideThePanel() throws {
-        let appearance = AppearanceSettings.shared
-        let originalWidth = appearance.panelWidth
-        let originalScale = appearance.textScale
-        let originalSparkline = appearance.showsRowSparkline
-        defer {
-            appearance.panelWidth = originalWidth
-            appearance.textScale = originalScale
-            appearance.showsRowSparkline = originalSparkline
-        }
+        let appearance = try isolatedSettings()
 
         let state = Self.pathologicalState()
         var failures: [String] = []
@@ -116,15 +116,7 @@ final class PanelWidthContractTests: XCTestCase {
     /// here without the scroll view, where the overflow has nowhere to hide.
     @MainActor
     func testNoRowDrawsOutsideItsPanelWidth() throws {
-        let appearance = AppearanceSettings.shared
-        let originalWidth = appearance.panelWidth
-        let originalScale = appearance.textScale
-        let originalSparkline = appearance.showsRowSparkline
-        defer {
-            appearance.panelWidth = originalWidth
-            appearance.textScale = originalScale
-            appearance.showsRowSparkline = originalSparkline
-        }
+        let appearance = try isolatedSettings()
 
         let state = Self.pathologicalState()
         var failures: [String] = []
@@ -174,13 +166,7 @@ final class PanelWidthContractTests: XCTestCase {
     /// from it.
     @MainActor
     func testAFilterQueryCannotWidenThePanel() throws {
-        let appearance = AppearanceSettings.shared
-        let originalWidth = appearance.panelWidth
-        let originalScale = appearance.textScale
-        defer {
-            appearance.panelWidth = originalWidth
-            appearance.textScale = originalScale
-        }
+        let appearance = try isolatedSettings()
 
         let state = Self.pathologicalState()
         let query = String(repeating: "w", count: PanelKeyboard.queryLimit)
@@ -217,13 +203,7 @@ final class PanelWidthContractTests: XCTestCase {
     /// `detailSize`.
     @MainActor
     func testTheNoMatchBlockCannotWidenThePanel() throws {
-        let appearance = AppearanceSettings.shared
-        let originalWidth = appearance.panelWidth
-        let originalScale = appearance.textScale
-        defer {
-            appearance.panelWidth = originalWidth
-            appearance.textScale = originalScale
-        }
+        let appearance = try isolatedSettings()
 
         let state = Self.pathologicalState()
         let query = String(repeating: "w", count: PanelKeyboard.queryLimit)

@@ -445,7 +445,16 @@ public struct HistoryChart: View {
         // Above its own rule by default, and under it when the threshold sits so
         // high that the label would go off the ceiling — a threshold of 100% is
         // allowed, and a figure clipped in half is not a reading.
-        let labelY = y - labelHeight / 2 < rect.minY
+        //
+        // The guard compares the label's **top** against the ceiling and not its
+        // centre, which is what it did and what made the comment above a
+        // description of the bug. Clipping begins the moment the top crosses the
+        // plot bounds; a centre test only fires half a box later, so between
+        // `minY + labelHeight/2` and `minY + labelHeight` the flip does not
+        // happen and the figure is cut. At the shipped `warningThreshold` of 0.95
+        // and the shipped 560pt settings window that is exactly where it lands —
+        // the pane drew "95%" with the top 45% of it sliced off.
+        let labelY = y - labelHeight < rect.minY
             ? y + labelHeight / 2
             : y - labelHeight / 2
 

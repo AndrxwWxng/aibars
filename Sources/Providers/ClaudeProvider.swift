@@ -27,7 +27,14 @@ public final class ClaudeProvider: ObservableObject, UsageProvider {
 
     private let cookieName = "sessionKey"
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    /// `AppDefaults.current`, which is `.standard` in the app and a domain of the
+    /// test process's own under XCTest. Every provider here holds this line and
+    /// the reason is the same for all fifteen: the key is `aibars.<id>.enabled`,
+    /// a switch the user threw in Settings, and a provider constructed by a test
+    /// both reads and writes it. `MultiAccountTests` calls `setEnabled(false)` on
+    /// a real service id — which used to turn that service off in the install
+    /// running the suite, and stay off.
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     public init(accountID: String? = nil) {

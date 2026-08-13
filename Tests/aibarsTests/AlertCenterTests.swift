@@ -370,7 +370,10 @@ final class AlertCenterTests: XCTestCase {
     /// every change, and a shared domain would let one test arm another's
     /// windows — or leave arming behind in the developer's own defaults.
     private func scratchStore(_ label: String = #function) throws -> UserDefaults {
-        let suite = "aibars.alerts.tests.\(label).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let suite = TestDomain.stable("\(TestDomain.prefix).alerts.\(label)")
         let store = try XCTUnwrap(UserDefaults(suiteName: suite), "could not open a scratch suite")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
         return store

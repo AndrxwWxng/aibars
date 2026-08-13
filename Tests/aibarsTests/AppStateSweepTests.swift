@@ -295,7 +295,10 @@ final class AppStateSweepTests: XCTestCase {
     /// arming on every change, and a budget written to the shared store is an
     /// amount left behind in the developer's own preferences.
     private func scratchDomain(_ label: String, _ function: String = #function) throws -> UserDefaults {
-        let suite = "aibars.sweep.tests.\(function).\(label).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let suite = TestDomain.stable("\(TestDomain.prefix).sweep.\(function).\(label)")
         let store = try XCTUnwrap(UserDefaults(suiteName: suite), "could not open a scratch suite")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
         return store

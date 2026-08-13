@@ -69,7 +69,10 @@ final class BudgetPaneTests: XCTestCase {
     /// in `init`, so a domain left behind by an earlier run would hand the next
     /// one somebody else's caps.
     private func scratch(_ name: String) throws -> UserDefaults {
-        let suite = "aibars.budget.pane.tests.\(name).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let suite = TestDomain.stable("\(TestDomain.prefix).budget-pane.\(name)")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }

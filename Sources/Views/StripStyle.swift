@@ -137,7 +137,24 @@ public struct StripInk {
         case .alertOnly:
             return percent >= warningThreshold ? Self.alarm : neutral
         case .perBar:
-            return percent >= warningThreshold ? Self.alarm : UsageTint.color(for: percent)
+            if percent >= warningThreshold { return Self.alarm }
+            // The resting band takes the *strip's* neutral and not the ramp's
+            // resting stop, and the reason is the ground rather than the hue —
+            // below caution both are grey, so nothing about the reading is lost.
+            //
+            // `Tokens.Meter.fill` is solved against `Meter.track`, a panel token,
+            // at 3.19:1 dark and 3.05:1 light: correct for a bar lying on a
+            // track, and a figure. Put the same ink in the menu bar and it is a
+            // figure on the *menu bar's* ground, which this palette does not own
+            // and which follows the desktop — measured on a plain dark bar it
+            // falls to about 4.2:1 and on a light one to 3.4:1, under the floor
+            // for 12pt type. `neutral` is the ink the strip already solves for
+            // that ground, which is why every other style takes it.
+            //
+            // The distinction `.perBar` is for survives untouched: the caution
+            // band still draws amber and the warning band still draws red. What
+            // goes is a grey chosen for a surface the strip is not on.
+            return UsageTint.isResting(percent) ? neutral : UsageTint.color(for: percent)
         }
     }
 
@@ -334,8 +351,12 @@ public struct StripMark: View {
 /// logo beside them.
 ///
 /// This is what `MenuBarStripRenderer.figure(for:)` became, and it is still the
-/// one place the strip's leading-alignment rule is written down — two doc
-/// comments in `DesignSystem.swift` send the reader to the old name.
+/// one place the strip's leading-alignment rule is written down.
+/// `Tokens.Ramp.figureDesign`, `Tokens.Strip.figureCell` and
+/// `StripFit.figureCell` all send the reader here rather than restating it —
+/// they sent it to the deleted method for a release, which is what a reference
+/// that names a *method* costs when the method moves and a reference that names
+/// a type does not.
 @MainActor
 public struct StripFigure: View {
     public let segment: StripSegment

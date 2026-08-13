@@ -316,6 +316,38 @@ public struct RowGeometry: Equatable {
         return min(residue, max(stretch, share))
     }
 
+    /// How the windows a service reports divide between chips of their own and
+    /// the `+N` standing for the rest.
+    ///
+    /// The overflow chip takes a slot off the line rather than being added to it
+    /// — pushed past the trailing edge it would be truncated away, which is the
+    /// failure it exists to report — and one real chip is always kept, because
+    /// `+6` alone names no window at all.
+    ///
+    /// It lives here because it had come to live in two places. `ProviderRow` and
+    /// the Appearance pane's `SampleRow` each held a private copy, identical line
+    /// for line, and the moment one of them learned `yieldsToTheSentence` the
+    /// preview stopped previewing: measured at 520pt, 318 columns of the caption
+    /// line differed between the two rows, which is one of them fitting a
+    /// sentence the other is not. That is the exact class of drift the rest of
+    /// this file was written to close, and `AppearancePaneTests` caught it in the
+    /// same run it was introduced.
+    ///
+    /// `yieldsToTheSentence` gives one chip back to the caption's leading half —
+    /// see `ProviderRow.yieldsToTheSentence` for when and why. It is width only
+    /// and can never be a height, because the caption is one `lineBox` whatever
+    /// is on it.
+    public static func chipSplit(
+        count: Int,
+        limit: Int,
+        yieldsToTheSentence: Bool = false
+    ) -> (shown: Int, hidden: Int) {
+        let limit = yieldsToTheSentence ? max(1, limit - 1) : limit
+        guard count > limit else { return (count, 0) }
+        let shown = max(1, limit - 1)
+        return (shown, count - shown)
+    }
+
     /// How a chip's cap divides between its two runs.
     ///
     /// The reading is served first and the label takes what is left, which is
@@ -434,11 +466,21 @@ public struct RowGeometry: Equatable {
     /// Presence of a spend, never its amount: this decides how many chips ride
     /// the line and never how tall the line is, so it cannot resize a row when a
     /// bill lands.
+    /// Nine cells, a gap, three cells, a gap and one cell — 62 + 4 + 21 + 4 + 7 =
+    /// **98** at the shipped 11pt, where it was 87.
+    ///
+    /// The last two terms are the middle dot `MetricCaption` now draws between
+    /// the amount and the window beside it. One mono cell is generous for a `·`
+    /// set in SF Pro, and generous is the direction this whole section fails in:
+    /// under-reserving the sentence's incompressible half is what let a chip run
+    /// past the ground in the first place.
     private static func spendReserve(_ chipSize: CGFloat) -> CGFloat {
         let size = positive(chipSize)
         return Tokens.figureWidth(size, digits: 9)
             + Tokens.Space.snug
             + Tokens.figureWidth(size, digits: 3)
+            + Tokens.Space.snug
+            + Tokens.figureWidth(size, digits: 1)
     }
 
     /// A length, with a NaN answering 0 rather than surviving the arithmetic.

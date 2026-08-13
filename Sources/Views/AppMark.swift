@@ -341,6 +341,24 @@ public struct AppMark: View {
 /// belongs to `AppearanceSettings.menuBarTint(for:)` and living in two places is
 /// how the strip came to ignore `.monochrome` while the panel honoured it.
 public enum UsageTint {
+    /// The reading below which the ramp answers grey, as a number a caller can
+    /// test against rather than a colour it has to compare.
+    ///
+    /// The same 0.80 the switch below uses, named once so that the one caller
+    /// that needs to know *which band it is in* — the menu bar strip, which
+    /// draws the resting stop on a ground this palette does not own — does not
+    /// have to write the boundary out a second time. It is the shipped default
+    /// of `cautionThreshold` and deliberately not the setting: a caller who
+    /// wants the user's line reads it off `AppearanceSettings`, and this is the
+    /// palette saying where its own colours begin.
+    public static let restingCeiling: Double = 0.80
+
+    /// True where the ramp has no hue to give, so a caller drawing on a ground
+    /// this palette was not solved against can substitute its own neutral.
+    public static func isResting(_ percent: Double) -> Bool {
+        percent < restingCeiling
+    }
+
     public static func color(for percent: Double) -> Color {
         switch percent {
         // The resting stop is not a colour at all, and that is the point. It
@@ -351,14 +369,28 @@ public enum UsageTint {
         // teal→amber→red for deuteranomaly and protanopia, which collapse hues
         // towards each other but never towards grey.
         //
-        // `Ink.muted` itself, not a private grey beside it. It was
-        // 0x5F636B / 0x8A8F98, which sat within 3 L* of the token in both
-        // appearances — a duplicate rather than a decision, and the dark half of
-        // it measured 4.48:1 on the pressed row card, under the text floor. The
-        // consequence is worth saying out loud: below caution, `ColorRamp.usage`
-        // and `ColorRamp.mono` now resolve identically. They still differ above
-        // it, which is the only band where that setting was ever saying anything.
-        case ..<0.80: return Tokens.Ink.muted                                  // resting grey
+        // `Tokens.Meter.fill`, and it was `Ink.muted` for one pass. Folding the
+        // two together deleted a duplicate hex and, with it, the only greyscale
+        // step this boundary had: measured on the shipped render, resting muted
+        // L* 67.61 against amber's 65.73 is 1.062:1 in dark and 1.020:1 in light,
+        // so a resting bar and a caution bar were the same grey once the hue was
+        // taken away. The near-cap contract in `ProviderRow` promises three
+        // channels that survive greyscale; a ramp whose first boundary survives
+        // only in hue is the same promise broken one boundary earlier.
+        //
+        // The stop is solved rather than picked and the arithmetic is in the
+        // token: 3.19/3.05 on `Meter.track`, 13.84/13.97 L* under `Ink.attention`.
+        // It is also 4.63/4.19 on `Surface.base` against muted's 7.85/6.85, which
+        // is the second thing it buys — eight resting rows of nine stop carrying a
+        // 200pt slab at body-text contrast.
+        //
+        // `Ink.muted` is untouched and still the text ink. The consequence worth
+        // restating, because the sentence it replaces claimed the opposite: below
+        // caution, `ColorRamp.usage` and `ColorRamp.mono` resolve *differently*
+        // again — mono is `Ink.muted` at every level, which is what "one ink,
+        // always" means — so the setting says something in every band rather than
+        // only above caution.
+        case ..<0.80: return Tokens.Meter.fill                                 // resting grey
         // One amber, and it is `Ink.attention` itself rather than a second copy
         // of its pair. The light stop used to be 0xB45309, which is a different
         // amber from the one "this needs you" is drawn in — two ambers a user has

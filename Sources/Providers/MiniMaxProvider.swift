@@ -18,7 +18,7 @@ public final class MiniMaxProvider: ObservableObject, UsageProvider {
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false
 
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
     private let endpointKey = "aibars.minimax.endpoint"
     private let tokenKey = "aibars.minimax.token"

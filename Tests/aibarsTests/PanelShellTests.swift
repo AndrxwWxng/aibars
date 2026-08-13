@@ -43,20 +43,46 @@ final class PanelShellTests: XCTestCase {
     /// drawn at.
     @MainActor
     func testTheChevronColumnIsWiderThanTheChevron() {
-        let column = DisclosureHeader.chevronColumn(at: Tokens.Ramp.caption)
+        let column = DisclosureHeader.chevronColumn(at: Tokens.Ramp.caption, leading: 0)
         XCTAssertGreaterThan(column, Tokens.Ramp.caption, "the column has to hold the glyph and its gap")
+    }
+
+    /// And with marks on the rows, the column *is* the rows' leading column, so
+    /// a group's title starts on the panel's one text axis rather than inventing
+    /// a second one 11pt inside it.
+    ///
+    /// Measured before this held: the label's ink began at 29.0 against a text
+    /// axis at 40.0 shared by the wordmark, seven names, seven captions and
+    /// three meters. The chevron missed the mark axis too — ink centre 18.5
+    /// against 21.0 on all seven rows — and the box below is what fixes that: the
+    /// mark's own width, so its centre is the marks' centre.
+    @MainActor
+    func testTheChevronColumnFollowsTheRowsWhenThereAreMarks() throws {
+        let appearance = try settings("chevron-axis")
+        let leading = PanelAxis.leadingColumn(for: appearance)
+        XCTAssertGreaterThan(leading, 0, "the defaults draw marks, so there is a leading column")
+
+        let column = DisclosureHeader.chevronColumn(at: Tokens.Ramp.detail, leading: leading)
+        XCTAssertEqual(column, leading, "the group's title is off the rows' own axis")
+
+        // The chevron's box is the column less the gap after it, which is the
+        // mark's box exactly — 18pt at the shipped 18pt logo.
+        let box = column - DisclosureHeader.labelGap(leading: leading)
+        XCTAssertEqual(box, CGFloat(appearance.logoSize), accuracy: 0.01)
     }
 
     // MARK: - The header
 
+    /// A suite of its own, so one case's panel width is not another's.
+    ///
+    /// The failure branch used to return `AppearanceSettings.shared`, which is
+    /// the object this whole helper exists to keep out of the suite: the one case
+    /// the `guard` is for was answered by writing the settings of whoever ran the
+    /// tests, silently, on a run that still went green. `isolatedStore` fails the
+    /// case instead.
     @MainActor
-    private func settings(_ name: String) -> AppearanceSettings {
-        // A suite of its own, so one case's panel width is not another's.
-        guard let store = UserDefaults(suiteName: "panel-shell-\(name)") else {
-            return AppearanceSettings.shared
-        }
-        store.removePersistentDomain(forName: "panel-shell-\(name)")
-        return AppearanceSettings(store: store)
+    private func settings(_ name: String) throws -> AppearanceSettings {
+        AppearanceSettings(store: try isolatedStore("panel-shell.\(name)"))
     }
 
     /// The header used to carry a four-bar meter of the same usage the rows
@@ -65,10 +91,11 @@ final class PanelShellTests: XCTestCase {
     /// cannot move with a percentage, so the rule going red can never push the
     /// list down and make `MenuBarExtra` resize the window under the pointer.
     @MainActor
-    func testHeaderHeightDoesNotMoveWithUsage() {
+    func testHeaderHeightDoesNotMoveWithUsage() throws {
+        let appearance = try settings("header")
         func height(topPercent: Double) -> CGFloat {
             let header = PanelHeader(
-                appearance: settings("header"),
+                appearance: appearance,
                 levels: [topPercent, 0.2, 0.1],
                 topPercent: topPercent,
                 summary: "updated 12s ago"
@@ -83,8 +110,8 @@ final class PanelShellTests: XCTestCase {
     /// The header is built before anything has answered and again once
     /// everything has, and neither is a special case it gets to opt out of.
     @MainActor
-    func testHeaderBuildsWithNothingAndWithNineServices() {
-        let appearance = settings("counts")
+    func testHeaderBuildsWithNothingAndWithNineServices() throws {
+        let appearance = try settings("counts")
         for levels in [[Double](), Array(repeating: 0.5, count: 9)] {
             let header = PanelHeader(
                 appearance: appearance,
@@ -121,8 +148,8 @@ final class PanelShellTests: XCTestCase {
     /// bearings, so a rendered comparison has about a point of slop in it — and at
     /// the shipped 18pt logo the error being watched for is five.
     @MainActor
-    func testTheHeadersWordmarkBeginsOnTheRowsNameAxis() {
-        let appearance = settings("axis")
+    func testTheHeadersWordmarkBeginsOnTheRowsNameAxis() throws {
+        let appearance = try settings("axis")
         // Both ends of the slider's 16...40 range, the shipped 18, and the 22 the
         // Comfortable preset carries.
         let expected: [Double: CGFloat] = [16: 38, 18: 40, 22: 44, 40: 62]
@@ -184,8 +211,8 @@ final class PanelShellTests: XCTestCase {
     /// with no marks in it is the same indent in front of nothing `ProviderRow`
     /// already refuses.
     @MainActor
-    func testTheHeaderKeepsNoColumnTheRowsHaveGivenUp() {
-        let appearance = settings("axis-hidden")
+    func testTheHeaderKeepsNoColumnTheRowsHaveGivenUp() throws {
+        let appearance = try settings("axis-hidden")
         appearance.logoStyle = .hidden
         appearance.meterStyle = .bar
         XCTAssertEqual(
@@ -208,8 +235,8 @@ final class PanelShellTests: XCTestCase {
     /// `Control.headerGlyph` height, so the rule under the header and every row
     /// beneath it stay where they are at any logo size.
     @MainActor
-    func testTheLogoSizeDoesNotMoveTheHeaderDown() {
-        let appearance = settings("axis-height")
+    func testTheLogoSizeDoesNotMoveTheHeaderDown() throws {
+        let appearance = try settings("axis-height")
         var heights: [Double: CGFloat] = [:]
         for logoSize in [16.0, 18.0, 22.0, 40.0] {
             appearance.logoSize = logoSize
@@ -246,7 +273,7 @@ final class PanelShellTests: XCTestCase {
     func testHeaderRuleIsNeutralAtEveryUsageLevel() throws {
         var neutral: NSColor?
         for percent in [0, 0.5, 0.84, 0.85, 0.95, 1] as [Double] {
-            let drawn = panel(usage: percent, suite: "rule-\(Int(percent * 100))")
+            let drawn = try panel(usage: percent, suite: "rule-\(Int(percent * 100))")
             // Or the case passes on a panel that never reached the level it says
             // it is testing, which is the whole of what it is testing.
             XCTAssertEqual(
@@ -373,7 +400,7 @@ final class PanelShellTests: XCTestCase {
             "the harness cannot see transparency, so it cannot see the absence of it either"
         )
 
-        let drawn = panel(usage: 0.92, suite: "ground")
+        let drawn = try panel(usage: 0.92, suite: "ground")
         let sheet = try XCTUnwrap(raster(drawn.view))
         XCTAssertEqual(
             sheet.pixelsWide, Int(drawn.appearance.panelWidth.rounded()),
@@ -407,9 +434,9 @@ final class PanelShellTests: XCTestCase {
     /// `PanelLayoutTests` fixes the default width; this one is about the setting
     /// still reaching the window at all three ends of its range.
     @MainActor
-    func testPanelKeepsTheConfiguredWidth() {
+    func testPanelKeepsTheConfiguredWidth() throws {
         for width in [300.0, 380.0, 520.0] {
-            let appearance = settings("width-\(Int(width))")
+            let appearance = try settings("width-\(Int(width))")
             appearance.panelWidth = width
             let state = AppState()
             let panel = MenuBarContentView(
@@ -437,8 +464,8 @@ final class PanelShellTests: XCTestCase {
     private func panel(
         usage percent: Double,
         suite: String
-    ) -> (state: AppState, appearance: AppearanceSettings, view: AnyView) {
-        let appearance = settings(suite)
+    ) throws -> (state: AppState, appearance: AppearanceSettings, view: AnyView) {
+        let appearance = try settings(suite)
         let state = AppState()
         for provider in state.providers.prefix(3) {
             provider.isAuthenticated = true

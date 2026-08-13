@@ -16,7 +16,7 @@ public final class ChatGPTProvider: ObservableObject, UsageProvider {
     @Published public private(set) var lastError: ProviderError?
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     public init(accountID: String? = nil) {

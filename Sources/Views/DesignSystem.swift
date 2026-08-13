@@ -233,7 +233,7 @@ public enum Tokens {
         /// the figures sit side by side rather than stacked: with no column to
         /// align to, trailing alignment spends a cell's slack between a figure and
         /// its own mark instead of after it. `Tokens.Strip.figureCell` reserves the
-        /// width and `MenuBarStripRenderer.figure(for:)` owns that one decision.
+        /// width and `StripFigure` — in `StripStyle.swift` — owns that one decision.
         ///
         /// Reached through `Font.system(size:weight:design:)` and never through
         /// `Text.monospaced()`. That method is `macOS 13.3`; the `View` overload
@@ -638,7 +638,7 @@ public enum Tokens {
         /// strip can produce and never from the string in hand.
         ///
         /// The reserved width, and only that. Where the figure sits *inside* the
-        /// cell is stated once, at `MenuBarStripRenderer.figure(for:)`, and
+        /// cell is stated once, at `StripFigure` in `StripStyle.swift`, and
         /// deliberately not restated here: this doc and `StripFit.figureCell`'s
         /// both used to call the cell trailing-aligned "like every other rail in
         /// the app" while the view drew it leading and recorded, beside the
@@ -741,12 +741,24 @@ public enum Tokens {
         ///
         /// It kept the plan pill's 0.07 when the pill went, because the number
         /// was never the pill's: 0.07 over `Surface.base` is the quietest plane
-        /// that still reads as a plane. It is a 1.165 step in light and 1.166 in
-        /// dark — the two halves finally agree, and that agreement is what a
-        /// relative opacity was always supposed to buy. They were recorded as
-        /// 1.165 and 1.186 while `quiet(_:)` was multiplying by `Color.primary`'s
-        /// hidden 0.8471, which moved the two appearances by different amounts
-        /// because L\* is compressive near black.
+        /// that still reads as a plane. It is a **1.1681 step in light and 1.1653
+        /// in dark** — the two halves agree to three thousandths, and that
+        /// agreement is what a relative opacity was always supposed to buy. They
+        /// were recorded as 1.165 and 1.186 while `quiet(_:)` was multiplying by
+        /// `Color.primary`'s hidden 0.8471, which moved the two appearances by
+        /// different amounts because L\* is compressive near black. (The pair was
+        /// also written down the wrong way round — 1.165 is the dark half.)
+        ///
+        /// **Both figures are against `Surface.base`, and that is a simplifying
+        /// ground rather than the one the panel draws on.** Over the *composited*
+        /// panel — `scrimAlpha` over whatever desktop is behind it — the two part
+        /// company: sampled off the rendered snapshot, the same 0.07 measures
+        /// 1.3019:1 in dark and 1.1234:1 in light, because the two composited
+        /// grounds are not mirror images of each other and a fixed alpha cannot
+        /// make them one. Nothing here is cut for that ground and nothing can be:
+        /// it depends on the user's wallpaper. `Surface.base` is quoted because
+        /// it is the one plane that is the same in every drawing, which is the
+        /// same convention `UsageRampContrastTests` records its table on.
         public static let logoTile: Double = 0.07
         /// A hairline rule, and the border on a floating surface. Read them
         /// through `ruleOpacity(increased:)` and `borderOpacity(increased:)`
@@ -1101,7 +1113,7 @@ public enum Tokens {
     /// None of the three ever meets the material, which is what makes that ladder
     /// unconditional rather than wallpaper-dependent. Grepped rather than assumed:
     /// `well` and `raised` appear only in `SettingsView`, `AppearancePane`,
-    /// `BudgetPane`, `BrowserLoginView` and `HistoryChart`, every one of them an
+    /// `BudgetPane`, `ConnectDialog` and `HistoryChart`, every one of them an
     /// opaque window. `base` is the only token here drawn on the material, and
     /// what holds it apart from the desktop is `scrimAlpha`, not this pair.
     public enum Surface {
@@ -1179,6 +1191,50 @@ public enum Tokens {
         /// see the derivation there. A relative track was considered and rejected
         /// on measurement, also written up there.
         public static let track = dynamic(light: 0xD3D5DA, dark: 0x2D2F35)
+
+        /// The usage ramp's resting stop — every bar, ring and strip segment
+        /// below `cautionThreshold`.
+        ///
+        /// It was `Ink.muted`, folded there to "delete a duplicate", and the
+        /// duplicate it deleted was the only greyscale step the ramp's *first*
+        /// boundary had. Measured on the shipped render: resting `Ink.muted`
+        /// L\* 67.61 against amber's 65.73 is **1.062:1, ΔL\* 1.87** in dark and
+        /// **1.020:1, ΔL\* 0.54** in light. Convert the panel to greyscale — which
+        /// the near-cap contract three files over insists every channel must
+        /// survive — and a resting bar and a caution bar are the same grey. A ramp
+        /// whose first step is invisible without hue is a ramp carried by hue
+        /// alone, in an application that spends hue on nothing else.
+        ///
+        /// So it is a stop of its own again, and this time it is solved rather
+        /// than picked. Two bounds, both measured against the ground the fill is
+        /// actually read on, which is the track and not the panel:
+        ///
+        /// - **≥ 3:1 on `Meter.track`**, the floor a non-text graphic needs to be
+        ///   a shape at all. Dark `0x787C83` measures **3.192:1**, light
+        ///   `0x74777E` **3.054:1**. Light's five hundredths is the thinnest
+        ///   margin in this enum and is stated rather than rounded away: this is
+        ///   the first pair to re-measure if `Meter.track` moves.
+        /// - **≥ 9 L\* under `Ink.attention`**, the same greyscale gap
+        ///   `testAmberAndRedSeparateInGreyscale` demands of the ramp's other
+        ///   boundary. Measured **1.596:1 / ΔL\* 13.84** dark and
+        ///   **1.670:1 / ΔL\* 13.97** light, so the ramp is monotone in lightness
+        ///   for the first time in both appearances: dark 51.89 → 65.73 → 76.65,
+        ///   light 50.02 → 36.02 → 26.53.
+        ///
+        /// It is quieter than the ink it replaces, deliberately and by a lot:
+        /// **4.633:1 dark / 4.186:1 light on `Surface.base`** against `muted`'s
+        /// 7.850 / 6.853. Eight resting rows of nine each carried a 200–300pt slab
+        /// at body-text contrast in a panel whose whole premise is quiet, and this
+        /// is the change that stops them. Nothing here carries text, so 4.5:1 is
+        /// not the floor it has to clear — 3:1 on the track is, and `Ink.muted`
+        /// keeps the text ink unchanged.
+        ///
+        /// `ColorRamp.mono` still resolves to `Ink.muted` at every level, which is
+        /// what that setting means: one ink, always. So `usage` and `mono` differ
+        /// below caution again — a claim the palette's own doc had to retire when
+        /// the two were folded together, and the band where that setting was ever
+        /// saying anything.
+        public static let fill = dynamic(light: 0x74777E, dark: 0x787C83)
 
         // `hairline` was here, at the same values as `track`, for "the slot on a
         // row with no meter at all". It was meant to distinguish "reports no
@@ -1568,7 +1624,7 @@ public enum Tokens {
         /// Resolved: over `Surface.base`, light `#EAE8E4` (1.142:1 above the
         /// ground, `body` 13.31 and `muted` 6.00 on it) and dark `#251C12`
         /// (1.159:1, `body` 15.09, `muted` 6.77). Over `Surface.raised`, which is
-        /// where `BrowserLoginView` actually draws it, light `#F3EFE8` (`muted`
+        /// where `ConnectDialog` actually draws it, light `#F3EFE8` (`muted`
         /// 6.41) and dark `#332B23` (`muted` 5.62).
         public static let attentionWash = Color(nsColor: NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua

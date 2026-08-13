@@ -53,7 +53,7 @@ public final class ClaudeCodeProvider: ObservableObject, UsageProvider {
     public init(
         accountID: String? = nil,
         root: URL = ClaudeCodeScanner.defaultRoot(),
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = AppDefaults.current
     ) {
         self.accountID = accountID
         self.id = accountID.map { "claudecode#\($0)" } ?? "claudecode"

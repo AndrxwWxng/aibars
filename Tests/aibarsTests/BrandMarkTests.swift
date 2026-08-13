@@ -89,7 +89,7 @@ final class BrandMarkTests: XCTestCase {
     /// And by the id the *provider* declares, which is a second string in a
     /// second file. `AppState.services` keys the register, every provider states
     /// its own `serviceID` literal, and the strip resolves its glyph from the
-    /// literal (`MenuBarStripRenderer.brand`, via `AppState.serviceReadings`) —
+    /// literal (`StripSegment.brand`, via `AppState.serviceReadings`) —
     /// so a provider whose literal drifted from its registration satisfies the
     /// test above and still draws a lettermark at 13pt.
     ///
@@ -239,7 +239,7 @@ final class BrandMarkTests: XCTestCase {
     /// Written as literals here rather than composited, because this file's
     /// business is the marks rather than the palette: the arithmetic that
     /// produces these two, and the assertion that it still does, live in
-    /// `GlyphColourTests.worstPressedPlane(dark:)`.
+    /// `UsageRampContrastTests.worstPressedPlane(dark:)`, in `GlyphColourTests.swift`.
     private static let worstPlane: (light: UInt32, dark: UInt32) = (0xD0D1D3, 0x36373A)
 
     // `testEveryMarkDrawsTheOneMarkInk` was here, asserting that

@@ -48,6 +48,22 @@ public struct BrandMark {
     /// and 0.34 is the set's middle. Without it OpenCode's solid square reads
     /// 2.7× heavier than Gemini's star at the same 18pt, which is a list of
     /// logos rather than one designed column.
+    ///
+    /// **Coverage is the rule and silhouette is the clamp**, and the second half
+    /// is new. Coverage normalisation works — measured on the rendered panel the
+    /// inked area across the column runs 66–88 pt², a 1.33× spread — but it
+    /// over-inflates an *outline*: a shape that is mostly hole needs a lot of box
+    /// to reach the set's middle coverage, and what the eye ranks at a 68pt row
+    /// pitch is the silhouette, not the ink inside it. The two marks that are
+    /// outlines were the two that broke the column: Grok's outlined slash drew
+    /// **16.0 × 15.5pt** at 1.10 and OpenCode's outlined square **9.0 × 10.0** at
+    /// 0.80, against 12.0 × 12.0 for every other mark in the set — a **2.76×**
+    /// spread in drawn area in a column whose whole job is to be one column.
+    ///
+    /// So those two are scaled back onto the 12pt silhouette the rest of the set
+    /// holds — `scale × 12 / longestDrawnSide` — and the longest-dimension spread
+    /// falls from 1.78× to 1.11×. Every other mark is untouched, because for a
+    /// filled shape coverage and silhouette already agree.
     public let opticalScale: CGFloat
 
     public init(
@@ -360,7 +376,10 @@ public struct BrandMark {
             viewBox: CGSize(width: 1024, height: 1024),
             pathData: "M395.479 633.828L735.91 381.105C752.599 368.715 776.454 373.548 784.406 392.792C826.26 494.285 807.561 616.253 724.288 699.996C641.016 783.739 525.151 802.104 419.247 760.277L303.556 814.143C469.49 928.202 670.987 899.995 796.901 773.282C896.776 672.843 927.708 535.937 898.785 412.476L899.047 412.739C857.105 231.37 909.358 158.874 1016.4 10.6326C1018.93 7.11771 1021.47 3.60279 1024 0L883.144 141.651V141.212L395.392 633.916 M325.226 695.251C206.128 580.84 226.662 403.776 328.285 301.668C403.431 226.097 526.549 195.254 634.026 240.596L749.454 186.994C728.657 171.88 702.007 155.623 671.424 144.2C533.19 86.9942 367.693 115.465 255.323 228.382C147.234 337.081 113.244 504.215 171.613 646.833C215.216 753.423 143.739 828.818 71.7385 904.916C46.2237 931.893 20.6216 958.87 0 987.429L325.139 695.339",
             hex: 0x0A0A0A,
-            opticalScale: 1.10
+            // Coverage asked for 1.10 — the slash is thin and inks little of its
+            // box — and the silhouette clamp takes it back to 1.10 × 12.0 / 16.0.
+            // At 1.10 this was the largest mark in the panel by 33%.
+            opticalScale: 0.82
         ),
         BrandMark(
             providerID: "openrouter",
@@ -422,7 +441,11 @@ public struct BrandMark {
             viewBox: CGSize(width: 24, height: 24),
             pathData: "M22 24H2V0h20zM17 4.8H7v14.4h10z",
             hex: 0x000000,
-            opticalScale: 0.80
+            // The other half of the same correction, in the other direction:
+            // coverage read this outlined square as heavy and cut it to the 0.80
+            // clamp, where it drew 9.0 × 10.0 against the set's 12.0 × 12.0.
+            // 0.80 × 12.0 / 10.0 puts its silhouette back on the column.
+            opticalScale: 0.96
         ),
     ]
 }

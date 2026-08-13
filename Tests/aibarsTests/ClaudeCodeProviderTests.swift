@@ -25,7 +25,10 @@ final class ClaudeCodeProviderTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         // A scratch domain, so the index's watermark never lands in the settings
         // of whoever is running the tests.
-        suiteName = "aibars.tests.claudecode.\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        suiteName = TestDomain.stable("\(TestDomain.prefix).claude-code-provider.\(name)")
         defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     }
 

@@ -75,6 +75,26 @@ public struct UsageMetric: Codable, Hashable {
         return min(max(used / limit, 0), 1.0)
     }
 
+    /// The same fraction with the ceiling taken off, for the one consumer that
+    /// must not have it: the figure.
+    ///
+    /// A meter is a length inside a track and cannot draw past its own end, so
+    /// `percent` clamps and every drawing reads it. A *number* has no end.
+    /// Clamping before it reached the digits made 147% of a cap byte-identical
+    /// to exactly 100% — same figure, same full bar, same square cap, the
+    /// overage traceable only in the money on the caption line — and 147% with
+    /// overage billing is the one reading in the panel a user most needs to see.
+    /// `UsageFigure` already says in its own doc that it does not clamp, "a
+    /// budget is a line you can keep walking past"; the caller clamped before it
+    /// ever got there.
+    ///
+    /// Floored at zero and NaN-guarded exactly as `percent` is, for the same
+    /// reason: `Int(NaN)` traps.
+    public var rawPercent: Double {
+        guard limit > 0, limit.isFinite, used.isFinite else { return 0 }
+        return max(used / limit, 0)
+    }
+
     public var displayUsed: String { Self.format(used) }
     public var displayLimit: String { Self.format(limit) }
 

@@ -515,8 +515,22 @@ public struct ProviderRow: View {
                 if parts.count > 1 {
                     identityRun(Self.elided(parts))
                 }
+                // The step that keeps the account and gives up the plan — and it
+                // has to be the *elided* account, not the whole one.
+                //
+                // It was `identityRun(first)`. Whenever the account alone is what
+                // did not fit, that candidate is wider than the elided pair above
+                // it and can therefore never be chosen: `ViewThatFits` skips
+                // straight to the empty last candidate and the row draws neither
+                // the account nor the plan. Measured on a 60-character work
+                // address at the shipped 356pt, `OpenRouter Enterprise Platform…`
+                // lost both its account and "Enterprise Unlimited" and left 100pt
+                // of empty line beside its name — the exact shape the doc two
+                // candidates up names as the motivating case. Elided, the ladder
+                // is monotone in width by construction, which is the property
+                // `ViewThatFits` needs to walk it at all.
                 if parts.count > 1, let first = parts.first {
-                    identityRun(first)
+                    identityRun(Self.elided([first]))
                 }
                 // The last candidate is the one `ViewThatFits` falls back on when
                 // none of the others fit, so it has to be something that always
@@ -603,11 +617,24 @@ public struct ProviderRow: View {
 
     /// The name's ink, which is the row's own quietest state channel.
     ///
-    /// Muted while a row has nothing to report — loading, or not connected —
-    /// and full body ink the moment it does. A failed or expired row keeps the
-    /// body ink: it has something to say and is saying it on the line below.
+    /// Muted while a row has nothing to report — loading, failed, or not
+    /// connected — and full body ink the moment it does.
+    ///
+    /// A failed row is muted too, and that is a correction. Two docs stated
+    /// opposite rules for one state: `AppearanceSettings.markInk` — "not
+    /// reporting, which is loading, failed, expired, locked or not connected, is
+    /// `Ink.muted`" — drove the mark, and this drove the name, and the row drew
+    /// both. Measured on the Grok row: a `Ink.muted` mark at 7.73:1 under an
+    /// `Ink.body` name at 15.8:1, **28 L\* apart inside one row**, so a row that
+    /// had *failed* read healthier than the row above it that was merely
+    /// loading. One ink for the whole row is what `Ink.muted`'s own doc promises
+    /// — "mark and name and caption together" — and the sentence on the line
+    /// below is what carries the difference between failed and loading, in
+    /// English, where a reader can act on it.
     private var nameTint: Color {
-        isLoading || !provider.isAuthenticated ? Tokens.Ink.muted : Tokens.Ink.body
+        isLoading || !provider.isAuthenticated || failure != nil
+            ? Tokens.Ink.muted
+            : Tokens.Ink.body
     }
 
     /// The figure rail — which is the row's state column, and answers "what is
@@ -642,7 +669,17 @@ public struct ProviderRow: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.muted)
-                .frame(width: Self.railGlyph, height: Self.railGlyph)
+                // Trailing inside the shared square, which is the rule the dot
+                // two branches down already states and this branch was silent
+                // about. It buys nothing today and that is worth saying: measured
+                // before and after, the triangle's ink ends at 343.0 either way,
+                // because `exclamationmark.triangle.fill` at 11pt renders 14pt
+                // wide in a 14pt box and the remaining point is the symbol's own
+                // side bearing, which no alignment can reach. What it buys is
+                // that the rail's three glyph branches now all name the same
+                // rule, so a symbol or a size that renders narrower cannot
+                // quietly land 4pt inside the column the way the dot once did.
+                .frame(width: Self.railGlyph, height: Self.railGlyph, alignment: .trailing)
                 .frame(minWidth: geometry.headlineRail, alignment: .trailing)
                 .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
                 .accessibilityLabel("Not reporting")
@@ -674,7 +711,7 @@ public struct ProviderRow: View {
                 .frame(minWidth: geometry.headlineRail, alignment: .trailing)
                 .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
                 .accessibilityLabel("Connected")
-        } else if appearance.showsUsageNumber, let percent = primaryPercent {
+        } else if appearance.showsUsageNumber, let percent = primaryFigure {
             UsageFigure(
                 percent: percent,
                 size: metrics.figureSize,
@@ -907,8 +944,33 @@ public struct ProviderRow: View {
     /// this whole predicate exists to close.
     @ViewBuilder
     private func stated(_ text: String) -> some View {
+        // The sentence first and the empty slot under it — the same two children
+        // at the same spacing, so the row measures to the point what it measured
+        // before and `RowGeometry` is untouched. What changes is where the hole
+        // falls, and that is the panel's largest rhythm defect.
+        //
+        // Measured on the shipped render at cozy/100%: on a row with no reading —
+        // ChatGPT, Claude Code, Grok — the 5 + 3 = 8pt of reserved-but-undrawn
+        // slot stood *between* the name and the name's own caption, so the gap
+        // inside a row was **18.0pt against 26.0pt between two rows, a ratio of
+        // 1.44**. A list whose objects are held together barely more tightly than
+        // they are held apart is a wall of text; that is exactly what the panel
+        // was reading as. Under the shipped Minimal preset, where `MeterSlot`
+        // draws nothing on *every* row, the same measurement is 12.5 against
+        // 15.0 — 1.20× on 100% of rows.
+        //
+        // With the slot last, that air joins the seam instead: 10.0pt inside
+        // against 34.0pt between, a ratio of 3.40, which is the same order as the
+        // 3.06 the three rows that draw a real bar already had. One list of
+        // objects rather than one column of text.
+        //
+        // The cost, stated because it is real: a row that is loading and then
+        // lands a quota redraws as slot-then-line, so its caption drops 8pt once,
+        // in the first seconds after a cold launch with the panel open. The
+        // panel does not resize — the height is identical either way — and the
+        // rows that are permanently quotaless, which is the whole set this is
+        // for, never make that transition at all.
         VStack(alignment: .leading, spacing: metrics.captionGap) {
-            reservedMeterSlot
             if reservesWindowLine {
                 Text(text)
                     .font(.system(size: metrics.detailSize, weight: .regular))
@@ -917,6 +979,7 @@ public struct ProviderRow: View {
                     .truncationMode(.tail)
                     .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
             }
+            reservedMeterSlot
         }
     }
 
@@ -936,7 +999,7 @@ public struct ProviderRow: View {
     @ViewBuilder
     private func primaryMetric(_ data: UsageData) -> some View {
         let metric = data.primary
-        let run = chipRun(data.secondary, carriesSpend: data.spend != nil)
+        let run = chipRun(data)
         if metric.limit > 0 {
             switch appearance.meterStyle {
             case .bar, .numberOnly:
@@ -1013,7 +1076,13 @@ public struct ProviderRow: View {
         _ metric: UsageMetric,
         @ViewBuilder line: () -> Line
     ) -> some View {
+        // Line first, slot second, for the reason written out at `stated` — and
+        // here the slot is provably always empty rather than usually: this is
+        // only ever reached from the `metric.limit > 0` false branch of
+        // `primaryMetric`, and `MeterSlot.drawsTrack` requires `limit > 0`. So
+        // the reorder cannot move a drawing, only a hole.
         VStack(alignment: .leading, spacing: metrics.captionGap) {
+            line()
             if appearance.meterStyle != .ring {
                 MeterSlot(
                     metric: metric,
@@ -1021,7 +1090,6 @@ public struct ProviderRow: View {
                     appearance: appearance
                 )
             }
-            line()
         }
     }
 
@@ -1056,14 +1124,47 @@ public struct ProviderRow: View {
     /// Empty under every style but `.chips`, which is the only one that puts them
     /// on a line that already exists.
     private func chipRun(
-        _ windows: [UsageMetric],
-        carriesSpend: Bool
+        _ data: UsageData
     ) -> (chips: [UsageMetric], overflow: Int) {
+        let windows = data.secondary
         guard !windows.isEmpty,
               appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .chips
         else { return ([], 0) }
-        let split = chipSplit(windows.count, carriesSpend: carriesSpend)
+        let split = chipSplit(
+            windows.count,
+            carriesSpend: data.spend != nil,
+            yieldsToTheSentence: yieldsToTheSentence(data)
+        )
         return (Array(windows.prefix(split.shown)), split.hidden)
+    }
+
+    /// Whether the caption's sentence outranks one of the chips beside it.
+    ///
+    /// At or above caution it does, and the measurement is what makes the case.
+    /// The panel's flagship row — a 5-hour window at 92% — reads `5h session` at
+    /// the shipped 356pt and keeps `Opus wee… 12%`: the `resets in 1h 19m` is the
+    /// candidate `ViewThatFits` drops *first*, because the chip run is
+    /// `.fixedSize()` and takes its width before the sentence is offered
+    /// anything. So the row that is about to be cut off does not say when it
+    /// comes back, in order to show a 12% reading of a different window.
+    ///
+    /// Above caution the reset time is the one fact on the row a user can act
+    /// on — wait, or stop — and the further windows are context. Below it the
+    /// ranking is the other way round and nothing here fires.
+    ///
+    /// Width only, and that is what makes it safe: the caption is one `lineBox`
+    /// whatever is on it, so the number of chips has never been an input to row
+    /// height. A *height* that moved with the reading would be the resize
+    /// `RowGeometry` exists to forbid; a width that does is the line choosing
+    /// what to say with the room it has.
+    ///
+    /// It costs no reservation either. `RowGeometry.chipCap` is still asked for
+    /// the geometric limit, so each chip is capped exactly as before and the run
+    /// is bounded by the same arithmetic — one fewer chip inside a bound is
+    /// still inside it.
+    private func yieldsToTheSentence(_ data: UsageData) -> Bool {
+        guard appearance.showsCountdowns, data.primary.resetDate != nil else { return false }
+        return data.primary.percent >= appearance.cautionThreshold
     }
 
     private func numbered(_ windows: [UsageMetric], limit: Int) -> [NumberedMetric] {
@@ -1116,11 +1217,16 @@ public struct ProviderRow: View {
     /// That last clause is the one case where the run draws one item more than the
     /// limit, and `RowGeometry.chipLimit` pays for it by reserving the "+N"'s
     /// three cells before it divides rather than after.
-    private func chipSplit(_ count: Int, carriesSpend: Bool) -> (shown: Int, hidden: Int) {
-        let limit = chipLimit(carriesSpend: carriesSpend)
-        guard count > limit else { return (count, 0) }
-        let shown = max(1, limit - 1)
-        return (shown, count - shown)
+    private func chipSplit(
+        _ count: Int,
+        carriesSpend: Bool,
+        yieldsToTheSentence: Bool = false
+    ) -> (shown: Int, hidden: Int) {
+        RowGeometry.chipSplit(
+            count: count,
+            limit: chipLimit(carriesSpend: carriesSpend),
+            yieldsToTheSentence: yieldsToTheSentence
+        )
     }
 
     /// One further window: its name, and its reading in the secondary rail.
@@ -1152,7 +1258,7 @@ public struct ProviderRow: View {
     /// place. The chips are part of it by construction, which is what stops the
     /// row reserving no line and then drawing chips on it.
     private func primaryCaption(_ data: UsageData) -> MetricCaption {
-        let run = chipRun(data.secondary, carriesSpend: data.spend != nil)
+        let run = chipRun(data)
         return MetricCaption(
             metric: data.primary,
             isSecondary: false,
@@ -1182,6 +1288,17 @@ public struct ProviderRow: View {
     private var primaryPercent: Double? {
         guard case .success(let data) = result, data.primary.limit > 0 else { return nil }
         return data.primary.percent
+    }
+
+    /// The same reading for the figure, which is the one place the clamp is
+    /// wrong — see `UsageMetric.rawPercent`. The dial and the bar keep
+    /// `primaryPercent`, because a length has an end and a number does not.
+    ///
+    /// The rail is unchanged and does not need to change: it reserves three
+    /// digits and a unit, which is exactly what "147%" takes.
+    private var primaryFigure: Double? {
+        guard case .success(let data) = result, data.primary.limit > 0 else { return nil }
+        return data.primary.rawPercent
     }
 
     /// The budget this row is allowed to report on, and what it says. Nil is the
@@ -1478,18 +1595,37 @@ public struct MeterTrack: View {
     /// off. The shape channel of the near-cap contract, and the one that
     /// survives greyscale and `ColorRamp.mono` alike.
     public let isNearCap: Bool
+    /// Where the redline stands, as a fraction of the track. Zero draws none.
+    ///
+    /// `warningThreshold`, handed down rather than read here, for the same reason
+    /// `isNearCap` is: the setting belongs to the caller and two views resolving
+    /// one threshold in two places is how a mark and a state come to disagree.
+    public let warning: Double
 
     public init(
         percent: Double,
         height: CGFloat,
         tint: Color,
-        isNearCap: Bool = false
+        isNearCap: Bool = false,
+        warning: Double = 0
     ) {
         self.percent = percent
         self.height = height
         self.tint = tint
         self.isNearCap = isNearCap
+        self.warning = warning
     }
+
+    /// One point, which is two device pixels on the panel this is drawn on.
+    ///
+    /// It was 1.5 for half a render and that was too wide: the shipped threshold
+    /// is 0.95, so on a 160pt track the mark stands 152pt along and leaves 8pt of
+    /// track behind it — and a 1.5pt gap in front of an 8pt round-ended remainder
+    /// reads as a second, detached pill rather than as a scored line. At 1pt the
+    /// remainder still separates and the mark reads as a cut. The lesson is
+    /// general: this rule's width is measured against what is *left* of the track
+    /// beyond it, not against the track's length.
+    private static let redlineWidth: CGFloat = 1
 
     public var body: some View {
         GeometryReader { geo in
@@ -1507,6 +1643,40 @@ public struct MeterTrack: View {
                             thickness: height
                         )
                     )
+                // The redline, and it is what turns this drawing from a progress
+                // bar into a gauge.
+                //
+                // A progress bar fills towards a desirable completion; a quota
+                // meter empties towards a cliff, so the informative half of the
+                // reading is the part that is *left* — and until this mark
+                // existed the drawing gave the empty half the least ink. At 92%
+                // the remainder was 23pt of track at 1.43:1 against the ground
+                // while the used half took 278pt of saturated amber, so the row
+                // pre-attentively read "long bright bar, plenty", which is the
+                // opposite of what it says. Hue was the only thing reversing that,
+                // and hue is the channel the palette spends most carefully.
+                //
+                // It is a *position* channel, which is the argument for it over
+                // everything else in the near-cap contract. Measured on the
+                // shipped panel, the square cap is 2.5pt of corner on a 5pt bar —
+                // 0.19% of the fill's area, and invisible between 95% and 99.5% —
+                // and the weight step is +5.5% of stem ink. A tick the fill either
+                // has or has not reached survives greyscale exactly, survives
+                // deuteranopia exactly, survives `ColorRamp.mono` exactly, and
+                // reads at 5pt.
+                //
+                // Drawn in `Surface.base` and over the fill, not under it, so that
+                // it is a notch cut through the bar rather than a mark the reading
+                // paints over: below the threshold it stands in the empty track,
+                // at it the fill's edge meets it, above it the fill visibly runs
+                // past. Same quantity the fill is already measuring, so unlike the
+                // pace riser this replaces there is nothing for a reader to learn.
+                if warning > 0, warning < 1 {
+                    Rectangle()
+                        .fill(Tokens.Surface.base)
+                        .frame(width: Self.redlineWidth, height: height)
+                        .offset(x: geo.size.width * CGFloat(warning) - Self.redlineWidth / 2)
+                }
             }
         }
         .frame(height: height)
@@ -1576,7 +1746,8 @@ public struct MeterSlot: View {
                     isNearCap: ProviderRow.isNearCap(
                         percent: metric.percent,
                         warning: appearance.warningThreshold
-                    )
+                    ),
+                    warning: appearance.warningThreshold
                 )
             } else {
                 Color.clear
@@ -1585,6 +1756,17 @@ public struct MeterSlot: View {
         // The slot, whether or not there is anything in it. Both cases are the
         // same height, which is what the row is squared against.
         .frame(height: height)
+        // The ceiling, and only the ceiling — `MeterGeometry.trackCap` carries the
+        // measurements. Leading, because the shared left edge is what lets one
+        // row's reading be compared with the next one's down the column, and it
+        // is the same x the name, the caption and the meter have always started
+        // on. Two frames rather than one: the first caps the drawing, the second
+        // hands the row back the full width so the slot still occupies its whole
+        // line and nothing after it shifts.
+        //
+        // Width is not an input to `RowGeometry`, so no row moves by a point.
+        .frame(maxWidth: MeterGeometry.trackCap, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         // A shape says nothing out loud. Whoever wraps this owns the reading:
         // `UsageBar` speaks its fill, the title line speaks the figure.
         .accessibilityHidden(true)
@@ -1646,6 +1828,12 @@ public struct UsageBar: View {
     }
 
     private var metrics: AppearanceSettings.Metrics { appearance.metrics }
+
+    /// Whether the meter slot goes under the caption rather than over it, which
+    /// it does exactly when there is nothing in it to draw. A setting and only a
+    /// setting — see the two call sites in `body`.
+    private var placesSlotLast: Bool { appearance.meterStyle == .numberOnly }
+
     private var caption: MetricCaption {
         MetricCaption(
             metric: metric,
@@ -1667,7 +1855,16 @@ public struct UsageBar: View {
             // track per window cost 24pt of row height each and painted the panel
             // one colour; the figure in the secondary rail carries that reading on
             // its own, which is what a reserved figure column is for.
-            if !isSecondary {
+            //
+            // Above the caption when there is a track to draw, and under it when
+            // there is not — the reason is written out at `ProviderRow.stated`.
+            // Here the test is `meterStyle == .numberOnly` and nothing else, which
+            // is a *setting*: this view is only reached from the `limit > 0`
+            // branch, so under `.bar` the slot always has a track in it and under
+            // `numberOnly` it never does. The empty case is the Minimal preset,
+            // where the hole was between the name and its caption on every row in
+            // the panel at once — 12.5pt inside against 15.0 between.
+            if !isSecondary, !placesSlotLast {
                 MeterSlot(metric: metric, accent: accent, appearance: appearance)
             }
             // Whether there is a line here is the settings' answer; what goes on
@@ -1688,6 +1885,9 @@ public struct UsageBar: View {
                 } else {
                     ReservedTextLine(size: metrics.detailSize)
                 }
+            }
+            if !isSecondary, placesSlotLast {
+                MeterSlot(metric: metric, accent: accent, appearance: appearance)
             }
         }
         // The meter says nothing out loud — the fill fraction is the whole
@@ -1987,6 +2187,19 @@ public struct MetricCaption: View {
                     .layoutPriority(1)
             }
             if let text = readingText(reading) {
+                // The one pair on this line that was joined by four points of
+                // space and nothing else. `$10,000.00 5h session · resets in 19m`
+                // reads as a single run — "$10,000.00 5h" — because every other
+                // pair on the line carries a dot and this one did not, so the eye
+                // takes the absence as "these belong together". Money and a
+                // window are two facts of equal standing, like the window and its
+                // countdown two lines down, so they take the same mark.
+                //
+                // Reserved as well as drawn: `RowGeometry.spendReserve` counts it,
+                // because `SpendFigure` is `layoutPriority(1)` and `fixedSize`, so
+                // anything added beside it comes out of the chips' budget rather
+                // than out of slack.
+                if shownSpend != nil { separator }
                 amount(text)
             }
 
@@ -2371,8 +2584,15 @@ struct BudgetMeter: View {
                 isNearCap: ProviderRow.isNearCap(
                     percent: status.fraction,
                     warning: appearance.warningThreshold
-                )
+                ),
+                warning: appearance.warningThreshold
             )
+            // The same ceiling and the same leading edge the row's own meter
+            // takes. A budget line drawn twice the length of the quota above it
+            // would say the user's number outranks the service's, which is the
+            // one thing this view's own doc says it must not do.
+            .frame(maxWidth: MeterGeometry.trackCap, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: Tokens.Space.snug) {
                 Text("Budget")
@@ -2602,6 +2822,42 @@ public struct SecondaryChip: View {
         RowGeometry.chipRuns(cap: cap, chipSize: size)
     }
 
+    /// The anti-jitter floor's unspent half, moved to the head of the chip.
+    ///
+    /// The floor is real and stays (see the reading's frame below); where it was
+    /// *spent* was the defect. Trailing-aligned inside a four-cell frame, a
+    /// one-character reading left every unspent cell standing between the label
+    /// and its own number: measured on the shipped panel, `Credits`→`0` is
+    /// **26.0pt** and `Weekly`→`61%` is 11.5, against **8.5pt between two whole
+    /// chips**. Every chip's internal gap exceeded its external one — worst case
+    /// 3.06× inverted, on the busiest line in the panel — so the line read as
+    /// pairs that had come apart rather than as chips.
+    ///
+    /// Both runs are mono at one size, so the slack is arithmetic rather than a
+    /// measurement: the floor's four cells less the cells the reading actually
+    /// takes, clamped at zero for anything longer. Spending it here leaves the
+    /// label 4pt from its reading and folds the remainder into the 8pt gap
+    /// before the chip — which is the ordering the eye needs, and costs the chip
+    /// not one point of width, so the reservation and the rail are untouched.
+    /// The floor is clamped under the reading's own ceiling rather than stated
+    /// flat, exactly as the `minWidth` it replaces was: a line too narrow to hold
+    /// a whole chip hands the reading fewer than four cells, and slack that
+    /// exceeded the run's ceiling would push the chip past the cap `RowGeometry`
+    /// reserved for it. So `label + snug + min(reading, floor) == cap` at worst,
+    /// which is the bound the whole chip section is built on.
+    private var headSlack: CGFloat {
+        let cells = reading.digits.count + (reading.unit?.count ?? 0)
+        let floor = min(runs.reading, Self.jitterFloor(size))
+        return max(0, floor - Tokens.figureWidth(size, digits: cells))
+    }
+
+    /// Four cells, and the one number the chip floors its reading at. Named
+    /// because `headSlack` and the frame below have to agree about it exactly —
+    /// two copies of this constant is two chips of different widths.
+    private static func jitterFloor(_ size: CGFloat) -> CGFloat {
+        Tokens.figureWidth(size, digits: 4)
+    }
+
     public var body: some View {
         HStack(spacing: Tokens.Space.snug) {
             // Two runs, not one: the window's name is a word and the reading
@@ -2624,6 +2880,8 @@ public struct SecondaryChip: View {
                 // and the drawing are the same number rather than two guesses at
                 // one.
                 .frame(maxWidth: runs.label, alignment: .leading)
+                // The floor's unspent half, ahead of the label. See `headSlack`.
+                .padding(.leading, headSlack)
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(reading.digits)
                     // A figure, so it takes the figures' rule and not the meter's:
@@ -2631,8 +2889,17 @@ public struct SecondaryChip: View {
                     // `tint`, which is the one thing on the row entitled to carry a
                     // colour at rest — a bar — so four resting chips arrived
                     // coloured on a line of context.
-                    .foregroundColor(appearance.figureTint(for: metric.percent,
-                                                           providerAccent: accent))
+                    //
+                    // `chipFigureTint` and not `figureTint`: a chip is a
+                    // subordinate reading and may not outrank the row's headline.
+                    // Measured on the shipped panel, the Claude row's `92%` sits at
+                    // `Ink.attention` (L* 65.73) under two chips at `Ink.body`
+                    // (95.82) — the two least important numbers on the row 2.37:1
+                    // brighter than the most important one, in colour and not only
+                    // in greyscale. The ramp still reaches the chip the moment its
+                    // own window wants attention; only the resting rung moves.
+                    .foregroundColor(appearance.chipFigureTint(for: metric.percent,
+                                                               providerAccent: accent))
                 if let unit = reading.unit {
                     // The unit sits out of the ramp, here as everywhere: `UsageFigure`
                     // holds its own `%` at `Ink.muted` in every band, and a chip
@@ -2656,18 +2923,19 @@ public struct SecondaryChip: View {
                 // rather than a width, because "12/100" is a count and not a
                 // percentage and may be wider.
                 //
-                // And a ceiling above it, at the nine cells `RowGeometry` reserves:
-                // a capped count with both halves formatted — Cursor's `1.0k/1.0k`
-                // — is the widest reading the formatter can put here in practice
-                // and it takes exactly those nine. The floor is clamped under the
-                // ceiling rather than stated flat, because a line too narrow to
-                // hold a whole chip hands this run less than four cells and a
-                // `minWidth` above its own `maxWidth` is not a frame.
-                .frame(
-                    minWidth: min(runs.reading, Tokens.figureWidth(size, digits: 4)),
-                    maxWidth: runs.reading,
-                    alignment: .trailing
-                )
+                // And a ceiling, at the nine cells `RowGeometry` reserves: a capped
+                // count with both halves formatted — Cursor's `1.0k/1.0k` — is the
+                // widest reading the formatter can put here in practice and it
+                // takes exactly those nine.
+                //
+                // The four-cell floor was a `minWidth` here and is `headSlack`
+                // above instead. Same arithmetic, same chip width to the point,
+                // same trailing edge on the panel's rail — the floor's unspent
+                // half now falls before the label rather than between the label
+                // and its own number. Stating it in one place only matters
+                // because the two would otherwise both apply and the chip would
+                // be one floor too wide.
+                .frame(maxWidth: runs.reading, alignment: .trailing)
                 // The reading is why the chip is here, so it is the part that
                 // must not be abbreviated away.
                 //
@@ -2850,6 +3118,18 @@ public struct RowActions: View {
                         size: Tokens.Control.rowIconButton,
                         action: onOpenDashboard
                     )
+                } else {
+                    // Reserved, not omitted. Three of the fifteen services have
+                    // no usage page — MiniMax, Claude Code, OpenCode — and
+                    // without this their refresh button sits one whole
+                    // `rowIconButton` to the right of every other row's, which is
+                    // plainly visible the moment two of them are on screen
+                    // together. The row reserves everything else it might not
+                    // draw; this was the one control that did not.
+                    Color.clear
+                        .frame(width: Tokens.Control.rowIconButton,
+                               height: Tokens.Control.rowIconButton)
+                        .accessibilityHidden(true)
                 }
             }
             .opacity(isShown ? 1 : Tokens.Dim.reserved)

@@ -12,22 +12,29 @@ public final class AppState: ObservableObject {
     /// Without this the launch sweep simply adopted the session again, so signing
     /// out lasted until the next refresh. An explicit sign-in clears the mark;
     /// automatic adoption respects it.
+    ///
+    /// Through `AppDefaults.current` rather than `.standard`, and the three
+    /// accessors below and `customAccountName` are the only state in the app that
+    /// needs it: a `nonisolated static` has no caller to take a `store:` from, so
+    /// it cannot be handed a scratch domain the way everything else here is. A
+    /// suite interrupted between `markSignedOut` and its `tearDown` used to leave
+    /// a service signed out on the machine that ran it.
     nonisolated private static let signedOutKey = "aibars.signedOut"
 
     nonisolated public static var signedOutProviders: Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: signedOutKey) ?? [])
+        Set(AppDefaults.current.stringArray(forKey: signedOutKey) ?? [])
     }
 
     nonisolated static func markSignedOut(_ providerID: String) {
         var ids = signedOutProviders
         ids.insert(providerID)
-        UserDefaults.standard.set(Array(ids), forKey: signedOutKey)
+        AppDefaults.current.set(Array(ids), forKey: signedOutKey)
     }
 
     nonisolated static func clearSignedOut(_ providerID: String) {
         var ids = signedOutProviders
         guard ids.remove(providerID) != nil else { return }
-        UserDefaults.standard.set(Array(ids), forKey: signedOutKey)
+        AppDefaults.current.set(Array(ids), forKey: signedOutKey)
     }
 
     /// Names the user has given accounts, keyed by provider id.
@@ -38,7 +45,7 @@ public final class AppState: ObservableObject {
     /// account-list endpoint refuses anything but a Chromium client, so the
     /// reliable answer is to let people write it down.
     public static func customAccountName(for providerID: String) -> String? {
-        let value = UserDefaults.standard.string(forKey: "aibars.accountName.\(providerID)")
+        let value = AppDefaults.current.string(forKey: "aibars.accountName.\(providerID)")
         return (value?.isEmpty ?? true) ? nil : value
     }
 
@@ -46,9 +53,9 @@ public final class AppState: ObservableObject {
         let key = "aibars.accountName.\(providerID)"
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
-            UserDefaults.standard.set(trimmed, forKey: key)
+            AppDefaults.current.set(trimmed, forKey: key)
         } else {
-            UserDefaults.standard.removeObject(forKey: key)
+            AppDefaults.current.removeObject(forKey: key)
         }
     }
 
@@ -912,10 +919,7 @@ public final class AppState: ObservableObject {
             return "Keychain access denied — click to retry"
         }
 
-        let failures = connected.filter { provider in
-            if case .failure = snapshots[provider.id] { return true }
-            return false
-        }.count
+        let failures = failingCount
         let pending = connected.filter { snapshots[$0.id] == nil }.count
 
         if let name = topProviderName, let top = usageLevels.max() {
@@ -938,6 +942,20 @@ public final class AppState: ObservableObject {
                 : "\(connected.count) connected · \(failures) failing"
         }
         return "\(connected.count) connected · no quota to report"
+    }
+
+    /// How many connected services asked and did not get an answer.
+    ///
+    /// Lifted out of `headlineSummary` because the header's *short* form needs
+    /// the same number and had no way to ask for it — so at a width where the
+    /// long sentence did not fit, a panel of fifteen failing rows was headed "15
+    /// connected". One count, two callers, and they cannot disagree about what
+    /// failing means.
+    public var failingCount: Int {
+        rankedProviders.filter(\.isAuthenticated).filter { provider in
+            if case .failure = snapshots[provider.id] { return true }
+            return false
+        }.count
     }
 
     /// Display name of the provider currently closest to its cap.

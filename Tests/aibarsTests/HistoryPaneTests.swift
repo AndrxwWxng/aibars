@@ -64,7 +64,10 @@ final class HistoryPaneTests: XCTestCase {
         in folder: URL? = nil,
         now: Date? = nil
     ) throws -> UsageHistoryStore {
-        let name = "aibars.history.tests.\(label).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let name = TestDomain.stable("\(TestDomain.prefix).history-pane.\(label)")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: name) }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         let clock = now ?? anchor.addingTimeInterval(1)
@@ -742,7 +745,7 @@ final class HistoryPaneTests: XCTestCase {
     /// to spare; one that reserves less has to answer to these strings.
     ///
     /// Measured at `Ramp.title` — the largest face any cell in the table is set
-    /// in — and at `medium`, which is `Ramp.emphasisWeight`, the heavier of the
+    /// in — and at `medium`, which is `Ramp.titleWeight`, the heavier of the
     /// two weights the columns use. A rail that fits a lighter face is not a rail
     /// that fits this one.
     func testTheReservedFigureRailHoldsEveryFigureTheTablePrints() {
@@ -793,7 +796,10 @@ final class HistoryPaneTests: XCTestCase {
     /// of whoever ran the suite.
     @MainActor
     func testTheRecordingSwitchWritesThroughToTheInjectedDefaults() throws {
-        let name = "aibars.history.tests.switch.\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let name = TestDomain.stable("\(TestDomain.prefix).history-pane.switch")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: name) }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         let key = "aibars.history.enabled"

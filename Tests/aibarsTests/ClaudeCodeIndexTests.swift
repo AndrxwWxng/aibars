@@ -47,7 +47,10 @@ final class ClaudeCodeIndexTests: XCTestCase {
     /// never another's launch state and nothing here touches the user's own
     /// settings.
     private func scratchDefaults(_ label: String = #function) throws -> UserDefaults {
-        let name = "aibars.claudeCode.tests.\(label).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let name = TestDomain.stable("\(TestDomain.prefix).claude-code-index.\(label)")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: name) }
         return try XCTUnwrap(UserDefaults(suiteName: name))
     }

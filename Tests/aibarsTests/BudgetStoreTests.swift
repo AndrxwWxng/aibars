@@ -26,7 +26,10 @@ final class BudgetStoreTests: XCTestCase {
     /// are never another test's launch state and nothing here can reach the
     /// user's own settings.
     private func scratchDefaults(_ label: String = #function) throws -> UserDefaults {
-        let suite = "aibars.budget.tests.\(label).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let suite = TestDomain.stable("\(TestDomain.prefix).budget-store.\(label)")
         let store = try XCTUnwrap(UserDefaults(suiteName: suite), "could not open a scratch suite")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
         return store

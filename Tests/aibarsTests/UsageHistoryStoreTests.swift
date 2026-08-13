@@ -48,7 +48,10 @@ final class UsageHistoryStoreTests: XCTestCase {
     /// A scratch domain per test, torn down afterwards, so the recording switch
     /// a test flips is never the user's.
     private func scratchDefaults(_ label: String = #function) throws -> UserDefaults {
-        let name = "aibars.history.tests.\(label).\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let name = TestDomain.stable("\(TestDomain.prefix).history-store.\(label)")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: name) }
         return try XCTUnwrap(UserDefaults(suiteName: name))
     }

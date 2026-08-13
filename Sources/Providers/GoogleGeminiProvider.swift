@@ -27,7 +27,7 @@ public final class GoogleGeminiProvider: ObservableObject, UsageProvider {
     @Published public private(set) var lastError: ProviderError?
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     /// The cookie that decides whether a Google session exists at all.

@@ -57,7 +57,10 @@ final class HistoryHeatmapTests: XCTestCase {
     /// to whoever ran the suite.
     @MainActor
     private func appearance() throws -> AppearanceSettings {
-        let domain = "aibars.heatmap.tests.\(UUID().uuidString)"
+        // Stable, not a UUID. `TestDomain` in `TestIsolation.swift` has the
+        // measurement: `removePersistentDomain` empties a domain and does not
+        // delete its file, so a fresh name per run left a plist behind every time.
+        let domain = TestDomain.stable("\(TestDomain.prefix).heatmap")
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: domain) }
         let store = try XCTUnwrap(UserDefaults(suiteName: domain))
         return AppearanceSettings(store: store)

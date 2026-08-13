@@ -418,7 +418,7 @@ final class ZaiProviderTests: XCTestCase {
     private func forgetProbes() {
         for id in probeIDs {
             SessionStore.shared.clear(id)
-            UserDefaults.standard.removeObject(forKey: "aibars.\(id).enabled")
+            AppDefaults.current.removeObject(forKey: "aibars.\(id).enabled")
         }
     }
 

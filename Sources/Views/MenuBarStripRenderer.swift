@@ -283,10 +283,11 @@ public enum MenuBarStripRenderer {
 /// `mark(for:)` and `figure(for:)` went with them, to `StripMark` and
 /// `StripFigure` in `StripStyle.swift`: three of the six styles draw a mark and
 /// three draw a figure, so both are shared drawings rather than private methods
-/// here. `Tokens.Ramp.figureDesign` and `Tokens.Strip.figureCell` still name
-/// `MenuBarStripRenderer.figure(for:)` as where the leading-alignment rule is
-/// written down; it is `StripFigure`'s doc now, and those two references want
-/// correcting the next time `DesignSystem.swift` is open.
+/// here. `Tokens.Ramp.figureDesign` and `Tokens.Strip.figureCell` name
+/// `StripFigure` as where the leading-alignment rule is written down, which is
+/// where it moved to; they named the deleted method here for a release, which is
+/// the failure mode a cross-reference to a *method* has and a cross-reference to
+/// a type does not.
 ///
 /// Also the Appearance pane's preview, which is why the neutral colour is a
 /// parameter: in a window `.primary` is right, but a coloured strip is

@@ -16,7 +16,7 @@ public final class CursorProvider: ObservableObject, UsageProvider {
 
     private let cookieName = "WorkosCursorSessionToken"
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     /// The signed-in address, once `/api/auth/me` has named it. Cached because

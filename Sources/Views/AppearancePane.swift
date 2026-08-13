@@ -1478,15 +1478,30 @@ struct SampleRow: View {
     }
 
     /// How the windows split between chips of their own and the "+N" standing for
-    /// the rest. The panel's rule: the overflow chip takes a slot off the line
-    /// rather than being added to it, since pushed past the trailing edge it would
-    /// be truncated away — which is the failure it exists to report — and one real
-    /// chip is always kept, because "+6" alone names no window at all.
+    /// the rest.
+    ///
+    /// `RowGeometry.chipSplit` and not a copy of it. This was the copy: the rule
+    /// was written out identically here and in `ProviderRow`, and the moment the
+    /// panel's half learned to hand a chip back to the caption at or above
+    /// caution, the preview kept four chips where the panel drew three and the
+    /// two caption lines came apart by 318 columns at 520pt. One arithmetic, two
+    /// callers — which is what every other measurement on this row already does.
     private func chipSplit(_ count: Int) -> (shown: Int, hidden: Int) {
-        let limit = chipLimit
-        guard count > limit else { return (count, 0) }
-        let shown = max(1, limit - 1)
-        return (shown, count - shown)
+        RowGeometry.chipSplit(
+            count: count,
+            limit: chipLimit,
+            yieldsToTheSentence: yieldsToTheSentence
+        )
+    }
+
+    /// The panel's rule for when the caption's sentence outranks a chip, asked of
+    /// the sample's own reading exactly as `ProviderRow` asks it of a real one.
+    /// `SampleService.claude` is a near-cap window with a reset date on it, so
+    /// this is live in the preview at the shipped thresholds — which is the point:
+    /// the pane's busiest row is the panel's busiest row.
+    private var yieldsToTheSentence: Bool {
+        guard appearance.showsCountdowns, primary.resetDate != nil else { return false }
+        return primary.percent >= appearance.cautionThreshold
     }
 
     /// The further windows, when they are set to a line each. The chips are not

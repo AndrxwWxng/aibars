@@ -102,7 +102,13 @@ public final class AppearanceSettings: ObservableObject {
         public var id: String { rawValue }
         public var label: String {
             switch self {
-            case .expanded: return "Full bars"
+            // Not "Full bars". It draws no bars at all and has not for two
+            // passes — a second full-width track per window cost 24pt of row
+            // height each and painted the panel one colour, so an expanded
+            // window is a label and a figure on a line of its own. A setting
+            // named for a drawing the app deleted is a setting that lies in the
+            // one place a user goes to find out what it does.
+            case .expanded: return "One line per window"
             case .chips:    return "One line of chips"
             case .hidden:   return "Hidden"
             }
@@ -656,6 +662,33 @@ public final class AppearanceSettings: ObservableObject {
         return Tokens.Ink.body
     }
 
+    /// The same rule for a reading that is not the row's headline — a further
+    /// window's chip on the caption line.
+    ///
+    /// One rung quieter at rest, and the reason is a measured inversion rather
+    /// than a preference. The Claude row's headline `92%` draws `Ink.attention`
+    /// at L\* 65.73; its two chips drew `Ink.body` at 95.82, so the two least
+    /// important numbers on the row were **2.37:1 brighter than the most
+    /// important one** — visible in colour, not merely in greyscale. A panel
+    /// whose whole hierarchy is two inks and one weight step cannot afford a
+    /// subordinate reading at the top of the ladder.
+    ///
+    /// `Ink.mark` and not a fourth grey: it is the rung between `body` and
+    /// `muted` that the palette already holds, so the chip keeps its own
+    /// label/reading step (muted → mark) and loses only its claim on the row.
+    /// 1.52:1 under `body` dark and 1.55:1 light, which is the same step the
+    /// panel uses everywhere to mean "one rank down".
+    ///
+    /// Above caution it defers to `figureTint` completely, which is the point of
+    /// writing it as a delegation: a further window that is itself near its cap
+    /// is a measurement wanting attention and gets the whole ramp. Only the
+    /// resting rung moves.
+    public func chipFigureTint(for percent: Double, providerAccent: Color) -> Color {
+        let tint = figureTint(for: percent, providerAccent: providerAccent)
+        guard colorRamp == .usage, percent < cautionThreshold else { return tint }
+        return Tokens.Ink.mark
+    }
+
     /// The ink a provider's mark is drawn in, on every surface that draws one.
     ///
     /// The single place that decision is made, and it has to live here rather
@@ -794,8 +827,8 @@ public final class AppearanceSettings: ObservableObject {
     /// disconnected policy and grouping in one pass.
     ///
     /// Pass `state.rankedProviders` — already urgency-ordered, which is what
-    /// `.urgency` preserves. This supersedes AppState.visibleProviders, whose
-    /// account collapsing is the only part of the old behaviour it reproduces.
+    /// `.urgency` preserves. This superseded `AppState.visibleProviders`, which is
+    /// deleted; its account collapsing is the only part of that behaviour it kept.
     public func sections(
         from providers: [AnyUsageProvider],
         snapshots: [String: Result<UsageData, ProviderError>]
@@ -1419,7 +1452,22 @@ public final class AppearanceSettings: ObservableObject {
 
     // MARK: - Storage
 
-    private enum Key: String, CaseIterable {
+    /// Internal rather than private, and the reason is a test that could not be
+    /// written.
+    ///
+    /// `adoptCurrentLook` empties this domain once per look generation, so the
+    /// question "is the hotkey binding inside the wipe?" is a question about
+    /// these raw values. `HotkeyStoreTests` could only ask it through the string
+    /// prefix, because `@testable` raises internal to public and leaves private
+    /// alone — so the enum the wipe iterates was not nameable from the test that
+    /// exists to bound it, and the test asserted a property of the *prefix*
+    /// instead of a property of the *set*.
+    ///
+    /// Internal is the smallest widening that fixes that: nothing outside this
+    /// module can see it, `AppearanceSettings` being public does not carry it
+    /// into the public API, and `testNoAppearanceKeyCollidesWithTheBinding` can
+    /// now walk `Key.allCases` and compare the real strings.
+    enum Key: String, CaseIterable {
         case density = "aibars.appearance.density"
         case textScale = "aibars.appearance.textScale"
         case logoStyle = "aibars.appearance.logoStyle"

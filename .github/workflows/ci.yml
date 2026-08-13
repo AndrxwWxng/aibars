@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # So the runner can be exercised from a branch before it is merged.
+  #
+  # The build machine is macOS 26 with Xcode 26 and this job is macOS 15 with
+  # Xcode 16, which is a real gap: the compiler checks the deployment *floor*
+  # and nothing checks the ceiling, so a symbol newer than the macos-15 SDK
+  # builds locally and fails here. That is only worth knowing before a merge if
+  # somebody can run it before a merge.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,7 +24,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +39,32 @@ jobs:
       # a runner image moves back.
       - name: Show toolchain
         run: xcodebuild -version
+
+      # And then check it, because printing it only helps somebody already
+      # reading the log. `brew install xcodegen` takes whatever version Homebrew
+      # is shipping today, so the format this project is written in is chosen by
+      # a package index rather than by this repository: the day XcodeGen starts
+      # writing objectVersion 78 — Xcode 26 and later — this job breaks with
+      # "The project is damaged and cannot be opened", which names neither the
+      # generator nor the toolchain. This says both.
+      - name: Check the generated project is readable by this Xcode
+        run: |
+          set -euo pipefail
+          object_version=$(awk -F'= ' '/objectVersion/ {gsub(/;/,"",$2); print $2; exit}' \
+            aibars.xcodeproj/project.pbxproj)
+          xcode_major=$(xcodebuild -version | awk 'NR==1 {split($2, v, "."); print v[1]}')
+          echo "objectVersion=$object_version  xcode=$xcode_major  xcodegen=$(xcodegen --version)"
+          minimum=0
+          case "$object_version" in
+            77) minimum=16 ;;
+            78) minimum=26 ;;
+          esac
+          if [ "$xcode_major" -lt "$minimum" ]; then
+            echo "::error::XcodeGen $(xcodegen --version) wrote objectVersion $object_version," \
+                 "which needs Xcode $minimum or later. This runner has Xcode $xcode_major." \
+                 "Move the job to a newer runner image, or pin XcodeGen."
+            exit 1
+          fi
 
       - name: Build
         run: xcodebuild -project aibars.xcodeproj -scheme aibars -destination 'platform=macOS' build

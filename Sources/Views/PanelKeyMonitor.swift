@@ -211,7 +211,7 @@ public final class PanelKeyMonitor {
 ///
 /// A view we placed ourselves, reporting the window it was moved into. Public
 /// API, no class-name matching, no walking `NSApp.windows` and guessing — which
-/// matters because `MenuBarAppearance.statusBarWindows` does exactly that, on the
+/// matters because `MenuBarPanel.statusBarWindows` does exactly that, on the
 /// substring `"NSStatusBarWindow"`, and takes `.first` of an unordered list. (The
 /// panel is a `MenuBarExtraWindow`, so that accessor does not in fact pick it up
 /// today — but the two are one status item's machinery apart, and a probe cannot

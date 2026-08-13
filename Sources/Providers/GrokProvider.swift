@@ -32,7 +32,7 @@ public final class GrokProvider: ObservableObject, UsageProvider {
     private let cookieDomain = "grok.com"
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     /// Grok quota is per mode (auto | fast | expert | heavy | build), not one

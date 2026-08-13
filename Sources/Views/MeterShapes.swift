@@ -105,6 +105,59 @@ public enum MeterGeometry {
     /// is under 4%, so nothing that would round to a larger figure is inflated.
     public static let minimumFillThicknesses: CGFloat = 2
 
+    /// The longest track the row's meter may draw, in points.
+    ///
+    /// A ceiling and not a width: the slot still starts on the text column's own
+    /// left edge, so every bar in the panel shares the leading edge that makes
+    /// the column comparable down the list, and a panel narrower than this draws
+    /// whatever it has.
+    ///
+    /// Measured, the bar it replaces was 304pt of a 356pt panel — **85.4% of the
+    /// window, aspect 61:1** — and at the width slider's top it was 468. It grew
+    /// with the panel, so the loudest thing in the application got louder every
+    /// time the user asked for more room. Three consequences, all of them
+    /// measured rather than felt:
+    ///
+    /// - **It was a rule.** At 0% the track is a uniform 5pt band across 85% of
+    ///   the panel, sitting between a title and its own caption, at 1.430:1 on
+    ///   the ground where the panel's actual divider is 1.302:1 at one device
+    ///   pixel. Ten times the thickness and more of the contrast: the reader has
+    ///   no way to take it for anything but a division.
+    /// - **It was the colour budget.** Summed over OKLCh chroma, one amber bar on
+    ///   one row of nine was 91.4% of all the chroma in the dark panel and 94.3%
+    ///   of it at 520pt. At 160 that area falls by 44% at the default width and
+    ///   61% at the top of the slider, with the hue untouched — the alarm is as
+    ///   saturated as it ever was and simply occupies less of the window.
+    /// - **It out-resolved its own number.** `rowHelp` drops the tenth of a
+    ///   percent on purpose, so the figure's resolution is one point. At 304pt the
+    ///   track resolved 0.33% per point — three times finer than the reading it
+    ///   illustrates, which is a bar visibly moving while the figure holds still.
+    ///   160pt is 0.625% per point, within a factor of two of the figure.
+    ///
+    /// 160 rather than a fraction of the panel because a fraction is what made it
+    /// grow: this is the length at which a 5pt bar reads as a gauge (32:1) rather
+    /// than as a progress indicator, and it is a hair under the 168pt
+    /// `Tokens.Control.sliderWidth` that the Settings window already uses for
+    /// exactly the same shape.
+    public static let trackCap: CGFloat = 160
+
+    /// The largest share of the track the minimum-fill floor is allowed to be.
+    ///
+    /// The floor below is a multiple of the bar's *thickness*, and a thickness
+    /// knows nothing about the track it sits on. That was safe while the track
+    /// was 278pt — 10pt of it is 3.6%, which is what the floor's own doc quotes —
+    /// and it stops being safe the moment `trackCap` shortens the track: 10pt of
+    /// 160 is 6.25%, so every reading under 6% would be drawn as 6% while the
+    /// figure two columns away printed the truth. That is the one thing this type
+    /// exists to prevent.
+    ///
+    /// Four percent, and the number is chosen so that nothing already on screen
+    /// moves: at the old 278pt track 4% is 11.12pt, above the 10pt floor, so
+    /// `min` keeps the 10 and every recorded figure in `MeterShapesTests` is
+    /// unchanged. It bites only where the thickness rule had stopped being
+    /// honest.
+    public static let maximumFloorFraction: CGFloat = 0.04
+
     /// The width of the bar's fill inside a track of `track` points.
     ///
     /// Clamped to the track above, because a budget's fraction can exceed 1 and a
@@ -122,7 +175,13 @@ public enum MeterGeometry {
               thickness > 0, thickness.isFinite
         else { return 0 }
         let measured = track * CGFloat(min(percent, 1))
-        return min(track, max(minimumFillThicknesses * thickness, measured))
+        // Two thicknesses, but never more than `maximumFloorFraction` of the
+        // track: the floor is there so a small reading is still a mark, and a
+        // floor that exceeds the reading it stands in for has stopped being a
+        // mark and started being a lie. See both constants for the arithmetic —
+        // at 278pt this is still exactly 10pt.
+        let floor = min(minimumFillThicknesses * thickness, maximumFloorFraction * track)
+        return min(track, max(floor, measured))
     }
 
     /// The share of the dial that one stroke width of arc takes up.
@@ -155,6 +214,14 @@ public enum MeterGeometry {
     /// It is also exactly the mark the dial drew before — a one-stroke trim
     /// between two caps — so the smallest reading looks as it did and only the
     /// readings above the floor stop being inflated.
+    ///
+    /// `maximumFloorFraction` deliberately does **not** apply here, and the
+    /// reason is arithmetic rather than oversight. The bar's floor is capped at
+    /// 4% of its track because a 160pt track has room for a 6.4pt mark; the
+    /// dial's whole sweep is 53.4pt at the shipped size, so 4% of it is 2.1pt —
+    /// under half a stroke, which is the dot the two-stroke floor exists to
+    /// avoid. A short sweep cannot draw a small mark, and pretending otherwise
+    /// would trade an honest coarse floor for a mark that is not visible at all.
     ///
     /// Returns 0 for a reading of zero, and the caller draws no arc: the track
     /// alone says nothing has been used.

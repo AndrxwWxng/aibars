@@ -47,7 +47,7 @@ public final class MistralProvider: ObservableObject, UsageProvider {
     private static let cookieDomain = "mistral.ai"
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     public init(accountID: String? = nil) {

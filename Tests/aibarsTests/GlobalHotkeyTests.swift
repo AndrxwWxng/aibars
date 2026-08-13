@@ -6,10 +6,13 @@ import Carbon.HIToolbox
 /// A scratch domain per test. Nothing in this file may read or write the
 /// shortcut the person running the suite actually uses.
 private func scratch(_ name: String) -> UserDefaults {
-    let domain = "aibars.hotkey-registration-tests.\(name)"
+    let domain = "dev.aibars.test-scratch.hotkey.\(name)"
+    // Never `.standard` on the failure branch. The one case this guard exists
+    // for is answered by writing the binding of whoever ran the suite — which
+    // is the single thing the file's opening paragraph forbids — and answered
+    // silently, on a run that still reports green.
     guard let store = UserDefaults(suiteName: domain) else {
-        XCTFail("could not open a scratch defaults domain")
-        return .standard
+        fatalError("could not open the scratch defaults domain \(domain)")
     }
     store.removePersistentDomain(forName: domain)
     return store
@@ -61,7 +64,10 @@ final class GlobalHotkeyTests: XCTestCase {
         XCTAssertEqual(hotkey.state, .none)
         XCTAssertNil(hotkey.state.combo)
         XCTAssertFalse(hotkey.state.isOn)
-        XCTAssertFalse(hotkey.didFailToOpen)
+        // `didFailToOpen` was asserted here too. It is deleted — the reason is
+        // written where it was — and `state.note` is the one surface now, which
+        // this covers: `.none` has nothing to say.
+        XCTAssertNil(hotkey.state.note)
     }
 
     @MainActor

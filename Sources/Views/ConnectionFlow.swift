@@ -223,7 +223,7 @@ public final class ConnectionFlow: ObservableObject {
         /// it is the escape hatch beside whatever the stage is actually asking,
         /// and the dialog draws that as a link rather than a button.
         ///
-        /// The emphasis the true case earns is weight, not fill. `BrowserLoginView`
+        /// The emphasis the true case earns is weight, not fill. `ConnectDialog`
         /// draws it `.bordered` tinted `Ink.body`; nothing in the dialog is
         /// `.borderedProminent`, which would fill with the *user's* accent — a
         /// colour with a short list of jobs, none of them chrome. The tint used

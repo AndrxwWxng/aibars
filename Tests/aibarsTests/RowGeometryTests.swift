@@ -705,11 +705,20 @@ final class RowGeometryTests: XCTestCase {
             + Tokens.figureWidth(size, digits: 9)
         // 300pt of panel behind a 40pt logo, with a spend at the head of the
         // caption: 300 − 24 gutters − 50 leading column = 226 of text column, and
-        // the sentence gap, the "+N" cell and the spend take 8 + 29 + 87 of it.
+        // the sentence gap, the "+N" cell and the spend take 8 + 29 + 98 of it.
+        //
+        // The spend was 87 and is 98: `MetricCaption` now draws a middle dot
+        // between the amount and the window beside it — every other pair on that
+        // line carried one and this one did not, so `$10,000.00 5h session` read
+        // as a single run. `Space.snug` plus one mono cell is 4 + 7, and it is
+        // reserved because `SpendFigure` is `layoutPriority(1)` and `fixedSize`,
+        // so a dot beside it comes out of the chips' budget and not out of slack.
+        // The cap follows the residue exactly: 226 − 8 − 29 − 98 = 91, where it
+        // was 226 − 8 − 29 − 87 = 102.
         let narrow: CGFloat = 226
         let cap = RowGeometry.chipCap(textColumnWidth: narrow, chipSize: size, carriesSpend: true)
         XCTAssertEqual(RowGeometry.chipLimit(textColumnWidth: narrow, chipSize: size, carriesSpend: true), 1)
-        XCTAssertEqual(cap, 102)
+        XCTAssertEqual(cap, 91)
         XCTAssertLessThan(cap, stretch, "a 226pt column still offered a chip its full stretch")
 
         // The reading is served first and the label takes what is left, which is

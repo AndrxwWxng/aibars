@@ -26,8 +26,12 @@ final class OpenCodeParserTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: directory)
+        // `AppDefaults.current`, which is the domain the provider itself reads
+        // and writes: `.standard` in the app, and this process's own scratch
+        // domain under XCTest. Naming `.standard` here used to be right and is
+        // now a wipe of a key nothing in the run ever wrote.
         for key in ["aibars.opencode#unit-test.enabled", "aibars.opencode#unit-test.dismissed"] {
-            UserDefaults.standard.removeObject(forKey: key)
+            AppDefaults.current.removeObject(forKey: key)
         }
     }
 
@@ -793,7 +797,7 @@ final class OpenCodeParserTests: XCTestCase {
             // Whether this machine has an OpenCode database is not the point;
             // clearing the dismissal is, and that happens either way.
         }
-        XCTAssertFalse(UserDefaults.standard.bool(forKey: "aibars.opencode#unit-test.dismissed"))
+        XCTAssertFalse(AppDefaults.current.bool(forKey: "aibars.opencode#unit-test.dismissed"))
     }
 
     func testPastingATokenIsRefusedWithSomewhereToLook() {

@@ -16,14 +16,18 @@ final class PanelLayoutTests: XCTestCase {
     ///
     /// The two-argument initialiser takes the shared object, which persists to
     /// `UserDefaults.standard` — one domain shared by every test in the process
-    /// and by every run on the machine. `PanelWidthContractTests` walks
-    /// `panelWidth` through 300, 356, 420 and 520 on that same object and puts
-    /// it back in a `defer`, so a run that ends inside the loop leaves the key
-    /// where it stopped and every later run "restores" the wrong value
-    /// faithfully. Seen: `testWidthIsFixed` measuring a 420pt panel after a
-    /// snapshot harness was interrupted. The width under test here is the
-    /// default, so the fixture states it by having no stored one rather than by
-    /// hoping nobody else wrote one.
+    /// and by every run on the machine. `PanelWidthContractTests` used to walk
+    /// `panelWidth` through 300, 356, 420 and 520 on that same object and put it
+    /// back in a `defer`, so a run that ended inside the loop left the key where
+    /// it stopped and every later run "restored" the wrong value faithfully.
+    /// Seen: `testWidthIsFixed` measuring a 420pt panel after a snapshot harness
+    /// was interrupted.
+    ///
+    /// Nothing in the suite reaches the shared object any more — `TestIsolation`
+    /// is where that rule is written down — so this is no longer a defence
+    /// against a specific neighbour. It is still the right fixture: the width
+    /// under test here is the default, and the fixture states it by having no
+    /// stored one rather than by hoping nobody else wrote one.
     @MainActor
     private func panel(connected: Int, name: String = "layout") throws -> NSHostingView<AnyView> {
         let state = AppState()
@@ -714,31 +718,66 @@ final class FigureRailAlignmentTests: XCTestCase {
         )
     }
 
-    /// And that column is the panel's own right edge, the one the header is laid
-    /// out to. The failure this catches is a margin added on one side and not the
-    /// other — a list inset by `Space.listMargin` horizontally as well as
-    /// vertically would put every reading in the panel 6pt inside the line above
-    /// them, which is exactly the kind of drift nothing else notices.
+    /// And the header's *ink* lands on that column too.
+    ///
+    /// This used to compare the rail against the header's **layout** edge, and
+    /// the two were equal because the trailing gutter was symmetric with the
+    /// leading one. That made the wrong thing true: the header's trailing content
+    /// is a 22pt button box with a 12pt glyph centred in it, so a box flush at
+    /// the rail puts the *drawing* (22 − 12) / 2 = 5pt inside it. Measured on the
+    /// shipped panel the four header glyphs ended at 339.5 against a rail of
+    /// 344.0, constant at every panel width — 283.0 against 287.5 at 300pt,
+    /// 503.0 against 507.5 at 520pt. A rail nothing in the chrome touches is not
+    /// a rail.
+    ///
+    /// So the header's trailing gutter is short by exactly that inset, and both
+    /// halves of that are asserted here: the glyph's ink on the rail, and the
+    /// layout edge the inset further out. Either one alone could be satisfied by
+    /// the wrong fix — a trailing-aligned glyph inside a flush box would pass the
+    /// first and put the button's hover plate off-centre under its own glyph.
     @MainActor
-    func testTheRailEndsWhereTheHeaderDoes() throws {
+    func testTheHeadersInkEndsWhereTheRailDoes() throws {
         let appearance = try settings()
         let rail = try figureEdge(reading: 0.4, appearance: appearance)
-        let header = try headerEdge(appearance)
+        let glyph = try headerGlyphEdge(appearance)
+        let box = try headerEdge(appearance)
 
-        XCTAssertLessThanOrEqual(
-            rail, header,
-            "the figure ends at \(rail)pt, past the header's own \(header)pt"
-        )
-        // They agree to the pixel today: the marker fills its cell and the tail
-        // of a `%` reaches the end of its own, so the two edges land on the same
-        // column. The slack is a point, for the right side bearing of a glyph
-        // this test does not choose the font of — six points is a margin, which
-        // is the thing being looked for.
+        // A point of slack for the right side bearing of a glyph this test does
+        // not choose the font of. Six points is a margin, which is the thing
+        // being looked for.
         XCTAssertEqual(
-            rail, header, accuracy: 1,
-            "the figure ends at \(rail)pt and the header at \(header)pt — the rows and the chrome are "
-            + "laid out to two different right edges"
+            glyph, rail, accuracy: 1,
+            "the header's glyph ends at \(glyph)pt and the rail at \(rail)pt — the chrome and the "
+            + "rows are drawn to two different right edges"
         )
+
+        let inset = (Tokens.Control.iconButton - Tokens.Control.iconGlyph) / 2
+        XCTAssertEqual(
+            box, rail + inset, accuracy: 1,
+            "the header's layout edge is \(box)pt against a rail of \(rail)pt: it has to stand the "
+            + "glyph's own \(inset)pt inset outside the rail for the glyph to land on it"
+        )
+    }
+
+    /// Where the header's trailing *drawing* ends, measured off the real control
+    /// rather than off a marker — which is the whole difference this pair of
+    /// assertions turns on.
+    @MainActor
+    private func headerGlyphEdge(_ appearance: AppearanceSettings) throws -> CGFloat {
+        let header = PanelHeader(
+            appearance: appearance,
+            summary: "claude 92% · updated 12s ago"
+        ) {
+            HoverIconButton(.quit, help: "Quit") {}
+        }
+        .frame(width: CGFloat(appearance.panelWidth))
+
+        let raster = try XCTUnwrap(Raster(header, scale: Self.scale))
+        let column = try XCTUnwrap(
+            raster.lastInkedColumn(in: CGRect(origin: .zero, size: raster.size)),
+            "the header came back blank"
+        )
+        return CGFloat(column + 1) / Self.scale
     }
 }
 

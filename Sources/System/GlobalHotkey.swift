@@ -66,11 +66,23 @@ public final class GlobalHotkey: ObservableObject {
 
     @Published public private(set) var state: GlobalHotkeyState = .none
 
-    /// Raised the first time a press finds no status item button to click. The
-    /// shortcut registered, macOS delivered it, and there was nothing to open —
-    /// which is a different fault from a refused registration and gets a
-    /// different sentence.
-    @Published public private(set) var didFailToOpen = false
+    // `didFailToOpen` was here: a second `@Published` flag raised when a press
+    // found no status item button to click. It is deleted rather than wired up,
+    // for three reasons and the third is the one that made it a defect rather
+    // than dead weight.
+    //
+    // It said nothing `state` did not. The same branch of `fire` already
+    // publishes `.unavailable(combo, noPanelReason)`, and `GlobalHotkeyState.note`
+    // is what the Shortcuts pane prints — so wiring the flag would have given one
+    // fact two surfaces that can disagree.
+    //
+    // Nothing read it. Not the pane, not the app delegate; one test asserted it
+    // was false on a fresh instance, which is a test of the initialiser.
+    //
+    // And it was assigned unconditionally on the *success* path, so every hotkey
+    // press republished this object and redrew the pane. That is exactly what
+    // `publish(_:)` twenty lines below exists to stop — its own doc says so — and
+    // a flag nobody reads was the one place in the file breaking the rule.
 
     private let store: UserDefaults
     private var hotKeyRef: EventHotKeyRef?
@@ -101,7 +113,11 @@ public final class GlobalHotkey: ObservableObject {
     /// asked for.
     public func setCombo(_ combo: KeyCombo?) {
         HotkeyStore.setCombo(combo, in: store)
-        didFailToOpen = false
+        // The `didFailToOpen = false` that was here is not replaced by anything,
+        // and does not need to be: `apply` republishes the state unconditionally
+        // from what the registration actually did, so a previous press's
+        // "couldn't find its own menu bar item" is overwritten rather than
+        // cleared alongside.
         apply(combo, enabled: HotkeyStore.isEnabled(in: store))
     }
 
@@ -227,15 +243,26 @@ public final class GlobalHotkey: ObservableObject {
     // MARK: - Firing
 
     /// Called from the Carbon handler, on the main thread.
+    ///
+    /// Both directions, which is the half the deleted `didFailToOpen` flag was
+    /// carrying on its own: a press that works has to clear the note a press that
+    /// did not put up. Without it the pane says "couldn't find its own menu bar
+    /// item" for the rest of the session — the status item comes back the moment
+    /// the strip is next redrawn, so the sentence outlives the fault it describes.
+    ///
+    /// Only that one reason is cleared. A refusal or a missing bundle is a
+    /// property of the registration and not of this press, and nothing that
+    /// happens here is evidence either has changed.
     fileprivate func fire() {
         guard MenuBarPanel.toggle() else {
-            didFailToOpen = true
             if let combo = state.combo {
                 publish(.unavailable(combo, Self.noPanelReason))
             }
             return
         }
-        didFailToOpen = false
+        if case .unavailable(let combo, Self.noPanelReason) = state {
+            publish(.registered(combo))
+        }
     }
 
     // MARK: - Carbon plumbing

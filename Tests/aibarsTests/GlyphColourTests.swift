@@ -38,8 +38,24 @@ final class UsageRampContrastTests: XCTestCase {
         ("red", 0.95)
     ]
 
-    func testEveryStopClearsBodyTextContrastOnTheSurfaceItSitsOn() throws {
-        for stop in stops {
+    /// The two stops that are text hold the text floor, on the ground text is
+    /// read against.
+    ///
+    /// Resting is not in this loop any more, and the exemption is *earned below*
+    /// rather than asserted: `testTheRestingStopIsNeverText` proves that no
+    /// figure in the application resolves to it, and
+    /// `testTheRestingStopClearsThreeToOneOnItsOwnTrack` holds it to the floor a
+    /// graphic actually has. Dropping it from here without those two would be
+    /// lowering a floor; with them it is measuring the right thing.
+    ///
+    /// The history: the resting stop *was* `Ink.muted`, a text ink, and it was
+    /// folded there to delete a duplicate hex. That fold also deleted the ramp's
+    /// only greyscale step — resting L\* 67.61 against amber's 65.73 is 1.062:1 —
+    /// so a resting bar and a caution bar were the same grey the moment hue came
+    /// off. `Tokens.Meter.fill` un-folds it, and being a graphic and not a figure
+    /// is what buys the lightness that gap needs.
+    func testEveryStopThatIsTextClearsBodyTextContrastOnTheSurfaceItSitsOn() throws {
+        for stop in stops where stop.name != "grey" {
             for dark in [false, true] {
                 let ratio = try XCTUnwrap(
                     contrast(UsageTint.color(for: stop.percent), on: Tokens.Surface.base, dark: dark),
@@ -50,6 +66,120 @@ final class UsageRampContrastTests: XCTestCase {
                     "\(stop.name) measures \(ratio):1 on \(dark ? "dark" : "light") — it is a percentage as well as a bar, so it is body text"
                 )
             }
+        }
+    }
+
+    /// Nothing in the application draws the ramp's resting stop as type. This is
+    /// the premise the test above rests on, so it is checked rather than assumed.
+    ///
+    /// Three places could put the ramp on a glyph, and all three are here:
+    ///
+    /// - **A row's headline figure and a chip's reading**, through
+    ///   `AppearanceSettings.figureTint`. Under `.usage` it answers `Ink.body`
+    ///   below caution and never reaches the ramp at all; under `.accent` and
+    ///   `.provider` it answers a colour the ramp does not own; under `.mono` it
+    ///   answers `Ink.muted`, which is a text ink and stays one.
+    /// - **The menu bar strip's figure**, through `StripStyle.band`. `.perBar`
+    ///   used to hand it `UsageTint.color(for:)` at every reading; it now
+    ///   substitutes the strip's own `neutral` below caution, because the menu
+    ///   bar's ground is the desktop's and not one this palette solves against.
+    /// - **`UsageTint` itself**, which everything else reaches through.
+    ///
+    /// Asserted over the whole resting band and at both ends of it, so a stop
+    /// creeping back onto a glyph fails here rather than in a screenshot.
+    @MainActor
+    func testTheRestingStopIsNeverText() throws {
+        let resting = UsageTint.color(for: 0)
+        // A scratch domain, not `AppearanceSettings.shared`: this walks
+        // `colorRamp` through all four cases, and the save/restore that used to
+        // guard that is not proof against the run being killed part way round the
+        // loop. `TestIsolation.swift` has the argument.
+        let appearance = try isolatedSettings()
+        let ramps: [AppearanceSettings.ColorRamp] = [.usage, .accent, .provider, .mono]
+
+        for dark in [false, true] {
+            let restingHex = try XCTUnwrap(hex(resting, dark: dark))
+
+            for ramp in ramps {
+                appearance.colorRamp = ramp
+                for percent in [0.0, 0.40, 0.79] {
+                    let figure = appearance.figureTint(for: percent, providerAccent: .red)
+                    XCTAssertNotEqual(
+                        hex(figure, dark: dark), restingHex,
+                        "a \(ramp) figure at \(percent) on \(dark ? "dark" : "light") is the ramp's "
+                            + "resting stop, which is solved as a fill on Meter.track and not as type"
+                    )
+                }
+            }
+
+            // The strip, at the one colour mode that reaches the ramp at all.
+            let ink = StripInk(
+                neutral: Tokens.Ink.body,
+                colour: .perBar,
+                warningThreshold: 0.95,
+                isDark: dark,
+                coloursMarks: true,
+                carriesColour: true
+            )
+            for percent in [0.0, 0.40, 0.79] {
+                XCTAssertNotEqual(
+                    hex(ink.band(percent), dark: dark), restingHex,
+                    "the .perBar strip draws the ramp's resting stop at \(percent), on the menu bar's "
+                        + "own ground rather than on Meter.track"
+                )
+            }
+        }
+    }
+
+    /// And the floor the resting stop *does* have to clear: 3:1 against the track
+    /// it lies on, which is what a non-text graphic needs to be a shape.
+    ///
+    /// Measured and recorded rather than bounded, because both halves are thin
+    /// on purpose — the stop is cut as light as the track allows so that the gap
+    /// to amber is as wide as possible, and there is nothing left to spend. If
+    /// `Meter.track` moves, this is the first pair to re-cut.
+    func testTheRestingStopClearsThreeToOneOnItsOwnTrack() throws {
+        let expected: [(dark: Bool, ratio: Double)] = [(false, 3.05), (true, 3.19)]
+        for row in expected {
+            let ratio = try XCTUnwrap(
+                contrast(UsageTint.color(for: 0), on: Tokens.Meter.track, dark: row.dark)
+            )
+            XCTAssertGreaterThanOrEqual(
+                ratio, 3.0,
+                "the resting fill measures \(ratio):1 on the \(row.dark ? "dark" : "light") track"
+            )
+            XCTAssertEqual(ratio, row.ratio, accuracy: 0.01)
+        }
+    }
+
+    /// The ramp is monotone in lightness, which is the property that makes it a
+    /// ramp at all once the hue is taken off.
+    ///
+    /// `testAmberAndRedSeparateInGreyscale` holds the second boundary; this holds
+    /// the first, and until `Tokens.Meter.fill` existed it could not have been
+    /// written: resting `Ink.muted` sat 1.87 L\* from amber in dark and **0.54 in
+    /// light**, so the ramp's first step was invisible in a greyscale screenshot
+    /// and to a deuteranope. The floor is the same 9 the other boundary keeps.
+    ///
+    /// Measured now: dark 51.89 → 65.73 → 76.65 (13.84 then 10.92 apart), light
+    /// 50.02 → 36.02 → 26.53 (13.97 then 9.49). Monotone away from the ground in
+    /// both appearances, so "worse" always reads as "further from the panel".
+    func testTheRampIsMonotoneInGreyscale() throws {
+        for dark in [false, true] {
+            let ground = lightness(try XCTUnwrap(resolve(Tokens.Surface.base, dark: dark)))
+            let ladder = try [0.0, 0.85, 0.99].map {
+                lightness(try XCTUnwrap(resolve(UsageTint.color(for: $0), dark: dark)))
+            }
+            let distances = ladder.map { abs($0 - ground) }
+            XCTAssertGreaterThanOrEqual(
+                distances[1] - distances[0], 9,
+                "resting L* \(ladder[0]) and amber L* \(ladder[1]) are \(distances[1] - distances[0]) "
+                    + "apart in \(dark ? "dark" : "light") — the ramp's first step needs hue to be seen"
+            )
+            XCTAssertGreaterThanOrEqual(
+                distances[2] - distances[1], 9,
+                "amber L* \(ladder[1]) and red L* \(ladder[2]) are \(distances[2] - distances[1]) apart"
+            )
         }
     }
 
@@ -67,9 +197,24 @@ final class UsageRampContrastTests: XCTestCase {
             // its own. Every stop is now a `Tokens.Ink` token, so what these
             // figures record is the palette's, read back through `UsageTint`.
             //
-            //   resting  #5F636B / #8A8F98  ->  Ink.muted      #53565E / #A0A5AE
+            //   resting  #5F636B / #8A8F98  ->  Meter.fill     #74777E / #787C83
             //   caution  #8A5A00 / #D08214  ->  Ink.attention  #764C00 / #E08D1C
             //   warning  #B92126 / #FF6B6E  ->  Ink.alarm      #7E1217 / #FFA5A7
+            //
+            // Resting passed through `Ink.muted` (#53565E / #A0A5AE, 6.85/7.85
+            // here) for one pass and moved off it again. That fold was the one
+            // change in the rebuild that cost something it did not price: it put
+            // the ramp's first two stops on the same rung of the grey ladder, so
+            // resting and caution were 1.062:1 apart in dark and 1.020:1 in light
+            // once the hue came off. The figure it is recorded at now is *lower*
+            // on purpose and not a regression — see `Tokens.Meter.fill`. Nothing
+            // draws it as type (`testTheRestingStopIsNeverText`), its ground is
+            // the track rather than the panel
+            // (`testTheRestingStopClearsThreeToOneOnItsOwnTrack`), and eight
+            // resting rows of nine stop carrying a slab at body-text contrast.
+            //
+            // Recomputed: grey 6.85 -> 4.19 light and 7.85 -> 4.63 dark. Amber
+            // and red are untouched.
             //
             // The grounds moved as well — `Surface.base` went #F7F8FA ->
             // #F6F7FA light and #101114 -> #0C0D11 dark — but they are the
@@ -85,7 +230,7 @@ final class UsageRampContrastTests: XCTestCase {
             // which `testAmberAndRedSeparateInGreyscale` is the assertion for,
             // and the contrast is what that buys rather than what it was cut
             // for.
-            ("grey", 0.10, 6.85, 7.85),
+            ("grey", 0.10, 4.19, 4.63),
             ("amber", 0.85, 6.99, 7.39),
             ("red", 0.95, 9.87, 10.35)
         ]

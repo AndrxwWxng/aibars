@@ -129,7 +129,7 @@ public struct MenuBarContentView: View {
     /// Not `NSScreen.main`, which is the screen holding the key window — an app
     /// with no Dock icon and no window of its own does not reliably hold one, and
     /// the status item exists on *every* display's bar
-    /// (`MenuBarAppearance.statusBarWindows`), so the panel can open on a screen
+    /// (`MenuBarPanel.statusBarWindows`), so the panel can open on a screen
     /// the key window is not on. The pointer is over the item that was just
     /// clicked, by definition, which makes it the one input that names the right
     /// display. On a laptop beside a taller external the cap taken from the wrong
@@ -278,7 +278,7 @@ public struct MenuBarContentView: View {
             // Dropped rather than hidden under the opaque scrim: a blur nobody
             // can see is still a blur being drawn every frame.
             //
-            // `.regularMaterial`, not a thinner one: the scrim's 0.88/0.92 are
+            // `.regularMaterial`, not a thinner one: the scrim's 0.94/0.96 are
             // derived against this material's own lift, and under a thinner one
             // the same alphas let more of the wallpaper through than the value
             // ladder above has room for.
@@ -310,14 +310,14 @@ public struct MenuBarContentView: View {
     ///
     /// One device pixel tall, which is what makes it land *on* the grid: every
     /// gap above it is a whole point, so at any scale the line starts on a pixel
-    /// boundary and covers exactly one row of them. `BrowserLoginView` draws its
+    /// boundary and covers exactly one row of them. `ConnectDialog` draws its
     /// rule the same way and says so.
     ///
     /// Through `Tokens.Control.hair(scale:)` rather than the `1 / displayScale`
     /// this used to spell out. Value-identical at every scale a display reports,
     /// so no pixel moves; what changes is that the token stops being a definition
     /// with no callers. Five rules, three spellings of two thicknesses: this and
-    /// `BrowserLoginView`'s inline division, `AppearancePane`'s
+    /// `ConnectDialog`'s inline division, `AppearancePane`'s
     /// `hairline / max(scale, 1)`, and two more taking the whole point — while
     /// the function written to settle the question was never called once. Three
     /// of the five call it now, and the two that keep the point say why there.
@@ -490,7 +490,8 @@ public struct MenuBarContentView: View {
                         title: title,
                         count: section.providers.count,
                         isExpanded: expansion(of: section.id),
-                        fontSize: sectionFontSize
+                        fontSize: sectionFontSize,
+                        leading: PanelAxis.leadingColumn(for: appearance)
                     )
                 } else {
                     SectionLabel(title: title, count: section.providers.count, fontSize: sectionFontSize)
@@ -499,12 +500,24 @@ public struct MenuBarContentView: View {
                         // disconnected policy puts both kinds in one list, and
                         // two title indents in one list reads as damage.
                         .padding(.leading, Tokens.Space.gutter
-                                 + DisclosureHeader.chevronColumn(at: sectionFontSize))
+                                 + DisclosureHeader.chevronColumn(
+                                    at: sectionFontSize,
+                                    leading: PanelAxis.leadingColumn(for: appearance)
+                                 ))
                 }
             }
             // A group that opens the list needs no air above it; one that
             // follows a block of rows is a break between two things.
-            .padding(.top, isFirst ? Tokens.Space.tight : Tokens.Space.medium)
+            //
+            // `xlarge` and not `medium`. Measured on the shipped panel, the last
+            // row's caption baseline to the group label's was **38.0pt** against
+            // **39.0pt between two ordinary rows** — the boundary between
+            // "connected" and "not connected" was a point *tighter* than the
+            // boundary between two connected accounts, because the 8 was entirely
+            // spent compensating for the header's smaller 10pt type and its own
+            // snug padding. Sixteen buys 46.0, which is a break rather than a
+            // gap; the cost is 8pt per group header and only on a grouped panel.
+            .padding(.top, isFirst ? Tokens.Space.tight : Tokens.Space.xlarge)
         }
 
         if !section.isCollapsible || isOnly || expandedSections.contains(section.id) {
@@ -682,6 +695,20 @@ public struct MenuBarContentView: View {
         if let name = state.topProviderName, let top = state.usageLevels.max() {
             return "\(name) \(Int((top * 100).rounded()))%"
         }
+        // Nothing is reporting, so "connected" is the wrong word for it.
+        //
+        // `headlineSummary` has this branch and says "15 connected but not
+        // responding"; at 356pt that sentence does not fit the header line, so
+        // `ViewThatFits` falls here — and here had no failure branch at all. A
+        // panel of fifteen rows each reading "No response — will retry" was
+        // headed "15 connected". The count is what makes it fit the fifteen
+        // characters this function is cut to: "none responding" is 15 exactly and
+        // "15 not responding" is 17, which is why the all-failed case gets the
+        // wordier form and the partial one gets the count.
+        let failures = state.failingCount
+        if failures > 0 {
+            return failures == connected ? "none responding" : "\(failures) not responding"
+        }
         return "\(connected) connected"
     }
 
@@ -753,7 +780,7 @@ public struct MenuBarContentView: View {
         VStack(alignment: .leading, spacing: Tokens.Space.small) {
             // `lineLimit(1)` and no `fixedSize`: the query is user text on a
             // fixed-width panel, and the 32-character cap plus tail truncation is
-            // what keeps this inside `PanelWidthContract`.
+            // what keeps this inside `PanelWidthContractTests`' one contract.
             Text("No service matches “\(keyboard.query)”")
                 .font(.system(size: appearance.metrics.titleSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.body)
@@ -1063,7 +1090,27 @@ public struct PanelHeader<Trailing: View>: View {
         // gutter the wordmark stood at 12 + 15 + 8 = 35 while a row's name stood
         // at 12 + 18 + 10 = 40, and at a 40pt logo the gap was 27pt. The pair
         // agreed at no logo size at all.
-        .padding(.horizontal, appearance.metrics.rowHorizontalPadding)
+        .padding(.leading, appearance.metrics.rowHorizontalPadding)
+        // The trailing half is the gutter less the glyph's own inset inside its
+        // button, so the *ink* lands on the panel's right rail rather than the
+        // button box doing.
+        //
+        // Measured: the rail is 344.0 at the shipped width — three figures, two
+        // dots and the trailing chips all end there, 82 scanlines of one edge —
+        // and the four header glyphs ended at 339.5, constant at every panel
+        // width. The 22pt box was flush; the 12pt glyph inside it is centred, so
+        // it sat (22 − 12) / 2 = 5pt short. Taking that 5 off the trailing gutter
+        // moves the glyph's ink to 344.5, a half-point residual instead of four
+        // and a half.
+        //
+        // The button's hover plate moves with it, to a right edge of 349, and
+        // that is the second reason this is the right correction rather than a
+        // trailing-aligned glyph inside a flush box: the row cards below are
+        // inset `Space.cardInset` inside the same gutter and stop at 350, so the
+        // plate lands on the cards' edge to within a point instead of 6pt inside
+        // it. Both edges improve; neither is traded for the other.
+        .padding(.trailing, appearance.metrics.rowHorizontalPadding
+                 - (Tokens.Control.iconButton - Tokens.Control.iconGlyph) / 2)
         // A point asymmetric: the rule beneath reads as the header's own bottom
         // edge rather than as the list's top one, so the gap down to it is the
         // smaller of the two.
@@ -1292,14 +1339,45 @@ struct DisclosureHeader: View {
     let count: Int
     @Binding var isExpanded: Bool
     var fontSize: CGFloat = Tokens.Ramp.detail
+    /// The rows' leading column, from `PanelAxis.leadingColumn(for:)`. Handed
+    /// in rather than read off the settings here, for the reason the header
+    /// beside it already gives: one arithmetic, and this is a caller of it.
+    ///
+    /// Zero is the honest default for a header built without one — it is what a
+    /// panel with the marks hidden reports — and it puts the chevron back in a
+    /// column of its own rather than guessing at a mark that may not be drawn.
+    var leading: CGFloat = 0
 
     @State private var isHovered = false
 
-    /// How far the chevron pushes the title in, so a section drawn without one
-    /// can match rather than hang a chevron's width to the left of its
-    /// neighbours.
-    static func chevronColumn(at fontSize: CGFloat) -> CGFloat {
-        fontSize + labelSpacing
+    /// The rows' own leading column, so the group's title starts on the same x
+    /// as every service name under it.
+    ///
+    /// It was `fontSize + labelSpacing` — 10 + 6 = 16 — which put the label at
+    /// **29.0pt** against the panel's one text axis at **40.0**, where eighteen
+    /// other elements start (the wordmark, seven names, seven captions and three
+    /// meters, 80 scanlines of one edge). A group header is the only thing in the
+    /// panel that invented a left edge of its own, and it did it 11pt inside the
+    /// axis it was labelling.
+    ///
+    /// The chevron moved with it. `RowGeometry.leadingWidth` is
+    /// `logoSize + Space.leadingColumn` — 18 + 10 at the defaults — so the mark
+    /// box is the leading 18 of that column, and centring the chevron in it puts
+    /// its ink centre at 21.0, which is the mark centre measured on all seven
+    /// rows with zero variance. It was 18.5, 2.5pt off.
+    ///
+    /// The fallback is real and stated: with the marks hidden and the meter off
+    /// the dial, a row has no leading column at all and a chevron indenting its
+    /// own label is the best available — there is nothing to hang it beside, and
+    /// a chevron in the gutter would break the one edge that does exist.
+    static func chevronColumn(at fontSize: CGFloat, leading: CGFloat) -> CGFloat {
+        leading > 0 ? leading : fontSize + labelSpacing
+    }
+
+    /// The gap between the chevron's box and the label, which is the rows' own
+    /// mark-to-name gap wherever there is a mark to match.
+    static func labelGap(leading: CGFloat) -> CGFloat {
+        leading > 0 ? Tokens.Space.leadingColumn : labelSpacing
     }
 
     private static let labelSpacing: CGFloat = Tokens.Space.small
@@ -1336,7 +1414,7 @@ struct DisclosureHeader: View {
             // mid-flight.
             isExpanded.toggle()
         } label: {
-            HStack(spacing: Self.labelSpacing) {
+            HStack(spacing: Self.labelGap(leading: leading)) {
                 Image(systemName: "chevron.right")
                     // Two points under the label rather than a fraction of it: a
                     // chevron is a mark beside the word, not a letter in it, and
@@ -1346,8 +1424,15 @@ struct DisclosureHeader: View {
                     .font(.system(size: fontSize - 2, weight: .semibold))
                     .foregroundColor(Tokens.Ink.muted)
                     // A fixed box, or the column `chevronColumn` promises is
-                    // whatever width the glyph happened to render at.
-                    .frame(width: fontSize)
+                    // whatever width the glyph happened to render at. The box is
+                    // the *mark's* box — the column less the gap after it — so
+                    // the chevron's centre lands on the mark axis every row under
+                    // it draws on.
+                    .frame(width: max(
+                        fontSize,
+                        Self.chevronColumn(at: fontSize, leading: leading)
+                            - Self.labelGap(leading: leading)
+                    ))
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     // The one thing on this header that moves, and the only
                     // motion the panel allows here: the rows themselves appear

@@ -27,7 +27,7 @@ public final class OpenCodeProvider: ObservableObject, UsageProvider {
     @Published public var isEnabled: Bool = true
     @Published public private(set) var isAuthenticated: Bool = false
 
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
     /// Signing out of a provider with no credential can only mean "stop showing
     /// this", so the choice has to survive a relaunch on its own key — the

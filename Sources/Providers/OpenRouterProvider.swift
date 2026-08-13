@@ -30,7 +30,7 @@ public final class OpenRouterProvider: ObservableObject, UsageProvider {
     @Published public private(set) var isAuthenticated: Bool = false
 
     private let session = SessionStore.shared
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = AppDefaults.current
     private let enabledKey: String
 
     public init(accountID: String? = nil) {

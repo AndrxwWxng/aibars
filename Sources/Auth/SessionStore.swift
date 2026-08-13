@@ -89,8 +89,18 @@ public final class SessionStore: @unchecked Sendable {
     /// run where the race happens not to happen.
     private let readItem: @Sendable (String) -> KeychainStore.ReadResult
 
+    /// `AppDefaults.current` rather than `.standard`, for the reason written out
+    /// there: this is a `private init`, so the shared instance is the one store in
+    /// the app a test cannot hand a scratch domain to.
+    ///
+    /// What it writes is `aibars.sessionMeta`, and that is what `hasCredential`
+    /// answers from — so it decides whether a provider is built as connected, and
+    /// `isAuthenticated` is an input to `RowGeometry` and therefore to every
+    /// recorded row height. Sampled off the runner's domain before this changed:
+    /// 701 bytes of it, naming `codex` and `gemini#2`, seeded by runs that had
+    /// long since finished. Every later run started from that.
     private init() {
-        self.defaults = .standard
+        self.defaults = AppDefaults.current
         self.readItem = { KeychainStore.read($0) }
     }
 
