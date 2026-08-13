@@ -436,14 +436,248 @@ final class UsageRampContrastTests: XCTestCase {
     }
 }
 
-/// The app mark, at the two sizes the app actually draws it.
+/// The app mark's grid: every measurement it resolves before anything is drawn.
 ///
-/// It carries no data any more, so there is nothing to assert about what it
-/// says — only that it says it visibly. The pair of sizes is the real check: the
-/// mark is one shape scaled off `size`, and its bars are 3–4pt wide at the small
-/// end, which is exactly where a rounding mistake empties the image.
+/// Split from the rendered tests below because it needs nothing — no renderer,
+/// no display scale, no menu bar — and because the whole of the mark's crispness
+/// is in these numbers. What used to stand here was a single rendered check that
+/// the laid-out width came out whole at 13, 14 and 44. It passed throughout the
+/// fault it was written to catch: the width *was* whole (18 at every size from 11
+/// to 15), and the blur was vertical — an odd 13pt box centred in an even 22pt
+/// bar, with 12pt of ink inside it.
+///
+/// The sizes below are every one the app can ask for. Half steps are included
+/// because the strip-height tuner shipped with `step: 0.5` and a defaults domain
+/// can still hold what it wrote, so a build that stops quantising must not be
+/// able to reach a fractional mark through this type.
+final class AppMarkGridTests: XCTestCase {
+    private let sizes: [CGFloat] =
+        stride(from: 10.0, through: 16.0, by: 0.5).map { CGFloat($0) }
+        + [Tokens.Control.headerGlyph, Tokens.Control.iconButton, Tokens.Control.aboutGlyph]
+
+    /// Whole points, all of them.
+    ///
+    /// The status item resamples a fractional image to fit its slot, and half a
+    /// point of resampling is visible blur on a mark that is mostly 3pt stems.
+    /// Asserted measurement by measurement rather than on the width alone: the
+    /// width was the one number the old construction did round, and rounding one
+    /// of nine is how a mark ends up with a whole outline and a fractional
+    /// interior.
+    func testEveryMeasurementIsAWholePoint() {
+        for size in sizes {
+            let grid = AppMarkGeometry(size: size)
+            let named: [(String, CGFloat)] = [
+                ("box", grid.box), ("stem", grid.stem), ("gap", grid.gap),
+                ("baseline", grid.baseline), ("baselineGap", grid.baselineGap),
+                ("plot", grid.plot), ("step", grid.step), ("corner", grid.corner),
+                ("overhang", grid.overhang), ("runWidth", grid.runWidth), ("width", grid.width)
+            ]
+            for (name, value) in named {
+                XCTAssertEqual(value, value.rounded(), "\(name) is \(value) at size \(size)")
+            }
+            for (index, height) in grid.heights.enumerated() {
+                XCTAssertEqual(height, height.rounded(), "bar \(index) is \(height)pt at size \(size)")
+            }
+        }
+    }
+
+    /// And even, which is the half of it a whole-point rule does not cover.
+    ///
+    /// AppKit centres the status image in a 22pt bar, so an odd box hangs at a
+    /// half point however whole its own interior is — (22 − 13) / 2 = 4.5, one
+    /// device row split in two at 1× for the baseline and each of the four bar
+    /// tops. The second assertion is the one that matters; the first is the rule
+    /// that guarantees it.
+    func testTheBoxIsEvenAndCentresOnAWholePoint() {
+        for size in sizes {
+            let box = AppMarkGeometry(size: size).box
+            XCTAssertEqual(
+                box.truncatingRemainder(dividingBy: 2), 0,
+                "size \(size) resolved to an odd \(box)pt box"
+            )
+            let origin = (MenuBarIcon.barHeight - box) / 2
+            XCTAssertEqual(origin, origin.rounded(), "a \(box)pt box hangs at y = \(origin) in the bar")
+        }
+    }
+
+    /// `size` is the room the caller has, so the box rounds down into it and
+    /// never up out of it. The 8pt floor is the one exception and is not reachable
+    /// from the app: the smallest size anything asks for is `menuBarGlyphHeight`'s
+    /// lower clamp of 10.
+    func testTheBoxNeverExceedsTheSizeAskedFor() {
+        for size in sizes {
+            let box = AppMarkGeometry(size: size).box
+            XCTAssertLessThanOrEqual(box, size, "size \(size) grew to a \(box)pt box")
+            // And not by more than the parity costs, or "rounds down" would cover
+            // a box that had quietly stopped tracking its size at all.
+            XCTAssertGreaterThan(box, size - 2, "size \(size) collapsed to a \(box)pt box")
+        }
+        XCTAssertEqual(AppMarkGeometry(size: 2).box, 8, "the floor is the only case that may exceed the ask")
+    }
+
+    /// The ink is the box. The three stacked parts add up to it exactly, and the
+    /// tallest bar is the whole plot.
+    ///
+    /// This is the defect the rendered tests could not see. The old profile topped
+    /// out at 0.9 of its plot, so at 13pt the mark drew 10 + 1 + 1 = 12pt of ink,
+    /// bottom-aligned, inside a 13pt image: a point of dead air above the bars,
+    /// compounding with the half-point origin into ink whose centre sat 5.0pt above
+    /// the box floor in a slot whose centre is at 11.0.
+    func testInkFillsTheBox() {
+        for size in sizes {
+            let grid = AppMarkGeometry(size: size)
+            XCTAssertEqual(
+                grid.plot + grid.baselineGap + grid.baseline, grid.box,
+                "the parts sum to \(grid.plot + grid.baselineGap + grid.baseline) in a \(grid.box)pt box"
+            )
+            XCTAssertEqual(grid.heights[0], grid.plot, "dead air above the bars at size \(size)")
+        }
+    }
+
+    /// One constant step, so the four tops fall on a single line — which is what
+    /// makes four rectangles read as a chart rather than as a comb. The old
+    /// profile's steps were 3, 3, 2 at 13pt and 9, 9, 7 at 44: a descent short by
+    /// a fifth to a third on its last step at every size.
+    func testTheTopsAreCollinear() {
+        for size in sizes {
+            let grid = AppMarkGeometry(size: size)
+            for index in 0..<(AppMarkGeometry.count - 1) {
+                XCTAssertEqual(
+                    grid.heights[index] - grid.heights[index + 1], grid.step,
+                    "bars \(index) and \(index + 1) are \(grid.heights) at size \(size)"
+                )
+            }
+        }
+    }
+
+    /// A rectangle shorter than it is wide has stopped being a bar. The floor is
+    /// in the construction, but it must not be *firing* at any size the app draws
+    /// — a bar clamped up to the stem is a bar off the line the test above pins.
+    func testNoBarIsShorterThanItIsWide() {
+        for size in sizes {
+            let grid = AppMarkGeometry(size: size)
+            for (index, height) in grid.heights.enumerated() {
+                XCTAssertGreaterThanOrEqual(
+                    height, grid.stem,
+                    "bar \(index) is \(height) × \(grid.stem) at size \(size)"
+                )
+            }
+        }
+    }
+
+    /// The horizontal half of the same claim, at both scales a Mac draws at. A
+    /// stem starting on a half pixel is a stem with a grey edge, and at 1× on a
+    /// non-Retina external display there is no second sample to hide it in.
+    func testStemsLandOnWholePointsAtEveryScale() {
+        for size in sizes {
+            let grid = AppMarkGeometry(size: size)
+            for index in 0..<AppMarkGeometry.count {
+                for scale in [1.0, 2.0] as [CGFloat] {
+                    let edge = grid.stemOrigin(index) * scale
+                    XCTAssertEqual(edge, edge.rounded(), "stem \(index) starts at \(edge)px at \(scale)× and size \(size)")
+                    let far = (grid.stemOrigin(index) + grid.stem) * scale
+                    XCTAssertEqual(far, far.rounded(), "stem \(index) ends at \(far)px at \(scale)× and size \(size)")
+                }
+            }
+            // The trailing edge of the last stem plus its overhang is the mark's
+            // own width, so nothing is left over and the axis is symmetric.
+            XCTAssertEqual(
+                grid.stemOrigin(AppMarkGeometry.count - 1) + grid.stem + grid.overhang, grid.width,
+                "the run does not fill its width at size \(size)"
+            )
+        }
+    }
+
+    /// Half a point cannot produce a different mark, and neither can a point that
+    /// shares an even box. This is the assertion that makes the strip's fallback
+    /// memo correct to key on the box: 13 and 12 are one mark, so they are one
+    /// bitmap.
+    func testHalfStepsResolveToTheWholeSizeBelow() {
+        XCTAssertEqual(AppMarkGeometry(size: 13), AppMarkGeometry(size: 12))
+        XCTAssertEqual(AppMarkGeometry(size: 13.5), AppMarkGeometry(size: 12))
+        XCTAssertEqual(AppMarkGeometry(size: 15.5), AppMarkGeometry(size: 14))
+        // And the pairs that must stay apart, or "one mark, one bitmap" would be
+        // "every mark, one bitmap".
+        XCTAssertNotEqual(AppMarkGeometry(size: 13), AppMarkGeometry(size: 14))
+        XCTAssertNotEqual(AppMarkGeometry(size: 22), AppMarkGeometry(size: 44))
+    }
+
+    /// Corners and the axis overhang are gated on their own resolved measurement
+    /// rather than on a size test, and at every size but About the measurement
+    /// comes out under 2pt and they do not appear. A 1pt radius on a 3pt stem is
+    /// not a corner, it is a half-lit pixel on each shoulder; 1pt of overhang at
+    /// each end is a stray pixel rather than an axis running past its data.
+    func testCornersAndOverhangAreLargeSizeOnly() {
+        for size in sizes where AppMarkGeometry(size: size).box <= 22 {
+            let grid = AppMarkGeometry(size: size)
+            XCTAssertEqual(grid.corner, 0, "a \(grid.box)pt box drew a \(grid.corner)pt corner")
+            XCTAssertEqual(grid.overhang, 0, "a \(grid.box)pt box drew a \(grid.overhang)pt overhang")
+            XCTAssertEqual(grid.width, grid.runWidth, "the axis is not flush with the run at size \(size)")
+        }
+
+        let about = AppMarkGeometry(size: Tokens.Control.aboutGlyph)
+        XCTAssertEqual(about.corner, 2, "About lost its rounded tops")
+        XCTAssertEqual(about.overhang, 2, "About lost its axis overhang")
+        XCTAssertEqual(about.width, about.runWidth + 4, "the overhang is not at both ends")
+    }
+
+    /// The resolved grid, written out. Not derivable from the rules above — it is
+    /// the shape itself, and the four sizes that reach a screen: the strip, the
+    /// panel header, the icon-button square, and About.
+    ///
+    /// The menu bar mark and the header mark share stem 3, gap 1, pitch 4 and
+    /// width 15 and differ only in bar heights, which is deliberate: the panel
+    /// hangs directly under the status item, so the two are on screen together and
+    /// have to read as one mark at two sizes.
+    func testTheResolvedGridIsTheShapeItIsMeantToBe() {
+        let expected: [CGFloat: (box: CGFloat, stem: CGFloat, gap: CGFloat, width: CGFloat, heights: [CGFloat])] = [
+            13: (12, 3, 1, 15, [10, 8, 6, 4]),
+            14: (14, 3, 1, 15, [12, 9, 6, 3]),
+            22: (22, 5, 2, 26, [18, 14, 10, 6]),
+            44: (44, 10, 4, 56, [37, 28, 19, 10])
+        ]
+        for (size, shape) in expected {
+            let grid = AppMarkGeometry(size: size)
+            XCTAssertEqual(grid.box, shape.box, "box at \(size)")
+            XCTAssertEqual(grid.stem, shape.stem, "stem at \(size)")
+            XCTAssertEqual(grid.gap, shape.gap, "gap at \(size)")
+            XCTAssertEqual(grid.width, shape.width, "width at \(size)")
+            XCTAssertEqual(grid.heights, shape.heights, "bars at \(size)")
+            // Written twice on purpose, as the sum as well as the literal: 4 stems
+            // and 3 gaps plus an overhang at each end.
+            XCTAssertEqual(grid.width, 4 * shape.stem + 3 * shape.gap + 2 * grid.overhang, "width arithmetic at \(size)")
+        }
+    }
+
+    /// The axis carries less alpha when it is thick enough to hold it. A 1pt rule
+    /// is one device pixel at 1×, and one pixel at 55% of a template's alpha is a
+    /// line the menu bar's own vibrancy finishes off; a 3pt rule at 70% is a slab
+    /// competing with the bars it sits under.
+    func testTheAxisTakesItsAlphaFromItsThickness() {
+        XCTAssertEqual(AppMarkGeometry(size: 13).baseline, 1)
+        XCTAssertEqual(AppMarkGeometry(size: 13).baselineOpacity, 0.70)
+        XCTAssertEqual(AppMarkGeometry(size: 44).baseline, 3)
+        XCTAssertEqual(AppMarkGeometry(size: 44).baselineOpacity, 0.55)
+    }
+
+    /// The size arrives from a defaults domain that can hold anything, and every
+    /// `max` in the construction passes infinity straight through to a frame and
+    /// an `NSImage`. Both non-finite cases have to land on the floor rather than
+    /// on a trap or an unbounded canvas.
+    func testANonFiniteSizeFallsToTheFloor() {
+        for size in [CGFloat.nan, .infinity, -.infinity, -12] {
+            let grid = AppMarkGeometry(size: size)
+            XCTAssertEqual(grid.box, 8, "size \(size) produced a \(grid.box)pt box")
+            XCTAssertTrue(grid.width.isFinite, "size \(size) produced a \(grid.width)pt canvas")
+        }
+    }
+}
+
+/// The app mark as it is actually drawn, which is the half of it arithmetic
+/// cannot answer for: that the grid above reaches SwiftUI intact, and that ink
+/// comes out of it at menu bar size, where the stems are 3pt wide.
 final class AppMarkTests: XCTestCase {
-    /// The status item's own height. A literal rather than a setting: this is
+    /// The height the strip ships at. A literal rather than a setting: this is
     /// the small end of the range the mark has to survive, not a preference.
     private let menuBarHeight: CGFloat = 13
 
@@ -493,23 +727,30 @@ final class AppMarkTests: XCTestCase {
         XCTAssertGreaterThan(large.inked, small.inked)
     }
 
-    /// Whole-point geometry. The status item resamples a fractional image to fit
-    /// its slot, and half a point of resampling is visible blur on a mark that is
-    /// mostly 3pt-wide bars — which is what the mark had while its spacing and
-    /// its plot height were the two measurements nobody rounded.
+    /// The seam: what SwiftUI lays the mark out at has to be what
+    /// `AppMarkGeometry` said it would be, at every size that reaches a screen.
+    ///
+    /// This is what makes the grid worth asserting at all. `MenuBarStripRenderer`
+    /// sizes its bitmap from the grid without rendering anything first, so a view
+    /// that measured one point wider than the grid claims would be a mark clipped
+    /// by its own canvas — and the same disagreement in the other direction is a
+    /// mark floating in dead pixels. Asserted against the reported size and not
+    /// against a rounding of it: `drawn` is the contract.
     @MainActor
-    func testTheMarkLaysItselfOutOnWholePoints() throws {
+    func testTheDrawnSizeIsWhatTheViewReports() throws {
         for size in [menuBarHeight, Tokens.Control.headerGlyph, Tokens.Control.aboutGlyph] {
             let drawn = try XCTUnwrap(render(size: size))
             XCTAssertEqual(
-                drawn.layout.width, drawn.layout.width.rounded(),
-                "the mark measured \(drawn.layout.width)pt wide at size \(size)"
-            )
-            XCTAssertEqual(
-                drawn.layout.height, size,
-                accuracy: 0.001,
-                "the mark grew past the height it was asked for"
+                drawn.layout, AppMarkGeometry(size: size).drawn,
+                "a \(size)pt mark laid itself out at \(drawn.layout)"
             )
         }
+        // The three, written out, because they are the visual delta this change
+        // ships: the header mark narrows 18 → 15, the strip's fallback goes from an
+        // 18 × 13 image holding 12pt of ink to a 15 × 12 image that is all ink, and
+        // About gains 3pt of ink height inside a 2pt narrower box.
+        XCTAssertEqual(AppMarkGeometry(size: menuBarHeight).drawn, CGSize(width: 15, height: 12))
+        XCTAssertEqual(AppMarkGeometry(size: Tokens.Control.headerGlyph).drawn, CGSize(width: 15, height: 14))
+        XCTAssertEqual(AppMarkGeometry(size: Tokens.Control.aboutGlyph).drawn, CGSize(width: 56, height: 44))
     }
 }

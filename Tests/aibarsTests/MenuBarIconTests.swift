@@ -4,10 +4,12 @@ import Combine
 @testable import aibarsCore
 
 /// What is left of `MenuBarIcon` once `MenuBarStripRenderer` owns the drawing:
-/// how tall the status item is, and which way the bar it sits in is currently
-/// painted. Both are read while the strip is being rasterised — before any
-/// window exists, and from a notification handler — so "it answers at all" is
-/// the property that would actually fail.
+/// how tall the bar is, and which way that bar is currently painted. The second
+/// is read while the strip is being rasterised — before any window exists, and
+/// from a notification handler — so "it answers at all" is the property that
+/// would actually fail. The first is a platform constant, and what is worth
+/// asserting about it is not the number but the thing the number decides: where
+/// the mark lands when AppKit centres it.
 ///
 /// The second fact is deliberately not the application's appearance. macOS
 /// paints the menu bar dark under Light mode whenever the wallpaper behind it is
@@ -38,13 +40,41 @@ final class MenuBarIconTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Height
+    // MARK: - The bar the mark is centred in
 
-    /// A status glyph that is taller than the bar is clipped, and a fractional
-    /// one is scaled to fit — which is enough to smear tabular figures.
-    func testHeightFitsTheMenuBar() {
-        XCTAssertLessThanOrEqual(MenuBarIcon.height, 16, "taller than the status bar allows")
-        XCTAssertEqual(MenuBarIcon.height, MenuBarIcon.height.rounded(), "a fractional height gets scaled")
+    /// What the old assertion was reaching for, on the value that governs it.
+    ///
+    /// It used to read `MenuBarIcon.height <= 16` and `== .rounded()` — a
+    /// tautology over a constant nothing drew with, since the strip's height is
+    /// `menuBarGlyphHeight` and `MenuBarIcon.height` was 13 by coincidence. The
+    /// premise died when the constant was re-cut to the bar's own 22, and this is
+    /// the stronger claim the re-cut makes available: AppKit centres the status
+    /// image in the bar, so the mark's origin is (22 − box) / 2, and a fractional
+    /// origin splits the baseline and all four bar tops across two device rows at
+    /// 1×. Asserted across the whole range the height setting can hold, half
+    /// points included, because that origin is the one number no rounding
+    /// downstream of it can repair.
+    func testEveryMarkTheSettingsAllowCentresOnAWholePointInTheBar() {
+        XCTAssertEqual(MenuBarIcon.barHeight, 22, "the status bar is 22pt on every Mac this runs on")
+        XCTAssertEqual(
+            MenuBarIcon.barHeight.truncatingRemainder(dividingBy: 2), 0,
+            "an odd bar would make the mark's box parity the wrong rule"
+        )
+
+        for step in 0...12 {
+            // 10 through 16 in half points: the clamp `menuBarGlyphHeight` is held
+            // to, at the granularity a slider that shipped with `step: 0.5` could
+            // still have persisted.
+            let height = 10 + CGFloat(step) * 0.5
+            let box = AppMarkGeometry(size: height).box
+            XCTAssertLessThanOrEqual(box, 16, "a \(height)pt mark drew \(box)pt, taller than the bar allows")
+
+            let origin = (MenuBarIcon.barHeight - box) / 2
+            XCTAssertEqual(
+                origin, origin.rounded(),
+                "a \(height)pt mark resolves to a \(box)pt box and hangs at y = \(origin) in the bar"
+            )
+        }
     }
 
     // MARK: - Which way the bar is painted
