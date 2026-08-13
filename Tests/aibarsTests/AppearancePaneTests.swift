@@ -725,6 +725,252 @@ final class AppearancePaneTests: XCTestCase {
         )
     }
 
+    // MARK: - The style chooser
+
+    /// Six chips, and every one of them draws its own style at the size the chip
+    /// gives it.
+    ///
+    /// The measurement that matters is the last one. `Tokens.Control.stripStyleChip`
+    /// is the adaptive grid's minimum column, so a sample wider than the room
+    /// inside a chip does not overflow visibly — the grid quietly drops to fewer
+    /// columns and the chooser stops being a grid of six. `markAndFigure` is the
+    /// style that decides it: three marks and three figures is 127pt at the chip
+    /// height, which is what the 144pt token was sized for, and 144 less the
+    /// chip's own 8pt of padding each side leaves it exactly a point of slack.
+    /// Widen any style's cell and this is the assertion that says so.
+    ///
+    /// Restated here rather than reached for, because the chooser is private to
+    /// the pane. Every argument below is a setting or a token, so there is nothing
+    /// the pane could be passing differently.
+    @MainActor
+    func testEveryStyleDrawsAPreviewThatFitsItsChip() {
+        let appearance = settings("style-chip-fit")
+        // `SelectableChip` spends `Space.medium` either side of whatever it is
+        // handed, so this is the width the accessory actually gets.
+        let room = Tokens.Control.stripStyleChip - 2 * Tokens.Space.medium
+        let height = Tokens.Strip.chipPreviewHeight
+        let sample = SampleService.stripEntries
+
+        for style in AppearanceSettings.MenuBarStyle.allCases {
+            let box = StripStyleBox.box(for: style)
+            let size = fittingSize(
+                MenuBarStripView(
+                    entries: sample,
+                    style: box,
+                    height: height,
+                    colour: appearance.menuBarColour,
+                    warningThreshold: appearance.warningThreshold,
+                    coloursMarks: appearance.coloursBrandMarks
+                )
+            )
+            let drawn = StripFit.fit(sample, limit: sample.count, style: box, height: height)
+            let context = "\(style.label)'s chip"
+
+            XCTAssertGreaterThanOrEqual(drawn.count, 1, "\(context) previews an empty strip")
+            XCTAssertEqual(
+                size.width, StripFit.width(segments: drawn.count, style: box, height: height),
+                accuracy: 0.5,
+                "\(context) measures \(size.width)pt against the \(StripFit.width(segments: drawn.count, style: box, height: height))pt its own style reserves"
+            )
+            XCTAssertEqual(
+                size.height, Tokens.Strip.markBox(height: height), accuracy: 0.5,
+                "\(context) is \(size.height)pt tall in a row of chips that reserved \(height)"
+            )
+            XCTAssertLessThanOrEqual(
+                size.width, room,
+                "\(context) is \(size.width)pt of sample in \(room)pt of chip, so the grid drops a column rather than showing six"
+            )
+        }
+    }
+
+    /// Six chips that draw the same thing are a label with extra steps.
+    ///
+    /// Pixels rather than widths, because widths cannot see it: `markOnly` and
+    /// `microBars` measure identically at every height by design — the shared
+    /// `segmentGap` was chosen to make switching between them move nothing — so a
+    /// chooser in which those two rendered the same drawing would pass every
+    /// arithmetic test in the suite and be indistinguishable to look at.
+    ///
+    /// `.perBar` and marks in colour, which is the loudest each style gets: the
+    /// point here is what the drawings are, and two styles that differ only in a
+    /// tint the colour setting has switched off are not two drawings.
+    @MainActor
+    func testTheSixChipPreviewsAreSixDifferentDrawings() throws {
+        var drawings: [(style: AppearanceSettings.MenuBarStyle, pixels: Data)] = []
+        for style in AppearanceSettings.MenuBarStyle.allCases {
+            let image = MenuBarStripRenderer.image(
+                entries: SampleService.stripEntries,
+                height: Tokens.Strip.chipPreviewHeight,
+                colour: .perBar,
+                warningThreshold: 0.95,
+                style: style,
+                coloursMarks: true
+            )
+            let bitmap = try XCTUnwrap(image.tiffRepresentation, "\(style.label) rasterised to nothing")
+            XCTAssertGreaterThan(
+                inkedPixels(in: image), 20,
+                "\(style.label)'s chip is blank, which reads as a broken preview rather than as a style"
+            )
+            drawings.append((style, bitmap))
+        }
+
+        for (index, drawing) in drawings.enumerated() {
+            for other in drawings[(index + 1)...] {
+                XCTAssertNotEqual(
+                    drawing.pixels, other.pixels,
+                    "\(drawing.style.label) and \(other.style.label) draw the same picture, so one of the two chips chooses nothing"
+                )
+            }
+        }
+    }
+
+    /// The pane builds on every style, and the sample beside it draws that style
+    /// rather than the one the strip shipped with.
+    ///
+    /// The second half is the risk the whole preview column exists for and the
+    /// worst way for this feature to fail: a chooser wired to the setting and a
+    /// preview that is not moves under the pointer as though it worked, so the
+    /// user goes looking at the menu bar for a bug that is in this window.
+    @MainActor
+    func testThePaneAndItsLivePreviewFollowTheChosenStyle() {
+        let appearance = settings("style-chooser-live")
+        var measured: Set<CGFloat> = []
+
+        for style in AppearanceSettings.MenuBarStyle.allCases {
+            appearance.menuBarStyle = style
+            let host = hosted(AppearancePane(appearance: appearance))
+            XCTAssertGreaterThan(
+                controls(in: host).count, 6,
+                "\(style.label) builds only \(controls(in: host).count) controls"
+            )
+
+            // `MenuBarSample`'s own call. The count is the live one here, unlike
+            // the chips above, because this is the row that shows what the two
+            // controls under it are doing.
+            let entries = MenuBarStripContent.entries(
+                from: SampleService.stripEntries,
+                limit: appearance.menuBarServiceCount
+            )
+            let box = StripStyleBox.box(for: appearance.menuBarStyle)
+            let size = fittingSize(
+                MenuBarStripView(
+                    entries: entries,
+                    style: box,
+                    height: CGFloat(appearance.menuBarGlyphHeight),
+                    colour: appearance.menuBarColour,
+                    warningThreshold: appearance.warningThreshold,
+                    coloursMarks: appearance.coloursBrandMarks
+                )
+            )
+            let drawn = StripFit.fit(
+                entries, limit: entries.count, style: box,
+                height: CGFloat(appearance.menuBarGlyphHeight)
+            )
+            XCTAssertEqual(
+                size.width,
+                StripFit.width(
+                    segments: drawn.count, style: box,
+                    height: CGFloat(appearance.menuBarGlyphHeight)
+                ),
+                accuracy: 0.5,
+                "\(style.label): the live preview is not the width its own style reserves"
+            )
+            measured.insert(size.width.rounded())
+        }
+
+        // More than one width, and deliberately not a count of them: `markOnly`
+        // and `microBars` measure identically on purpose, so pinning six distinct
+        // widths would assert the opposite of an invariant the strip holds. What
+        // one width for all six would mean is the thing worth catching — a preview
+        // drawing a style it was not handed.
+        XCTAssertGreaterThan(
+            measured.count, 1,
+            "the live preview measures the same at every style, so it is not reading the setting"
+        )
+    }
+
+    /// The "Services shown" stepper is disabled exactly when the chosen style
+    /// speaks for one service.
+    ///
+    /// Against `segmentCeiling` and never against a list of the two styles that
+    /// have one today: the ceiling is the number `StripFit` fits against, so
+    /// deriving the control's state from it is what stops the pane and the drawing
+    /// answering differently — and a seventh single-service style then arrives
+    /// with the control already correct.
+    @MainActor
+    func testTheServiceCountStepperIsDisabledExactlyWhenTheStyleShowsOneService() {
+        let appearance = settings("style-stepper")
+        for style in AppearanceSettings.MenuBarStyle.allCases {
+            appearance.menuBarStyle = style
+            let ceiling = StripStyleBox.box(for: style).segmentCeiling
+            XCTAssertEqual(
+                AppearancePane(appearance: appearance).fixesTheServiceCount,
+                ceiling == 1,
+                "\(style.label) draws at most \(ceiling) service(s) and the stepper disagrees about whether the count is the user's to set"
+            )
+
+            // And the same question asked of AppKit, because the predicate above
+            // cannot say whether anything is wired to it: a `disabled:` argument
+            // that was accepted and never applied would pass every assertion in
+            // this test and ship a live stepper over a dead number.
+            //
+            // Counted rather than indexed. The pane draws a second stepper —
+            // windows per service — whose presence depends on another setting
+            // entirely, so "how many are dead" survives a reordering of the form
+            // where "the last one" would quietly start measuring the wrong
+            // control.
+            let dead = steppers(in: hosted(AppearancePane(appearance: appearance)))
+                .filter { !$0.isEnabled }
+            XCTAssertEqual(
+                dead.count, ceiling == 1 ? 1 : 0,
+                "\(style.label): \(dead.count) stepper(s) greyed in a pane whose style draws at most \(ceiling) service(s)"
+            )
+        }
+    }
+
+    private func steppers(in view: NSView) -> [NSStepper] {
+        var found: [NSStepper] = []
+        if let stepper = view as? NSStepper { found.append(stepper) }
+        for subview in view.subviews { found.append(contentsOf: steppers(in: subview)) }
+        return found
+    }
+
+    /// And the count itself is left alone while the stepper is greyed, so a style
+    /// that shows one service is a style you can leave.
+    ///
+    /// The alternative — clamping the stored count to the ceiling on the way in —
+    /// costs the user the number they set: they try `Figures only`, go back to
+    /// `Mark + figure`, and their three services have become one with nothing
+    /// having said so.
+    @MainActor
+    func testChoosingASingleServiceStyleDoesNotRewriteTheStoredCount() {
+        let appearance = settings("style-count-kept")
+        appearance.menuBarServiceCount = 3
+        appearance.menuBarStyle = .worstOnly
+        XCTAssertEqual(appearance.menuBarServiceCount, 3, "the count was rewritten behind the greyed stepper")
+        appearance.menuBarStyle = .markAndFigure
+        XCTAssertEqual(appearance.menuBarServiceCount, 3, "the count did not come back when the style could carry it again")
+    }
+
+    /// Ink in a rasterised strip: pixels that are not fully transparent.
+    ///
+    /// The whole image, and a low floor. It answers one question — did this
+    /// preview draw anything at all — and an antialiased 13pt mark is mostly
+    /// partial coverage, so anything stricter would fail the styles that draw a
+    /// silhouette rather than a figure.
+    private func inkedPixels(in image: NSImage) -> Int {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else { return 0 }
+        var found = 0
+        for x in 0..<bitmap.pixelsWide {
+            for y in 0..<bitmap.pixelsHigh {
+                guard let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if colour.alphaComponent > 0.05 { found += 1 }
+            }
+        }
+        return found
+    }
+
     // MARK: - What the pane no longer has
 
     /// The gradient toggle is gone, and with it the last reader of

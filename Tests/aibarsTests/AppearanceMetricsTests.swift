@@ -325,32 +325,122 @@ final class AppearanceMetricsTests: XCTestCase {
         )
     }
 
-    /// THE INTERIM PIN. If you are here because this failed, read the next
-    /// paragraph before changing anything: this test is meant to be rewritten,
-    /// and only by the change that earns it.
+    /// THE FLIP. This replaces the interim pin that stood here — the one that
+    /// asserted every preset still named `coloursBrandMarks: true`,
+    /// `showsRowSparkline: false` and `.markAndFigure`, and said in its own doc
+    /// that it existed to be rewritten by the pass that shipped those drawings.
+    /// The styles and the trace exist, so this is that pass and this is the
+    /// rewrite: the same three fields, asserted at the values the presets were
+    /// always going to take.
     ///
-    /// All five presets deliberately name the same three values while the rest of
-    /// this work lands — brand marks on, no trace, mark plus figure — because a
-    /// preset is a promise about what the app looks like the instant it is
-    /// applied, and the styles and the sparkline do not exist yet. Minimal wants
-    /// `.figureOnly`, Monochrome wants `.markOnly` with its marks in grey, and
-    /// Dashboard wants the trace on; each of those flips belongs to the pass that
-    /// ships the drawing it names, so that the promise and the drawing arrive in
-    /// the same commit. Flipping one early is the shipped bug this pins against:
-    /// a preset that writes a style nothing switches on, or reserves a slot
-    /// nothing draws in.
+    /// Spelled preset by preset rather than looped, because what is pinned is a
+    /// promise per preset and a loop over all five could only say that some flip
+    /// happened somewhere. Each of the three is a summary made true: Monochrome
+    /// says greyscale marks and colour only above the warning, Minimal says a name
+    /// and a number, Dashboard says every window and every account.
     ///
-    /// So: rewrite this alongside the flip, in the pass that ships the drawing.
-    /// Do not relax it to make an early flip pass.
+    /// The two that stay conservative are asserted in the same test and not left
+    /// out of it, because a flip applied too widely is exactly as wrong as one
+    /// applied by halves. Comfortable is the shipped configuration — moving it
+    /// moves what a fresh install looks like — and Compact's whole claim is every
+    /// service on screen at once, which is the first claim a reserved trace on
+    /// every row spends.
     @MainActor
-    func testNoPresetNamesADrawingTheAppCannotYetMake() {
+    func testTheThreePresetsThatWereWaitingNameTheirDrawingNow() {
+        // Marks in grey, silhouettes in the bar, and the one colour this preset
+        // spends kept for the warning. `.monochrome` would have left the strip
+        // with identity and no reading at all, because under `.markOnly` the mark
+        // *is* the reading.
+        let monochrome = AppearanceSettings.Preset.monochrome.snapshot
+        XCTAssertFalse(monochrome.coloursBrandMarks, "Monochrome still carries brand hue on its live marks")
+        XCTAssertEqual(monochrome.menuBarStyle, .markOnly, "Monochrome still draws figures in the bar")
+        XCTAssertEqual(
+            monochrome.menuBarColour, .alertOnly,
+            "Monochrome draws marks that carry their reading as a tint, with the tint switched off"
+        )
+
+        // One service and no mark. The count was already one, sized for this.
+        let minimal = AppearanceSettings.Preset.minimal.snapshot
+        XCTAssertEqual(minimal.menuBarStyle, .figureOnly, "Minimal still draws a mark it never wanted")
+        XCTAssertEqual(
+            minimal.menuBarServiceCount, 1,
+            "Minimal asks for more services than `.figureOnly` will draw, so the stepper it disables would be lying about the stored value"
+        )
+
+        XCTAssertTrue(
+            AppearanceSettings.Preset.dashboard.snapshot.showsRowSparkline,
+            "Dashboard is the preset for someone who wants everything and it has no trace"
+        )
+
+        // And the two that were never waiting on anything.
+        for preset in [AppearanceSettings.Preset.comfortable, .compact] {
+            let snapshot = preset.snapshot
+            XCTAssertTrue(snapshot.coloursBrandMarks, "\(preset.id) took Monochrome's flip")
+            XCTAssertFalse(snapshot.showsRowSparkline, "\(preset.id) took Dashboard's flip")
+            XCTAssertEqual(snapshot.menuBarStyle, .markAndFigure, "\(preset.id) took a style that is not its own")
+        }
+    }
+
+    /// The flip, through the store and back, per preset.
+    ///
+    /// `testMatchingPresetRecognisesEachPresetExactly` above covers the same
+    /// ground for all five at once and is the general form; this is the specific
+    /// one, and it exists because the three flipped fields are the three that
+    /// arrived last. A field added to `Snapshot` and to `Preset.snapshot` but
+    /// missed in `apply`, `snapshot`, `Key` or `persistAll` unnames its preset
+    /// silently — the pane opens on Custom, every chip reads as a change away from
+    /// the state the user is already in, and the only visible symptom is a chip
+    /// that is not highlighted.
+    ///
+    /// Named fields rather than snapshot equality, so a failure says which of the
+    /// three did not survive rather than that thirty-two of them did not match.
+    @MainActor
+    func testTheFlippedFieldsSurviveApplyAndARelaunchPerPreset() {
+        for preset in AppearanceSettings.Preset.allCases {
+            let domain = "aibars.metrics-tests.flip.\(preset.rawValue)"
+            guard let store = UserDefaults(suiteName: domain) else {
+                XCTFail("could not open a scratch defaults domain")
+                return
+            }
+            store.removePersistentDomain(forName: domain)
+            AppearanceSettings(store: store).apply(preset)
+
+            let reloaded = AppearanceSettings(store: store)
+            XCTAssertEqual(
+                reloaded.coloursBrandMarks, preset.snapshot.coloursBrandMarks,
+                "\(preset.id) did not get its brand-mark switch back"
+            )
+            XCTAssertEqual(
+                reloaded.showsRowSparkline, preset.snapshot.showsRowSparkline,
+                "\(preset.id) did not get its trace back"
+            )
+            XCTAssertEqual(
+                reloaded.menuBarStyle, preset.snapshot.menuBarStyle,
+                "\(preset.id) did not get its strip style back"
+            )
+            XCTAssertEqual(
+                reloaded.matchingPreset, preset,
+                "\(preset.id) no longer names itself after a relaunch"
+            )
+        }
+    }
+
+    /// A preset may only name a strip style whose own ceiling can carry the count
+    /// it asks for, because the pane greys the stepper out at a ceiling of one and
+    /// a greyed stepper showing 3 while the bar draws 1 is a control lying about
+    /// the value behind it.
+    ///
+    /// Against `segmentCeiling` and not against a list of the two styles that
+    /// currently have one, so a seventh style that speaks for a single service is
+    /// covered the day it is added.
+    @MainActor
+    func testNoPresetAsksAStyleForMoreServicesThanItWillDraw() {
         for preset in AppearanceSettings.Preset.allCases {
             let snapshot = preset.snapshot
-            XCTAssertTrue(snapshot.coloursBrandMarks, "\(preset.id) turns brand marks off ahead of the pass that does")
-            XCTAssertFalse(snapshot.showsRowSparkline, "\(preset.id) reserves a trace slot the row does not draw yet")
-            XCTAssertEqual(
-                snapshot.menuBarStyle, .markAndFigure,
-                "\(preset.id) names a strip style the renderer does not switch on yet"
+            let ceiling = StripStyleBox.box(for: snapshot.menuBarStyle).segmentCeiling
+            XCTAssertLessThanOrEqual(
+                snapshot.menuBarServiceCount, ceiling,
+                "\(preset.id) asks \(snapshot.menuBarStyle.label) for \(snapshot.menuBarServiceCount) services and it draws at most \(ceiling)"
             )
         }
     }

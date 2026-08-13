@@ -377,21 +377,37 @@ public struct AppearancePane: View {
 
     // MARK: - Menu bar
 
-    /// The strip is one mark and one figure per service now, so the controls are
-    /// about the strip rather than about a mark: how many services it carries,
-    /// whether it spends colour, and how tall it is drawn.
+    /// The strip has six drawings now, so the section leads with which one and
+    /// then with what it is given: how many services it carries, whether it
+    /// spends colour, and how tall it is drawn.
     ///
     /// The label style and the highest/average pickers are gone with the four
     /// abstract bars they configured. Neither reaches the status item any more —
     /// the strip has no single aggregate figure to be the highest or the average
     /// of — and a control in this window that changes nothing on screen is worse
-    /// than no control at all.
+    /// than no control at all. `menuBarStyle` was that control for the whole of
+    /// the strip's first life: persisted, written by three presets, read by
+    /// nothing that draws. The chooser below is the other half of fixing it.
     private var menuBarSection: some View {
         Section {
+            styleChooser
             CountStepper(
                 title: "Services shown",
                 value: $appearance.menuBarServiceCount,
-                range: MenuBarStripContent.range
+                range: MenuBarStripContent.range,
+                // Two of the six speak for one service by construction — bare
+                // figures name nobody, and "closest to its cap" is one service by
+                // definition — so the stepper here would move a number nothing
+                // reads. Greying it is the honest answer; the stored count is left
+                // where it is, so choosing a style that draws three again restores
+                // what the user last asked for rather than the default.
+                //
+                // Off the style's own `segmentCeiling` and not off a list of the
+                // two cases that currently have one, because a seventh style that
+                // speaks for a single service should arrive with this already
+                // true.
+                disabled: fixesTheServiceCount,
+                help: "This style shows one service."
             )
             Picker("Strip colour", selection: $appearance.menuBarColour) {
                 ForEach(AppearanceSettings.MenuBarColour.allCases) { colour in
@@ -418,8 +434,106 @@ public struct AppearancePane: View {
         } header: {
             Text("Menu bar")
         } footer: {
-            SectionFooter("The strip carries one brand mark and its own figure per service, closest to its cap first, so you can tell which number is which. A service that reports a state rather than a quota — ChatGPT's subscription, Copilot's seat — shows a dash instead: an invented 0 reads as plenty left and an invented 100 reads as capped, and neither is a claim the service made. Monochrome leaves the strip a template image, so the menu bar gives it its own light, dark and vibrancy treatment; the other two spend colour and give that up.")
+            SectionFooter(menuBarFooter)
         }
+    }
+
+    /// One chip per drawing, each carrying the drawing.
+    ///
+    /// A label alone cannot be chosen between here. "Micro bars" and "Mark +
+    /// meter" are two arrangements of the same column and "Marks only" is the one
+    /// style whose reading is a tint, so the difference between them is exactly
+    /// the thing a word does not carry — which is why `SelectableChip` takes an
+    /// accessory at all, and why the accessory is the status item's own
+    /// `MenuBarStripView` rather than a picture of one.
+    ///
+    /// The previews take the live `menuBarColour`, `warningThreshold` and
+    /// `coloursBrandMarks`, so moving the colour picker moves all six at once and
+    /// the escape hatch's effect is visible where it is chosen. They do *not* take
+    /// the live height or the live service count: those two are set by controls
+    /// directly underneath, and six samples that resized under the tuner would
+    /// re-flow the grid the tuner sits in and walk the thumb out from under the
+    /// pointer. The fixed sample is three services at `Strip.chipPreviewHeight`;
+    /// the live height and the live count are what the "Preview" row below shows.
+    private var styleChooser: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: Tokens.Control.stripStyleChip), spacing: Tokens.Space.small)],
+            alignment: .leading,
+            spacing: Tokens.Space.small
+        ) {
+            ForEach(AppearanceSettings.MenuBarStyle.allCases) { style in
+                SelectableChip(
+                    title: style.label,
+                    isSelected: appearance.menuBarStyle == style,
+                    help: style.summary,
+                    accessory: {
+                        MenuBarStripView(
+                            entries: SampleService.stripEntries,
+                            style: StripStyleBox.box(for: style),
+                            height: Tokens.Strip.chipPreviewHeight,
+                            colour: appearance.menuBarColour,
+                            warningThreshold: appearance.warningThreshold,
+                            coloursMarks: appearance.coloursBrandMarks,
+                            // The one thing the chip cannot tell it. `StripInk`'s
+                            // neutral defaults to `.primary`, which is right on
+                            // the pane's own ground and wrong on the chosen chip:
+                            // that chip is filled with the *system* accent, which
+                            // is the user's to set, and a white mark on the pale
+                            // yellow somebody picked in System Settings is the
+                            // selected chip — the one they most need to read —
+                            // being the only illegible one. `Ink.onAccent` is the
+                            // same rule the chip's own title takes, asked here
+                            // because a `foregroundStyle` on the accessory's own
+                            // `Text` overrides anything inherited from above it.
+                            neutral: appearance.menuBarStyle == style
+                                ? Tokens.Ink.onAccent(.accentColor)
+                                : .primary
+                        )
+                        // The chip's reservation, stated rather than inherited.
+                        // The strip frames itself at `Strip.markBox`, which is
+                        // the height *rounded* — so the day `chipPreviewHeight`
+                        // stops being a whole number the six samples would each
+                        // be a half point taller than the row the grid laid out
+                        // for them. Six half points is a row of chips that no
+                        // longer lines up with the row beneath it.
+                        .frame(height: Tokens.Strip.chipPreviewHeight)
+                    },
+                    action: { appearance.menuBarStyle = style }
+                )
+            }
+        }
+        .padding(.vertical, Tokens.Space.tight)
+    }
+
+    /// Whether the chosen style speaks for exactly one service.
+    ///
+    /// Internal rather than private so its test can ask the same question the
+    /// stepper asks. What is worth pinning is not that two named styles disable
+    /// the control — it is that the pane derives the answer from the style's own
+    /// `segmentCeiling`, which is the number `StripFit` fits against, so the
+    /// control and the drawing cannot come to different conclusions.
+    var fixesTheServiceCount: Bool {
+        StripStyleBox.box(for: appearance.menuBarStyle).segmentCeiling == 1
+    }
+
+    /// The chosen style's own sentence first, then the three that are true of
+    /// every style.
+    ///
+    /// The style's summary leads for the same reason the preset's does at the top
+    /// of the pane: a grid of chips shows what the options look like and says
+    /// nothing about what each one costs, and the cost — width against identity
+    /// against a reading — is the whole of the choice being made here. What
+    /// follows it is the part that survived the styles: the ordering, the dash,
+    /// and the template. The sentence the footer used to open with — one mark and
+    /// one figure per service — was `.markAndFigure`'s description standing in for
+    /// all six, which is precisely what the summaries now say one at a time.
+    private var menuBarFooter: String {
+        [
+            appearance.menuBarStyle.summary,
+            "Whichever it draws, the service closest to its cap comes first, so the leftmost thing in the bar is the topmost row in the panel under it.",
+            "A service that reports a state rather than a quota — ChatGPT's subscription, Copilot's seat — shows a dash instead: an invented 0 reads as plenty left and an invented 100 reads as capped, and neither is a claim the service made.",
+            "Monochrome leaves the strip a template image, so the menu bar gives it its own light, dark and vibrancy treatment; the other two spend colour and give that up."
+        ].joined(separator: " ")
     }
 
     private var resetSection: some View {
@@ -575,6 +689,15 @@ private struct CountStepper: View {
     let title: String
     @Binding var value: Int
     let range: ClosedRange<Int>
+    /// Greyed out, still showing the stored count. A control that can be operated
+    /// and changes nothing is the worse of the two failures: it teaches the user
+    /// that this pane's controls are decorative. Defaulted, because the windows
+    /// stepper above has no style that can speak for it.
+    var disabled: Bool = false
+    /// Why it is greyed, for the pointer that lands on it wondering. Only the
+    /// disabled case has anything to say, so this is nil everywhere else rather
+    /// than a tooltip restating the label.
+    var help: String? = nil
 
     var body: some View {
         LabeledContent(title) {
@@ -587,6 +710,8 @@ private struct CountStepper: View {
                     .frame(width: Tokens.Control.readoutWidth, alignment: .trailing)
             }
         }
+        .disabled(disabled)
+        .help(help ?? "")
     }
 }
 
@@ -640,6 +765,17 @@ private struct RampStrip: View {
 /// The status item as configured: the strip itself, drawn by the same view the
 /// renderer rasterises for the menu bar.
 ///
+/// The live row; the chooser's chips are the fixed sample. Everything the bar is
+/// given is given here — the style, the count, the height, the colour and the
+/// brand-mark switch — because this is the only place in the window where all
+/// five are true at once, and a setting whose effect is only visible in the bar
+/// is a setting the user tunes by quitting the pane and looking up.
+///
+/// `coloursMarks` in particular, because leaving it out is the split the whole
+/// preview column exists to prevent: the strip in the bar would drop its brand
+/// hue and the preview beside the switch would keep it, so the switch would look
+/// broken exactly when it was working.
+///
 /// Its `neutral` is left at `.primary`, which is right here and wrong there: in
 /// a window `.primary` resolves against the window's appearance, while a coloured
 /// strip is baked into a non-template image where it would resolve once, to
@@ -654,9 +790,11 @@ private struct MenuBarSample: View {
                 from: SampleService.stripEntries,
                 limit: appearance.menuBarServiceCount
             ),
+            style: StripStyleBox.box(for: appearance.menuBarStyle),
             height: CGFloat(appearance.menuBarGlyphHeight),
             colour: appearance.menuBarColour,
-            warningThreshold: appearance.warningThreshold
+            warningThreshold: appearance.warningThreshold,
+            coloursMarks: appearance.coloursBrandMarks
         )
     }
 }

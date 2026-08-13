@@ -192,14 +192,14 @@ public final class AppearanceSettings: ObservableObject {
     /// value with it is a preference silently dropped on upgrade. The three new
     /// ones are spelled for what they draw.
     ///
-    /// The setting has been inert since the strip started drawing one mark and
-    /// one figure per service: declared, persisted, written by three presets and
-    /// compared by `matchingPreset`, and read by nothing that draws. Applying
-    /// Minimal wrote "Figures only" into the store and the strip carried on
-    /// drawing marks and figures. This pass fixes the vocabulary the store
-    /// speaks; each case becomes a type in `Sources/Views/StripStyles/` in the
-    /// pass that gives the renderer its styles, and only then do the presets
-    /// point at anything but `.markAndFigure` (see `Preset.snapshot`).
+    /// The setting was inert for the whole of the strip's first life: declared,
+    /// persisted, written by three presets and compared by `matchingPreset`, and
+    /// read by nothing that draws. Applying Minimal wrote "Figures only" into the
+    /// store and the strip carried on drawing marks and figures. Each case is a
+    /// type in `Sources/Views/StripStyles/` now, the Appearance pane draws a chip
+    /// per case with the drawing itself inside it, and the presets point at what
+    /// they always meant — Minimal at `.figureOnly`, Monochrome at `.markOnly`
+    /// (see `Preset.snapshot`).
     ///
     /// `showsGlyph` and `showsFigure` went with the rename, and not as a tidy-up.
     /// Two booleans span four combinations and there are six styles: `microBars`
@@ -1000,33 +1000,40 @@ public final class AppearanceSettings: ObservableObject {
             case .dashboard:
                 return "Every window, every account, every service, grouped by how close to the cap they are."
             case .monochrome:
-                // No longer "no brand tiles": no preset draws a brand colour any
-                // more, so the tiles are not what makes this one greyscale. What
-                // does is the ramp — every meter grey at every level, right up to
-                // the warning.
-                return "Greyscale rings on a bare list. Colour returns only above the warning threshold."
+                // The marks are back in the sentence, and they mean something
+                // different from the tiles the old wording promised: the plates
+                // are gone from every preset, so a mark's own hue is the last
+                // brand colour left in the panel and this is the one preset that
+                // turns it off. The ramp is the other half — every meter grey at
+                // every level, right up to the warning — and the warning is the
+                // one moment the whole preset spends a colour, in the panel and
+                // in the bar alike.
+                return "Greyscale rings and greyscale marks on a bare list. Colour returns only above the warning threshold."
             }
         }
 
         /// The values this preset stands for. A table, so applying a preset and
         /// recognising one can never drift apart.
         ///
-        /// Three of these values are deliberately the same in all five presets
-        /// while the rest of this work lands: `coloursBrandMarks: true`,
-        /// `showsRowSparkline: false`, `menuBarStyle: .markAndFigure`. That is
-        /// not indecision, it is the ordering rule. A preset is a promise about
-        /// what the app will look like the instant it is applied, so a preset may
-        /// only name a drawing that exists: `.figureOnly` and `.markOnly` are
-        /// vocabulary the renderer does not yet switch on, and a sparkline the
-        /// row does not yet reserve a slot for is a preset that changes nothing
-        /// and then changes the panel's height a release later. If this rollout
-        /// stops halfway — and any of them can — the presets are still honest,
-        /// because every one of them points at the strip the app actually draws
-        /// and at the row it actually measures. Minimal takes `.figureOnly`,
-        /// Monochrome takes `.markOnly` with `menuBarColour: .alertOnly`, and
-        /// Dashboard turns the sparkline on, in the pass that ships the styles
-        /// and the trace — the same pass, so the promise and the drawing arrive
-        /// together.
+        /// Three of these values were deliberately identical in all five presets
+        /// until this pass — `coloursBrandMarks: true`, `showsRowSparkline: false`,
+        /// `menuBarStyle: .markAndFigure` — and the rule that held them there is
+        /// worth keeping written down, because it is the rule the next feature
+        /// will be governed by. A preset is a promise about what the app will look
+        /// like the instant it is applied, so a preset may only name a drawing
+        /// that exists. Naming `.figureOnly` while the renderer drew one strip
+        /// would have written a preference nothing read; reserving a trace before
+        /// the row drew one would have changed nothing and then changed the
+        /// panel's height a release later. So each flip waited for the pass that
+        /// shipped its drawing, and this is that pass: the styles are six types in
+        /// `Sources/Views/StripStyles/`, the trace is `RowSparkline`, and the
+        /// three promises are kept in the same commit as the chooser that lets a
+        /// user make them by hand.
+        ///
+        /// Two presets are untouched, and that is a decision rather than an
+        /// omission. Comfortable *is* `Snapshot()` — moving it moves what a fresh
+        /// install looks like — and Compact's entire claim is every service on
+        /// screen at once, which is the first claim a reserved trace spends.
         public var snapshot: Snapshot {
             switch self {
             case .comfortable:
@@ -1037,9 +1044,10 @@ public final class AppearanceSettings: ObservableObject {
                 // ships at cozy with a 4pt bar, and an upgrade that loosened
                 // every row on its own would be this refactor changing the app
                 // rather than reorganising it. The three values the other four
-                // presets now spell out are the defaults as well, so there is
-                // nothing to add here: the conservative value *is* the shipped
-                // one, which is what makes it conservative.
+                // presets spell out are the defaults as well, and this is the
+                // preset that cannot flip any of them: it is the shipped look by
+                // definition, so a flip here is not a preset changing, it is the
+                // app changing under everyone who never picked one.
                 return Snapshot()
             case .compact:
                 return Snapshot(
@@ -1080,14 +1088,16 @@ public final class AppearanceSettings: ObservableObject {
                     cautionThreshold: 0.80, warningThreshold: 0.95,
                     sortOrder: .alphabetical, grouping: .flat, disconnectedServices: .hidden,
                     showsAllAccounts: false, hidesQuotalessServices: true, showsHeaderSummary: false,
-                    // One service, and it stays one when the style flips. This
-                    // is the preset that will drop the marks, and three bare
-                    // figures in a row have nothing to say which service each
-                    // belongs to — the fault the per-service marks were added to
-                    // fix. The style is `.markAndFigure` in the interim rather
-                    // than the `.figureOnly` this preset wants, because that
-                    // drawing does not exist yet; see `snapshot`'s doc above.
-                    menuBarStyle: .markAndFigure, menuBarValue: .highest,
+                    // One number in the bar, and the count that was always sized
+                    // for it. Three bare figures side by side have nothing to say
+                    // which service each belongs to — the fault the per-service
+                    // marks were added to fix — so `.figureOnly` carries a ceiling
+                    // of one in the style itself, and this preset's count of one
+                    // is the same statement made from the other end. They agree
+                    // rather than one clamping the other, which is what lets the
+                    // pane grey the stepper out here without rewriting the number
+                    // behind it.
+                    menuBarStyle: .figureOnly, menuBarValue: .highest,
                     menuBarServiceCount: 1, menuBarColour: .alertOnly, menuBarGlyphHeight: 12
                 )
             case .dashboard:
@@ -1102,10 +1112,15 @@ public final class AppearanceSettings: ObservableObject {
                     panelWidth: 460, rowBackground: .always,
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: true, showsAccountLabels: true,
-                    // The one preset that will turn the trace on — it is the
-                    // preset for someone who wants everything — and the one that
-                    // cannot until there is a trace to turn on.
-                    showsRowSparkline: false,
+                    // The one preset that turns the trace on, because it is the
+                    // one for someone who wants everything and the only one that
+                    // can afford it. The cost is the 24pt a connected row the
+                    // default's own note totals up, and a little more here — this
+                    // is the comfortable density at 105% type, where the trace is
+                    // 19pt before its pitch. On a 460pt panel with every window
+                    // and every account already expanded that is in keeping;
+                    // anywhere else it is the preset's own claim being spent.
+                    showsRowSparkline: true,
                     secondaryWindows: .expanded, secondaryWindowLimit: 6, rowActions: .always,
                     meterStyle: .bar, meterThickness: 5, colorRamp: .usage,
                     cautionThreshold: 0.75, warningThreshold: 0.92,
@@ -1118,18 +1133,24 @@ public final class AppearanceSettings: ObservableObject {
                 return Snapshot(
                     density: .cozy, textScale: 1.0,
                     logoStyle: .plain, logoSize: 18,
-                    // The one place the interim costs something, so it is written
-                    // down rather than left to be noticed: this preset wants
-                    // `false` and carries `true` until the styles land, so until
-                    // then a preset named Monochrome draws brand hue on its live
-                    // marks. Deferred rather than taken now for the same reason
-                    // as the strip style — the flip and the summary that promises
-                    // it ("Greyscale rings and greyscale marks") have to arrive
-                    // together — and because writing `false` today drops every
-                    // existing Monochrome user to "Custom" the moment they
-                    // launch, their unwritten key reading `true` against a preset
-                    // that says `false`.
-                    coloursBrandMarks: true,
+                    // The last brand colour in the panel, off. Everything else
+                    // here was already greyscale — the ramp, the rings, the plate
+                    // that is gone from every preset — and a mark in Anthropic's
+                    // orange was the one hue left standing in a preset named for
+                    // having none. The summary above promises it in the same
+                    // commit, which is the whole reason this waited: a preset that
+                    // says "greyscale marks" and draws orange ones is worse than
+                    // one that never claimed it.
+                    //
+                    // The cost, stated because somebody will see it and file it:
+                    // an install already on Monochrome has no `coloursBrandMarks`
+                    // in its store, so it reads the default `true`, and the moment
+                    // this ships their pane says Custom until they click the chip
+                    // again. That is the honest failure — the alternative is
+                    // adopting the flip into everyone's store from
+                    // `adoptCurrentLook`, which would reach every user who never
+                    // chose this preset.
+                    coloursBrandMarks: false,
                     panelWidth: 356, rowBackground: .plain,
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: true,
@@ -1141,16 +1162,23 @@ public final class AppearanceSettings: ObservableObject {
                     cautionThreshold: 0.60, warningThreshold: 0.95,
                     sortOrder: .manual, grouping: .status, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
-                    // Two, and the count is sized for the style this preset will
-                    // take rather than the one it is holding: under `.markOnly`
-                    // a third undifferentiated mark adds width without adding a
-                    // reading. `.markAndFigure` in the interim, for the reason on
-                    // `snapshot` above; `menuBarColour` moves to `.alertOnly` in
-                    // the same pass, because a monochrome strip drawing marks
-                    // that carry their reading as a tint would have identity and
-                    // no reading at all.
-                    menuBarStyle: .markAndFigure, menuBarValue: .highest,
-                    menuBarServiceCount: 2, menuBarColour: .monochrome, menuBarGlyphHeight: 13
+                    // Silhouettes, two of them, and the one colour setting this
+                    // preset is allowed. The count was already sized for this
+                    // style: under `.markOnly` a third undifferentiated mark adds
+                    // width without adding a reading.
+                    //
+                    // `.alertOnly` rather than the `.monochrome` this preset used
+                    // to carry, and it is not a softening of the preset. Under
+                    // `.markOnly` the mark *is* the reading — there is no figure
+                    // and no column, so the tint is the only channel left — and
+                    // `.monochrome` would have left this strip with identity and
+                    // no reading at all. Below the warning it is still a template
+                    // and still takes the menu bar's own light, dark and vibrancy
+                    // treatment, which is the case that is true almost all of the
+                    // time; above it the strip spends a colour exactly where the
+                    // panel beside it does.
+                    menuBarStyle: .markOnly, menuBarValue: .highest,
+                    menuBarServiceCount: 2, menuBarColour: .alertOnly, menuBarGlyphHeight: 13
                 )
             }
         }
@@ -1500,6 +1528,15 @@ public final class AppearanceSettings: ObservableObject {
     /// this pass makes, not a regression to migrate away. A bump would clear every
     /// user's density, panel width, thresholds and custom order to correct
     /// precisely nothing.
+    ///
+    /// Still 3 for the three preset flips as well, and this is the one that looks
+    /// most like a reason to bump. A preset table is not a default: nobody's store
+    /// holds "Monochrome", it holds the thirty-two values that happened to equal
+    /// Monochrome's, so an install already on it reads `coloursBrandMarks: true`
+    /// and shows as Custom until the chip is clicked again. Bumping to close that
+    /// gap would wipe the appearance domain of every user who never chose the
+    /// preset in order to re-select it for the few who did — a change to everyone's
+    /// app to correct one unhighlighted chip.
     private static let lookGeneration = 3
 
     /// Takes an existing install to the current look, once per generation.
