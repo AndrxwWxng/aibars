@@ -299,6 +299,136 @@ final class AppearancePaneTests: XCTestCase {
 
     // MARK: - What agreeing on a height does not say
 
+    /// The chips are *inside* the sample's caption, which is the whole of defect
+    /// 8 and the one thing no measurement of the rendered row can see.
+    ///
+    /// The sample built its caption with no chips in it and put the chip run
+    /// beside it in an `HStack` of its own. `MetricCaption` handed no chips falls
+    /// through to its empty-rail branch and reserves `secondaryRail` at its
+    /// trailing edge, so the preview spent `sentence + 8 + rail + 8 + chips` on a
+    /// line the panel spends `sentence + 8 + chips` on: 37pt less sentence at the
+    /// shipped cozy metrics, and not one point of height. Every height case in
+    /// this file passed straight through it, and the run's trailing edge is the
+    /// text column's edge in both arrangements, so the rendered comparison below
+    /// cannot see it either unless a candidate happens to fall between the two
+    /// widths. This can, because it asks the structural question directly.
+    ///
+    /// The rendered half is the second assertion: the caption's own ideal width
+    /// has to be at least the width of the run it is supposed to be carrying. A
+    /// caption whose trailing half is a 37pt empty rail cannot be as wide as a
+    /// 260pt chip run, whatever the panel is set to.
+    @MainActor
+    func testTheSampleRowsCaptionCarriesItsChipsRatherThanSittingBesideThem() {
+        let appearance = settings("sample-row-caption-chips")
+        appearance.secondaryWindows = .chips
+        let sample = SampleService.claude
+
+        for width in [300.0, 356.0, 420.0, 520.0] {
+            appearance.panelWidth = width
+            let row = SampleRow(appearance: appearance, service: sample)
+            let caption = row.primaryCaption
+
+            XCTAssertFalse(
+                caption.chips.isEmpty,
+                "\(Int(width))pt: the sample's caption carries no chips, so it reserves an empty "
+                + "figure rail at its trailing edge and the panel's caption does not"
+            )
+            // Every window the service reports is either named by a chip or
+            // counted in the "+N": the line silently beginning at the front of
+            // the list is what stopped a reader telling a service with two caps
+            // from one with six.
+            XCTAssertEqual(
+                caption.chips.count + caption.overflow, sample.secondary.count,
+                "\(Int(width))pt: \(sample.secondary.count) windows became "
+                + "\(caption.chips.count) chips and a +\(caption.overflow)"
+            )
+
+            let run = fittingSize(
+                SecondaryChipRun(
+                    chips: caption.chips,
+                    overflow: caption.overflow,
+                    accent: sample.accent,
+                    appearance: appearance
+                )
+            ).width
+            XCTAssertGreaterThanOrEqual(
+                fittingSize(caption).width, run,
+                "\(Int(width))pt: the caption's ideal is narrower than the \(run)pt run it claims to carry"
+            )
+        }
+    }
+
+    /// The caption line as the two rows actually draw it, compared column by
+    /// column.
+    ///
+    /// Both rows are handed the same service, so a column with ink in one and
+    /// none in the other is the two rows fitting different text on the line — the
+    /// only trace a width difference on this line ever leaves, and the one that
+    /// appears the moment a truncation candidate falls between the two widths.
+    /// The case above is what pins the arrangement; this is what notices any
+    /// other way the two lines can come apart.
+    ///
+    /// `.plain` backgrounds, because the two rows get their cards from different
+    /// places — the panel's from `RowButtonStyle`, the sample's from its own
+    /// `background` — and a filled card would be compared instead of the text on
+    /// it. What is being asserted is the caption, and the card is another test's.
+    @MainActor
+    func testTheSampleRowDrawsTheSameCaptionLineAsARealRow() throws {
+        let appearance = settings("sample-row-caption")
+        appearance.rowBackground = .plain
+        let sample = SampleService.claude
+
+        for width in [300.0, 356.0, 420.0, 520.0] {
+            appearance.panelWidth = width
+            let previewed = try captionInk(
+                SampleRow(appearance: appearance, service: sample), appearance: appearance
+            )
+            let real = try captionInk(realRow(appearance, from: sample), appearance: appearance)
+
+            XCTAssertEqual(
+                previewed.count, real.count,
+                "\(Int(width))pt: the preview's caption band is \(previewed.count) columns and the panel's \(real.count)"
+            )
+            let disagreed = zip(previewed, real).filter { $0 != $1 }.count
+            XCTAssertLessThanOrEqual(
+                disagreed, 4,
+                "\(Int(width))pt: \(disagreed) columns of the caption line differ between the preview and the "
+                + "panel — one of them is fitting a sentence the other is not"
+            )
+        }
+    }
+
+    /// Which columns of a row's caption line have ink in them.
+    ///
+    /// The band starts under the title line — held at the action buttons' height,
+    /// which is taller than either type size at every density — and runs to the
+    /// bottom of the row, so it covers the meter slot and the line under it and
+    /// nothing above them. Alpha rather than colour, so a palette change cannot
+    /// make this pass or fail.
+    @MainActor
+    private func captionInk(_ row: some View, appearance: AppearanceSettings) throws -> [Bool] {
+        let width = CGFloat(appearance.panelWidth)
+        let host = NSHostingView(rootView: AnyView(row.frame(width: width)))
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame = CGRect(origin: .zero, size: CGSize(width: width, height: host.fittingSize.height))
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(mode: .default, before: Date())
+
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+
+        let scale = CGFloat(rep.pixelsHigh) / host.bounds.height
+        let top = Int(((appearance.metrics.rowVerticalPadding + Tokens.Control.rowIconButton) * scale)
+            .rounded(.down))
+        var inked = [Bool](repeating: false, count: rep.pixelsWide)
+        for y in stride(from: max(0, top), to: rep.pixelsHigh, by: 1) {
+            for x in 0..<rep.pixelsWide where !inked[x] {
+                if rep.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.15 { inked[x] = true }
+            }
+        }
+        return inked
+    }
+
     /// The card's corner, which the height alone does not settle.
     ///
     /// A row draws its card at `min(Radius.row, height / 3)` rather than at

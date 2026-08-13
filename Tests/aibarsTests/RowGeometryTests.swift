@@ -521,38 +521,142 @@ final class RowGeometryTests: XCTestCase {
 
     // MARK: - chipLimit
 
+    /// The chips' share of the line, written twice — as the arithmetic and as the
+    /// numbers it comes to at the shipped type size.
+    ///
+    /// This is the case that would have caught the shipped overflow. The estimate
+    /// modelled a chip nobody draws: 12pt of capsule padding, a 5pt dot, two
+    /// inner gaps, a 4-cell label and a 7-cell reading. What replaces it is a
+    /// count and a cap that divide one residue, so the two cannot come apart —
+    /// and the residue is spelled out here from the tokens rather than asked of
+    /// the subject, which is the only way an assertion can disagree with it.
+    func testTheChipsDivideTheLineTheyRideOn() {
+        let size: CGFloat = 11
+        let column: CGFloat = 520
+        // What the trailing half of the line has: the column, less the gap to the
+        // sentence, less the cell the "+N" takes. 520 − 8 − (21 + 8) = 483.
+        let residue = column - Tokens.Space.medium - (Tokens.figureWidth(size, digits: 3) + Tokens.Space.medium)
+        XCTAssertEqual(residue, 483)
+
+        // One chip at full stretch: an eight-cell label, the chip's inner gap and
+        // a nine-cell reading. 55 + 4 + 62 = 121, and with the gap to the next
+        // chip, 129 — which is what the count divides by. 483 / 129 = 3.74.
+        let stretch = Tokens.figureWidth(size, digits: 8)
+            + Tokens.Space.snug
+            + Tokens.figureWidth(size, digits: 9)
+        XCTAssertEqual(stretch, 121)
+        let limit = RowGeometry.chipLimit(textColumnWidth: column, chipSize: size, carriesSpend: false)
+        XCTAssertEqual(limit, Int(residue / (stretch + Tokens.Space.medium)))
+        XCTAssertEqual(limit, 3)
+
+        // And each of the three may draw its share of it: (483 − 2 × 8) / 3.
+        let cap = RowGeometry.chipCap(textColumnWidth: column, chipSize: size, carriesSpend: false)
+        XCTAssertEqual(cap, (residue - CGFloat(limit - 1) * Tokens.Space.medium) / CGFloat(limit))
+        XCTAssertEqual(cap, 467.0 / 3.0, accuracy: 0.001)
+        XCTAssertGreaterThan(cap, stretch, "a wide line still cut its chips at the label cap")
+
+        // The reading never needs more than its nine cells, so every point above
+        // them is the label's — which is what lets a long window name draw whole
+        // on a panel that has the room for it.
+        let runs = RowGeometry.chipRuns(cap: cap, chipSize: size)
+        XCTAssertEqual(runs.reading, Tokens.figureWidth(size, digits: 9))
+        XCTAssertGreaterThan(runs.label, Tokens.figureWidth(size, digits: 8))
+        XCTAssertEqual(runs.label + Tokens.Space.snug + runs.reading, cap, accuracy: 0.001)
+    }
+
+    /// The other end of the same arithmetic: a line too narrow for one whole chip
+    /// cuts the chip rather than the count, since the count has nowhere lower to
+    /// go. Below one stretch the cap *is* what the line has left.
+    func testATooNarrowLineCutsTheChipRatherThanTheCount() {
+        let size: CGFloat = 11
+        let stretch = Tokens.figureWidth(size, digits: 8)
+            + Tokens.Space.snug
+            + Tokens.figureWidth(size, digits: 9)
+        // 300pt of panel behind a 40pt logo, with a spend at the head of the
+        // caption: 300 − 24 gutters − 50 leading column = 226 of text column, and
+        // the sentence gap, the "+N" cell and the spend take 8 + 29 + 87 of it.
+        let narrow: CGFloat = 226
+        let cap = RowGeometry.chipCap(textColumnWidth: narrow, chipSize: size, carriesSpend: true)
+        XCTAssertEqual(RowGeometry.chipLimit(textColumnWidth: narrow, chipSize: size, carriesSpend: true), 1)
+        XCTAssertEqual(cap, 102)
+        XCTAssertLessThan(cap, stretch, "a 226pt column still offered a chip its full stretch")
+
+        // The reading is served first and the label takes what is left, which is
+        // the chip's own rule: a clipped figure is a different quantity, a
+        // clipped label is still the window's family.
+        let runs = RowGeometry.chipRuns(cap: cap, chipSize: size)
+        XCTAssertEqual(runs.reading, Tokens.figureWidth(size, digits: 9))
+        XCTAssertEqual(runs.label, cap - Tokens.Space.snug - runs.reading)
+    }
+
     /// A wider line never holds fewer chips. Swept rather than spot-checked,
     /// because the fault this guards against is an off-by-one at one particular
     /// width rather than a wrong slope.
     func testChipLimitIsMonotonicInTheWidthAvailable() {
-        for captionSize in [CGFloat(9), 10, 11, 14] {
-            var previous = 0
+        for chipSize in [CGFloat(10), 11, 12, 15.6] {
+            for carriesSpend in [false, true] {
+                var previous = 0
+                for width in stride(from: CGFloat(0), through: 600, by: 5) {
+                    let limit = RowGeometry.chipLimit(
+                        textColumnWidth: width, chipSize: chipSize, carriesSpend: carriesSpend
+                    )
+                    XCTAssertGreaterThanOrEqual(
+                        limit, previous,
+                        "\(width)pt at \(chipSize)pt type held fewer chips than \(width - 5)pt did"
+                    )
+                    previous = limit
+                }
+            }
+        }
+    }
+
+    /// A spend at the head of the caption is width the chips cannot have, so the
+    /// same line never holds more of them with one than without.
+    func testASpendOnTheLineNeverBuysAChip() {
+        for chipSize in [CGFloat(10), 11, 12, 15.6] {
             for width in stride(from: CGFloat(0), through: 600, by: 5) {
-                let limit = RowGeometry.chipLimit(textColumnWidth: width, captionSize: captionSize)
-                XCTAssertGreaterThanOrEqual(
-                    limit, previous,
-                    "\(width)pt at caption \(captionSize) held fewer chips than \(width - 5)pt did"
+                let free = RowGeometry.chipLimit(
+                    textColumnWidth: width, chipSize: chipSize, carriesSpend: false
                 )
-                previous = limit
+                let paid = RowGeometry.chipLimit(
+                    textColumnWidth: width, chipSize: chipSize, carriesSpend: true
+                )
+                XCTAssertGreaterThanOrEqual(
+                    free, paid,
+                    "\(width)pt at \(chipSize)pt fitted \(paid) chips beside a spend and \(free) without"
+                )
             }
         }
     }
 
     /// Never zero and never negative, whatever it is handed. A line of no chips
     /// reports nothing at all about a service with several windows, which is
-    /// strictly worse than one chip that can be read.
+    /// strictly worse than one chip that can be read — and that floor is safe
+    /// because `chipCap` floors with it rather than handing the one chip a width
+    /// the line does not have.
     func testChipLimitIsNeverLessThanOne() {
         let widths: [CGFloat] = [
             -.greatestFiniteMagnitude, -600, -1, 0, 0.5, 1, 300, 520, 10_000,
             .nan, .infinity, -.infinity
         ]
         for width in widths {
-            for captionSize in [CGFloat(-5), 0, .nan, .infinity, 9, 10, 40] {
-                let limit = RowGeometry.chipLimit(textColumnWidth: width, captionSize: captionSize)
-                XCTAssertGreaterThanOrEqual(
-                    limit, 1,
-                    "chipLimit(\(width), \(captionSize)) came back with \(limit)"
-                )
+            for chipSize in [CGFloat(-5), 0, .nan, .infinity, 9, 10, 40] {
+                for carriesSpend in [false, true] {
+                    let limit = RowGeometry.chipLimit(
+                        textColumnWidth: width, chipSize: chipSize, carriesSpend: carriesSpend
+                    )
+                    XCTAssertGreaterThanOrEqual(
+                        limit, 1,
+                        "chipLimit(\(width), \(chipSize), spend: \(carriesSpend)) came back with \(limit)"
+                    )
+                    let cap = RowGeometry.chipCap(
+                        textColumnWidth: width, chipSize: chipSize, carriesSpend: carriesSpend
+                    )
+                    XCTAssertTrue(cap.isFinite && cap >= 0, "chipCap(\(width), \(chipSize)) is \(cap)")
+                    let runs = RowGeometry.chipRuns(cap: cap, chipSize: chipSize)
+                    XCTAssertTrue(runs.label >= 0 && runs.reading >= 0)
+                    XCTAssertTrue(runs.label.isFinite && runs.reading.isFinite)
+                }
             }
         }
     }
@@ -562,44 +666,65 @@ final class RowGeometryTests: XCTestCase {
     /// own width or the division finds room for one more than the line holds.
     ///
     /// The chip's width is private, so it is read off the step from one chip to
-    /// two rather than spelled — that keeps this true when the chip's furniture
-    /// changes, and it is the second step that has to be measured because the
-    /// floor at one chip hides the first.
+    /// two rather than spelled — that keeps this true when the chip's parts
+    /// change, and it is the second step that has to be measured because the
+    /// floor at one chip hides the first. The steps are measured from that
+    /// boundary rather than from zero, because the line spends a fixed amount
+    /// before the first chip — the gap to the sentence and the "+N" cell — and it
+    /// is the *step* between counts that is one chip's width.
     func testChipLimitStepsUpOnlyOnceTheChipActuallyFits() throws {
-        let captionSize: CGFloat = 10
-        var boundary: CGFloat?
-        for width in stride(from: CGFloat(1), through: 1000, by: 1)
-        where RowGeometry.chipLimit(textColumnWidth: width, captionSize: captionSize) == 2 {
-            boundary = width
-            break
-        }
-        // Two chips exactly, so half of it is one chip and its trailing gap.
-        let chip = try XCTUnwrap(boundary, "no width under 1000pt ever held a second chip") / 2
-
+        let chipSize: CGFloat = 10
         func limit(_ width: CGFloat) -> Int {
-            RowGeometry.chipLimit(textColumnWidth: width, captionSize: captionSize)
+            RowGeometry.chipLimit(textColumnWidth: width, chipSize: chipSize, carriesSpend: false)
         }
+
+        var second: CGFloat?
+        var third: CGFloat?
+        for width in stride(from: CGFloat(1), through: 1000, by: 1) {
+            if second == nil, limit(width) == 2 { second = width }
+            if limit(width) == 3 { third = width; break }
+        }
+        let twoAt = try XCTUnwrap(second, "no width under 1000pt ever held a second chip")
+        let threeAt = try XCTUnwrap(third, "no width under 1000pt ever held a third chip")
+        // One chip and the gap to the next, which is what one more chip costs.
+        let chip = threeAt - twoAt
+        // The step, written out: an eight-cell label, the chip's inner gap, a
+        // nine-cell reading, and the gap to the chip after it. 50 + 4 + 56 + 8 at
+        // a 10pt chip. Measured off the sweep rather than asked of the subject,
+        // so the two have to agree about what a chip costs.
+        XCTAssertEqual(
+            chip,
+            Tokens.figureWidth(chipSize, digits: 8)
+                + Tokens.Space.snug
+                + Tokens.figureWidth(chipSize, digits: 9)
+                + Tokens.Space.medium,
+            "a chip steps the count every \(chip)pt"
+        )
+
         // The floor: a line too narrow for even one chip still reports one,
         // because a chip that has to truncate says more than no chip at all.
-        XCTAssertEqual(limit(chip - 1), 1)
-        for chips in 1...4 {
-            let n = CGFloat(chips)
-            XCTAssertEqual(limit(n * chip), chips, "\(n * chip)pt did not hold exactly \(chips) chips")
+        XCTAssertEqual(limit(twoAt - chip), 1)
+        XCTAssertEqual(limit(1), 1)
+        for chips in 2...5 {
+            let at = twoAt + CGFloat(chips - 2) * chip
+            XCTAssertEqual(limit(at), chips, "\(at)pt did not hold exactly \(chips) chips")
             XCTAssertEqual(
-                limit((n + 1) * chip - 1), chips,
+                limit(at + chip - 1), chips,
                 "a point short of \(chips + 1) chips reported more than \(chips)"
             )
         }
     }
 
-    /// A larger caption makes a wider chip, so the same line holds no more of
-    /// them. This is the estimate erring generous, which drops a chip rather
-    /// than truncating one.
-    func testABiggerCaptionNeverFitsMoreChips() {
+    /// A larger type size makes a wider chip, so the same line holds no more of
+    /// them.
+    func testABiggerChipNeverFitsMoreOfThem() {
         for width in stride(from: CGFloat(100), through: 500, by: 50) {
-            let small = RowGeometry.chipLimit(textColumnWidth: width, captionSize: 9)
-            let large = RowGeometry.chipLimit(textColumnWidth: width, captionSize: 14)
-            XCTAssertGreaterThanOrEqual(small, large, "a 14pt caption fitted more chips into \(width)pt than a 9pt one")
+            let small = RowGeometry.chipLimit(textColumnWidth: width, chipSize: 10, carriesSpend: false)
+            let large = RowGeometry.chipLimit(textColumnWidth: width, chipSize: 15.6, carriesSpend: false)
+            XCTAssertGreaterThanOrEqual(
+                small, large,
+                "a 15.6pt chip fitted more into \(width)pt than a 10pt one"
+            )
         }
     }
 
@@ -721,7 +846,11 @@ final class RowGeometryTests: XCTestCase {
         XCTAssertTrue(row.textColumnWidth.isFinite)
         XCTAssertGreaterThan(row.textColumnWidth, 0)
         XCTAssertGreaterThanOrEqual(
-            RowGeometry.chipLimit(textColumnWidth: row.textColumnWidth, captionSize: appearance.metrics.captionSize),
+            RowGeometry.chipLimit(
+                textColumnWidth: row.textColumnWidth,
+                chipSize: appearance.metrics.detailSize,
+                carriesSpend: true
+            ),
             1
         )
     }
@@ -737,7 +866,10 @@ final class RowGeometryTests: XCTestCase {
         let row = geometry(appearance, lines: [.meter, .window])
         XCTAssertEqual(row.textColumnWidth, 0)
         XCTAssertTrue(row.height.isFinite)
-        XCTAssertEqual(RowGeometry.chipLimit(textColumnWidth: row.textColumnWidth, captionSize: 10), 1)
+        XCTAssertEqual(
+            RowGeometry.chipLimit(textColumnWidth: row.textColumnWidth, chipSize: 10, carriesSpend: false),
+            1
+        )
     }
 
     // MARK: - Fixtures

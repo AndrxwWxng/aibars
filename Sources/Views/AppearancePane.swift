@@ -35,9 +35,13 @@ public struct AppearancePane: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     /// A stored dependency rather than an `@EnvironmentObject`, like every other
-    /// appearance-driven view here: the settings window is an `NSHostingView`
-    /// built with only `AppState` in its environment, and a missing environment
-    /// object is a crash on the way in, not a fallback.
+    /// appearance-driven view here: the pane is built directly by its tests with
+    /// its dependencies injected and no environment at all, and a stored
+    /// dependency is what makes that possible. It was justified here by a claim
+    /// about the settings window — that it hosts this pane "with only `AppState`
+    /// in its environment" — which `SettingsWindowController.hostingView`
+    /// contradicts: it installs `AppearanceSettings.shared` alongside `state` on
+    /// both construction paths, and says so.
     ///
     /// Resolved in the body rather than as a default argument — a default
     /// argument is evaluated at the call site, and `shared` is main-actor
@@ -393,7 +397,14 @@ public struct AppearancePane: View {
                 title: "Strip height",
                 value: $appearance.menuBarGlyphHeight,
                 range: 10...16,
-                step: 0.5,
+                // Whole points, unlike the two panel tuners above it. This one
+                // ends up in a bitmap: `MenuBarStripRenderer` rounds the strip's
+                // measured *width* up and then hands the height through raw to
+                // `NSImage(size:)`, so a 13.5 renders on a half-pixel grid at 1×
+                // and the tabular figures in it come back soft. Half a point of a
+                // 10–16pt mark is not a distinction anyone can see; a smeared
+                // figure in the menu bar is.
+                step: 1,
                 readout: pointReadout
             )
             LabeledContent("Preview") {
@@ -855,9 +866,16 @@ struct SampleRow: View {
     ///
     /// `.forecast` never. The preview has no history behind it, and a pace line in
     /// a preview would be the app showing a projection it never made.
+    ///
+    /// `.window` off the same settings-only predicate the panel's row uses, and
+    /// not off "does this caption happen to have anything in it". The sample is
+    /// always reporting, so the two agreed for the sample — but the panel's row
+    /// reserves the line in states the sample cannot be in, and a preview that
+    /// answers a question a different way than the thing it previews is a preview
+    /// that will eventually answer it differently.
     private var lines: RowGeometry.Lines {
         var drawn: RowGeometry.Lines = [.meter]
-        if primaryCaption.hasContent { drawn.insert(.window) }
+        if reservesWindowLine { drawn.insert(.window) }
         return drawn
     }
 
@@ -921,8 +939,12 @@ struct SampleRow: View {
         // Every style but the ring draws its meter in the text column, and that
         // slot is occupied on every row.
         guard appearance.meterStyle == .ring else { return true }
-        if primaryCaption.hasContent { return true }
-        return appearance.secondaryWindows != .hidden && !service.secondary.isEmpty
+        // Under the ring the window line is all the text column has, and whether
+        // there is one is `reservesWindowLine` — the same question `lines` above
+        // asks, so the alignment and the reserved height cannot answer it
+        // differently.
+        if reservesWindowLine { return true }
+        return appearance.secondaryWindows == .expanded && !service.secondary.isEmpty
     }
 
     /// The mark, and the dial when the meter is one.
@@ -1186,33 +1208,73 @@ struct SampleRow: View {
         }
     }
 
-    /// The line under the meter, and the trailing half of it.
+    /// The line under the meter.
     ///
-    /// What the window is and when it comes back reads from the left; the further
-    /// windows, when they are set to chips, sit at the trailing edge of the same
-    /// line and cost the row no height at all. The caption is the half that
-    /// truncates — the chips are `fixedSize`, because a reading squeezed to an
-    /// ellipsis is not a smaller reading, it is none.
+    /// One view and not two beside each other, because that is what the panel
+    /// draws: `ProviderRow` hands the chips *into* the caption, and
+    /// `MetricCaption` puts them at the trailing edge of its own line. Building
+    /// them as siblings here was the last measurable difference between the
+    /// preview and the panel, and it was a large one — handed no chips,
+    /// `MetricCaption.trailing` falls through to its empty-rail branch and
+    /// reserves `secondaryRail` at the trailing edge, so the sample spent
+    /// `sentence + 8 + rail + 8 + chips` on a line the panel spends
+    /// `sentence + 8 + chips` on. At the shipped cozy metrics that is 37pt of
+    /// caption the preview did not have and the panel did, which is a preview
+    /// truncating a sentence the row would have drawn whole.
+    ///
+    /// Held open when the settings reserve the line and there is nothing to put
+    /// on it, exactly as `UsageBar` holds it open in the panel — the preview has
+    /// to be the height of the row it previews in that state too.
     @ViewBuilder
     private var captionLine: some View {
-        if primaryCaption.hasContent || drawsChips {
-            HStack(spacing: Tokens.Space.medium) {
-                if primaryCaption.hasContent {
-                    primaryCaption
-                } else {
-                    // Nothing to say on the left, and the chips still belong at
-                    // the trailing edge rather than under the logo.
-                    Spacer(minLength: 0)
-                }
-                if drawsChips { chips }
+        // The same two nested questions in the same order as `UsageBar`: the
+        // settings decide whether there is a line, the content decides what goes
+        // on it. Equivalent to one `if` for a sample that always reports and
+        // never has a bill — and written as two anyway, because a preview that
+        // reaches the panel's answer by a different route is a preview that will
+        // eventually reach a different answer.
+        if reservesWindowLine {
+            if primaryCaption.hasContent {
+                primaryCaption
+            } else {
+                ReservedTextLine(size: metrics.detailSize)
             }
         }
     }
 
-    /// The line under the headline meter, asked for twice — once to draw and once
-    /// to decide whether the row has a second line at all — so it is named rather
-    /// than built at each site.
-    private var primaryCaption: MetricCaption { caption(for: primary, isSecondary: false) }
+    /// The line under the headline meter, chips and all, asked for twice — once
+    /// to draw and once to decide whether the row has a second line at all — so
+    /// it is built in one place. Assembled exactly as `ProviderRow.primaryCaption`
+    /// assembles it, `drawsChips` gate included, so the chips are chosen where
+    /// the style is read and cannot be drawn twice under `.expanded`.
+    ///
+    /// Internal rather than private so `AppearancePaneTests` can ask it whether
+    /// the chips are inside. That the run sat *beside* the caption instead cost
+    /// the preview 37pt of sentence and not one point of height, so no
+    /// measurement of the rendered row could see it and none did, through two
+    /// releases of a test file whose whole subject is this row agreeing with that
+    /// one.
+    var primaryCaption: MetricCaption {
+        let split = chipSplit(service.secondary.count)
+        return MetricCaption(
+            metric: primary,
+            isSecondary: false,
+            accent: service.accent,
+            appearance: appearance,
+            chips: drawsChips ? Array(service.secondary.prefix(split.shown)) : [],
+            overflow: drawsChips ? split.hidden : 0
+        )
+    }
+
+    /// The panel's own predicate, minus the row-level override the sample has no
+    /// way to be given. It decides the same three things here it decides there:
+    /// whether the row reserves a window line, whether it holds that line open
+    /// with nothing on it, and — through `lines` — how tall the sample measures.
+    private var reservesWindowLine: Bool {
+        appearance.showsAmounts
+            || appearance.showsCountdowns
+            || appearance.secondaryWindows == .chips
+    }
 
     private var drawsChips: Bool {
         appearance.secondaryWindows == .chips && !service.secondary.isEmpty
@@ -1231,7 +1293,11 @@ struct SampleRow: View {
             appearance.secondaryWindowLimit,
             RowGeometry.chipLimit(
                 textColumnWidth: geometry.textColumnWidth,
-                captionSize: metrics.captionSize
+                // `detailSize`, which is the size the chips are set in — the same
+                // argument the panel passes. The sample has no spend to lead its
+                // caption, and neither does the service it stands for.
+                chipSize: metrics.detailSize,
+                carriesSpend: false
             )
         )
     }
@@ -1278,23 +1344,15 @@ struct SampleRow: View {
         caption(for: metric, isSecondary: true)
     }
 
-    /// The further windows folded onto the trailing half of the caption line.
-    ///
-    /// The panel's own run, not a second HStack of the panel's own chips. This
-    /// was the last copy left in the file: the chips, their spacing and how the
-    /// run bargains with the caption beside it were written out here as well as
-    /// in `SecondaryChipRun`, so how much of "5h session · resets in 1h 19m"
-    /// survived depended on which of the two you were looking at. One view, and
-    /// the width it reserves is whatever the panel reserves.
-    private var chips: some View {
-        let split = chipSplit(service.secondary.count)
-        return SecondaryChipRun(
-            chips: Array(service.secondary.prefix(split.shown)),
-            overflow: split.hidden,
-            accent: service.accent,
-            appearance: appearance
-        )
-    }
+    // The chip run was assembled here, beside the caption rather than inside it,
+    // and that is the copy this pass deleted. `MetricCaption` has carried the
+    // chips since the panel started folding them onto its caption line; building
+    // a second `SecondaryChipRun` here meant the sample bargained for width with
+    // its caption on different terms than the panel does — and, because a caption
+    // handed no chips reserves an empty figure rail instead, on 37pt less of it.
+    // `primaryCaption` above now builds the line the way `ProviderRow` builds it,
+    // which is the only arrangement in which "the preview is the panel" is a fact
+    // about the code.
 
     /// Keyed on position rather than on the window's name: a service can report
     /// two windows under one label, and a repeated `ForEach` id draws one of them

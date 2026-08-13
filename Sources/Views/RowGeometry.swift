@@ -23,7 +23,7 @@ public struct RowGeometry: Equatable {
 
     /// Which optional lines this row draws. Presence only — never what they say.
     ///
-    /// Three, because three is what changes a row's height. The plan pill, the
+    /// Three, because three is what changes a row's height. The plan, the
     /// account label and the action buttons all live on the title line, which is
     /// one box whatever is in it, and the error and loading lines are the window
     /// line's own box with different words in it.
@@ -34,10 +34,23 @@ public struct RowGeometry: Equatable {
             self.rawValue = rawValue
         }
 
-        /// The row occupies its meter slot: a track, the rule that stands in for
-        /// one under `numberOnly`, or the hairline a service reporting no quota
-        /// gets. All three are the same height, which is what the row is squared
-        /// against.
+        /// The row occupies its meter slot. Under `.bar` that is a track when the
+        /// window has a real quota and an empty box of the same height when it
+        /// does not — loading, failed, or a service reporting no quota at all.
+        /// Under `numberOnly` the figure on the title line is the meter and the
+        /// slot stands empty at that same height on every row. Both drawings are
+        /// one height, which is what the row is squared against.
+        ///
+        /// Under `.ring` this flag reserves nothing here: the dial in the leading
+        /// column is the meter and the leading column has already paid for it
+        /// (see the `meterStyle != .ring` gate below).
+        ///
+        /// It named two more drawings until this pass and neither exists.
+        /// `Meter.hairline` was deleted — under `.bar` a quotaless row drew that
+        /// rule between its own title and caption, indistinguishable from a row
+        /// divider — and nothing stands in for a meter under `numberOnly` either:
+        /// the slot is held open and left empty rather than filled with a second
+        /// drawing of the reading already on the title line.
         public static let meter = Lines(rawValue: 1 << 0)
         /// The line under the meter: "5h · resets 1h 20m", "Not connected",
         /// "Loading…", an error.
@@ -170,6 +183,35 @@ public struct RowGeometry: Equatable {
         height = max(leadingHeight, textHeight) + 2 * metrics.rowVerticalPadding
     }
 
+    // MARK: - The chips on the caption line
+    //
+    // The whole of this section is one arithmetic with two consumers, and they
+    // have to be read together: `chipLimit` says how many chips the line is
+    // offered and `chipCap` says how wide each of them may draw. Multiply the
+    // second by the first, add the gaps and the caption's own leading half, and
+    // the answer is at most `textColumnWidth` — by construction rather than by
+    // estimate, which is the whole point of the rebuild.
+    //
+    // It was an estimate, and it was wrong in four directions at once. It
+    // reserved 25pt of capsule padding and a coloured dot that `SecondaryChip`
+    // states outright it does not draw; it reserved the label at four cells
+    // where real window labels run seven to nineteen characters; it reserved the
+    // reading at seven cells where `9767.2M/0` takes nine; and it used
+    // `Space.snug` for the gap between two chips where `SecondaryChipRun` sets
+    // its stack at `Space.medium`. Being small in three places and generous in
+    // one, it handed a 356pt row three slots for a run whose ideal was 344pt of
+    // a 304pt text column — and `SecondaryChipRun` is `.fixedSize()`, so the run
+    // could not give the width back. The row drew past the ground, and because
+    // every row in the list is `maxWidth: .infinity` inside one `VStack`, one bad
+    // row dragged the marks off the leading edge of all of them. That is the
+    // screenshot this rebuild answers.
+    //
+    // What makes it a bound rather than a better guess is that the drawing is
+    // capped at the reservation: `SecondaryChip` is handed `chipCap` and splits
+    // it between its two runs, so no provider's label length and no reading's
+    // digit count can push the run past the column. The estimate and the drawing
+    // agree by arithmetic; nothing here hopes.
+
     /// How many secondary chips fit `textColumnWidth`.
     ///
     /// Chips are a single unwrapped line, so their ceiling is width rather than
@@ -180,40 +222,188 @@ public struct RowGeometry: Equatable {
     ///
     /// Never zero and never clamped upward: the caller owns the other end, which
     /// is `secondaryWindowLimit`, and a line of no chips at all reports nothing
-    /// about a service that has several windows.
-    public static func chipLimit(textColumnWidth: CGFloat, captionSize: CGFloat) -> Int {
-        let width = chipWidth(captionSize: captionSize)
-        guard width > 0, textColumnWidth.isFinite, textColumnWidth > 0 else { return 1 }
-        return max(1, Int(textColumnWidth / width))
+    /// about a service that has several windows. The floor is safe because
+    /// `chipCap` floors with it — when the line cannot hold a whole chip the one
+    /// chip it does hold is cut down to what is left rather than drawn at full
+    /// stretch past the edge.
+    ///
+    /// `chipSize` is `Metrics.detailSize` and not `captionSize`. `SecondaryChip`
+    /// and `OverflowChip` both size themselves from `detailSize`, which is a
+    /// point larger at every density, so a budget measured at the caption's size
+    /// was one type step below the type being drawn.
+    public static func chipLimit(
+        textColumnWidth: CGFloat,
+        chipSize: CGFloat,
+        carriesSpend: Bool
+    ) -> Int {
+        let width = chipWidth(chipSize: chipSize)
+        let residue = chipResidue(
+            textColumnWidth: textColumnWidth,
+            chipSize: chipSize,
+            carriesSpend: carriesSpend
+        )
+        guard width > 0, residue > 0 else { return 1 }
+        return max(1, Int(residue / width))
+    }
+
+    /// The widest one chip may draw, which is what `SecondaryChip` frames itself
+    /// against.
+    ///
+    /// A chip's share of the line rather than a flat ceiling, and the difference
+    /// is worth a paragraph because both directions of it are a real defect. Cut
+    /// at the eight-cell label cap, a 520pt panel truncates "Weekly · all models"
+    /// to "Weekly · a…" with 165pt of that line standing empty — a caption
+    /// abbreviating itself in a panel the user widened precisely so it would not
+    /// have to. Cut at nothing, the run overflows the column, which is the
+    /// shipped bug. So the cap is the larger of the chip's own stretch and what
+    /// the line has to divide between the chips it is holding, and never more
+    /// than the line has left at all:
+    ///
+    ///     cap = min(residue, max(stretch, (residue − gaps) / count))
+    ///
+    /// Every term is a setting. The last case is the floor `chipLimit` returns 1
+    /// in: a 300pt panel at comfortable density and 130% type, with a spend on
+    /// the line, has 83pt for a chip whose stretch is 169 — so it draws 83 and
+    /// truncates, which is a chip that reports something in a panel that still
+    /// has its edges.
+    public static func chipCap(
+        textColumnWidth: CGFloat,
+        chipSize: CGFloat,
+        carriesSpend: Bool
+    ) -> CGFloat {
+        let residue = chipResidue(
+            textColumnWidth: textColumnWidth,
+            chipSize: chipSize,
+            carriesSpend: carriesSpend
+        )
+        // The count this divides by is the count the row will draw, read from
+        // `chipLimit` rather than worked out again: the two are one arithmetic,
+        // and a cap sized for a different number of chips than the line is handed
+        // is the same class of mistake as the estimate this replaced.
+        let count = CGFloat(chipLimit(
+            textColumnWidth: textColumnWidth,
+            chipSize: chipSize,
+            carriesSpend: carriesSpend
+        ))
+        let share = (residue - (count - 1) * Tokens.Space.medium) / count
+        let stretch = chipWidth(chipSize: chipSize) - Tokens.Space.medium
+        return min(residue, max(stretch, share))
+    }
+
+    /// How a chip's cap divides between its two runs.
+    ///
+    /// The reading is served first and the label takes what is left, which is
+    /// the chip's own stated rule: the reading is why the chip is there, so the
+    /// label is what gives. The reading never needs more than its nine cells, so
+    /// on a wide line every point of the cap above them goes to the label —
+    /// which is what lets "Weekly · all models" draw whole on a 520pt panel.
+    /// Squeezed, the label goes to nothing before the reading gives a point, and
+    /// below `snug + one reading` the reading gives too rather than overhang a
+    /// cap it was handed.
+    ///
+    /// `label + Space.snug + reading == cap` exactly, which is what lets the
+    /// reservation be stated as one number per chip.
+    public static func chipRuns(cap: CGFloat, chipSize: CGFloat) -> (label: CGFloat, reading: CGFloat) {
+        // The chip's inner gap is spent whatever else it can afford, so the two
+        // runs divide what is left of the cap after it.
+        let inner = max(0, positive(cap) - Tokens.Space.snug)
+        let reading = min(inner, chipReadingRail(chipSize))
+        return (inner - reading, reading)
+    }
+
+    /// What the trailing half of the caption line may spend on chips: the text
+    /// column, less the gap to the sentence beside it, less the sentence's own
+    /// incompressible half, less the cell the `+N` takes when there is one.
+    ///
+    /// The `+N` is reserved up front rather than counted as a chip because
+    /// `chipSplit` does not always take a slot for it: at one chip it keeps its
+    /// one real chip and puts the `+N` beside it, since "+6" alone names no
+    /// window. That is the one case where the run draws more items than the
+    /// limit, and reserving three cells and a gap here is what makes it fit.
+    private static func chipResidue(
+        textColumnWidth: CGFloat,
+        chipSize: CGFloat,
+        carriesSpend: Bool
+    ) -> CGFloat {
+        let size = positive(chipSize)
+        let column = positive(textColumnWidth)
+        // `MetricCaption` and `StatusLine` both set their line at `Space.medium`
+        // between the sentence and the run.
+        let toTheSentence = Tokens.Space.medium
+        let overflowChip = Tokens.figureWidth(size, digits: 3) + Tokens.Space.medium
+        return max(0, column - toTheSentence - overflowChip - (carriesSpend ? spendReserve(size) : 0))
     }
 
     /// One chip and the gap to the next.
     ///
-    /// Built from the chip's own parts rather than from a multiple of the type
-    /// size, which is what the two private copies did — and their `captionSize * 5`
-    /// promised a chip more than a 300pt line holds, so the last one arrived as
-    /// an ellipsis. The two runs inside are measured at `Tokens.figureWidth`:
-    /// the reading is mono and that is its real advance, and the label is a word
-    /// in SF Pro, whose average advance is narrower — so the estimate errs
-    /// generous on the label, which is the direction that drops a chip rather
-    /// than truncating one.
+    /// Built from the chip's own two runs at the size the chip is set in. The gap
+    /// belongs in here: read off the chip alone this is the exact width of one
+    /// chip with nothing left over, and the division then always finds room for
+    /// one more than the line has. It reserves one gap more than the run draws,
+    /// which is the direction that drops a chip rather than clipping one.
+    private static func chipWidth(chipSize: CGFloat) -> CGFloat {
+        chipLabelCap(chipSize)
+            + Tokens.Space.snug
+            + chipReadingRail(chipSize)
+            + Tokens.Space.medium
+    }
+
+    /// A window's name — "Weekly", "30 days", "Weekly · all models".
     ///
-    /// The gap belongs in here. Read off the chip alone this is the exact width
-    /// of one chip with nothing left over, and the division then always finds
-    /// room for one more than the line has.
-    private static func chipWidth(captionSize: CGFloat) -> CGFloat {
-        let size = positive(captionSize)
-        // The capsule's own padding, its dot, and the two gaps inside it.
-        let furniture = 2 * Tokens.Space.small
-            + Tokens.Control.chipDot
-            + 2 * Tokens.Space.snug
-        // A window's name — "Weekly", "Opus" — and its reading, "12/100" or
-        // "100%". The label is the part allowed to truncate, so it is reserved
-        // at the four characters that still name the window rather than at the
-        // longest one a provider can send.
-        let label = Tokens.figureWidth(size, digits: 4)
-        let figure = Tokens.figureWidth(size, digits: 7)
-        return furniture + label + figure + Tokens.Space.snug
+    /// Eight cells, and this is the one number in the section that is a taste
+    /// rather than a measurement, so here is the arithmetic behind it. It is the
+    /// widest cap that still fits two chips on the shipped 356pt panel at cozy
+    /// and 100%: the text column is 304, the residue after the sentence gap, the
+    /// `+N` cell and no spend is 267, and a chip at eight cells is 129 of it
+    /// (267 / 129 = 2.07). Nine cells makes the chip 136 and 267 / 136 is 1.96,
+    /// which costs the second chip outright.
+    ///
+    /// Cells of the *figure* face for a run set in SF Pro, deliberately: SF Pro's
+    /// advance is the narrower of the two, so eight cells buys about ten
+    /// characters — "Weekly" (37.8pt at 11) and "30 days" (41.6) fit whole inside
+    /// the 55 this reserves, and "Weekly · all models" (100.5) truncates. A
+    /// truncated label still names the window's family; the reading beside it is
+    /// untouched, and that is the reading the chip is there for.
+    private static func chipLabelCap(_ chipSize: CGFloat) -> CGFloat {
+        Tokens.figureWidth(positive(chipSize), digits: 8)
+    }
+
+    /// A window's reading: "61%", "12/100", "9767.2M/0".
+    ///
+    /// Nine cells, which is what `SecondaryChip` can actually be handed rather
+    /// than the seven this used to reserve. `ClaudeCodeProvider` reports token
+    /// windows at `limit: 0`, and `UsageMetric.format` renders 9 767 200 000 as
+    /// `9767.2M` — with the slash and the zero that is nine characters, and it
+    /// measures 61.20pt in SF Mono at 11 against the 62 nine cells reserve.
+    private static func chipReadingRail(_ chipSize: CGFloat) -> CGFloat {
+        Tokens.figureWidth(positive(chipSize), digits: 9)
+    }
+
+    /// What `SpendFigure` cannot give back, on a line that carries one.
+    ///
+    /// `MetricCaption` puts the spend at `layoutPriority(1)` in every one of its
+    /// four candidates, including the last, and the amount inside it is
+    /// `.fixedSize()` — so the caption's leading half has a floor that no
+    /// candidate can drop, and until this term existed nothing reserved it. It is
+    /// subtracted before the division rather than given a rail of its own,
+    /// because a rail around a leading figure is the indent `SpendFigure`
+    /// deliberately gave up.
+    ///
+    /// Nine cells for the amount and not `Tokens.moneyWidth`'s eight: that rail
+    /// covers `$1234.56`, and a four-figure bill formatted for a reader carries a
+    /// thousands separator too — `$8,700.47`, nine characters, 61.20pt at 11
+    /// against the 62 this reserves. Three cells for the "est." qualifier, which
+    /// is SF Pro and therefore narrower than the cells it is counted in (19.51pt
+    /// against 21), and it is only drawn on a locally-priced figure.
+    ///
+    /// Presence of a spend, never its amount: this decides how many chips ride
+    /// the line and never how tall the line is, so it cannot resize a row when a
+    /// bill lands.
+    private static func spendReserve(_ chipSize: CGFloat) -> CGFloat {
+        let size = positive(chipSize)
+        return Tokens.figureWidth(size, digits: 9)
+            + Tokens.Space.snug
+            + Tokens.figureWidth(size, digits: 3)
     }
 
     /// A length, with a NaN answering 0 rather than surviving the arithmetic.
