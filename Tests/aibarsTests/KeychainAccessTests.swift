@@ -134,27 +134,50 @@ final class KeychainAccessTests: XCTestCase {
         XCTAssertFalse(store.hasCredential(for: probeID))
     }
 
+    /// Every Chromium browser this machine can be read from, which on a build
+    /// runner is none of them.
+    ///
+    /// `CookieExtractors.available()` only builds a `ChromeCookieExtractor` for
+    /// a variant whose cookie database is on disk, so the two tests below used
+    /// to iterate an empty list and pass without asserting anything. A pass is
+    /// the wrong answer to "is the keychain-prompt invariant holding here?" when
+    /// nothing was measured, so the callers skip on empty instead: CI then
+    /// reports the gap where a green tick used to hide it.
+    private func chromiumExtractors() -> [ChromeCookieExtractor] {
+        CookieExtractors.available().compactMap { $0 as? ChromeCookieExtractor }
+    }
+
+    private static let noChromium = "no Chromium cookie database on this machine"
+
     /// Deriving a Chromium key is what puts a dialog on screen, so the default
     /// read path must never do it.
-    func testCookieReadsAreSilentByDefault() {
-        for extractor in CookieExtractors.available() {
-            guard let chromium = extractor as? ChromeCookieExtractor else { continue }
-            XCTAssertFalse(chromium.hasCachedKey, "a key was derived before any read")
-            _ = try? chromium.cookies(for: "example.com")
-            XCTAssertFalse(chromium.hasCachedKey, "cookies(for:) prompted")
-            _ = try? chromium.cookies(forAnyOf: ["example.com"])
-            XCTAssertFalse(chromium.hasCachedKey, "cookies(forAnyOf:) prompted")
+    func testCookieReadsAreSilentByDefault() throws {
+        let chromium = chromiumExtractors()
+        try XCTSkipIf(chromium.isEmpty, Self.noChromium)
+
+        for extractor in chromium {
+            XCTAssertFalse(extractor.hasCachedKey, "a key was derived before any read")
+            _ = try? extractor.cookies(for: "example.com")
+            XCTAssertFalse(extractor.hasCachedKey, "cookies(for:) prompted")
+            _ = try? extractor.cookies(forAnyOf: ["example.com"])
+            XCTAssertFalse(extractor.hasCachedKey, "cookies(forAnyOf:) prompted")
         }
     }
 
     @MainActor
-    func testLaunchSweepIsSilent() async {
+    func testLaunchSweepIsSilent() async throws {
+        // Skipped before the sweep, not after it. A runner with no Chromium
+        // database has nothing for the sweep's silence to be measured against,
+        // and `adoptBrowserSessions()` reads every browser on the machine — a
+        // second of work whose result nothing would then look at.
+        let chromium = chromiumExtractors()
+        try XCTSkipIf(chromium.isEmpty, Self.noChromium)
+
         _ = await AppState().adoptBrowserSessions()
-        for extractor in CookieExtractors.available() {
-            guard let chromium = extractor as? ChromeCookieExtractor else { continue }
+        for extractor in chromium {
             XCTAssertFalse(
-                chromium.hasCachedKey,
-                "the launch sweep prompted for \(chromium.variant.rawValue)"
+                extractor.hasCachedKey,
+                "the launch sweep prompted for \(extractor.variant.rawValue)"
             )
         }
     }

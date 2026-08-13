@@ -22,18 +22,30 @@ MIN_XCODE_MAJOR=16
 
 WORK=""
 LOG=""
+# the staged bundle in /Applications while the swap is in flight. cleared by
+# hand in the one branch where removing it would destroy the only copy of the
+# app left on the machine.
+STAGE=""
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 cleanup() {
 	status=$?
+	# taken back so the exit below cannot re-enter this. nothing here has to run
+	# twice, and a cleanup that can recurse is one more thing to reason about.
+	trap - EXIT INT TERM HUP
 	if [ -n "$WORK" ] && [ -d "$WORK" ]; then rm -rf "$WORK"; fi
+	if [ -n "$STAGE" ] && [ -e "$STAGE" ]; then rm -rf "$STAGE"; fi
 	# the build log is the only thing worth keeping, and only when it failed.
 	if [ "$status" -eq 0 ] && [ -n "$LOG" ] && [ -f "$LOG" ]; then rm -f "$LOG"; fi
 	exit "$status"
 }
-trap cleanup EXIT
+# ctrl-c during a two-minute build is the ordinary way this ends early, and bash
+# does not run an EXIT trap for a signal it was never told about — so on EXIT
+# alone the derived data, several hundred megabytes of it, and any bundle staged
+# in /Applications would both survive the interrupt.
+trap cleanup EXIT INT TERM HUP
 
 # a version component is only compared when it really is a number; an unexpected
 # sw_vers or xcodebuild format should not stop an install that would have worked.
@@ -199,20 +211,29 @@ fi
 # full is how an installer takes away something it cannot give back.
 STAGE="$APP_DEST.installing"
 rm -rf "$STAGE"
+# the failure branches below do not remove $STAGE themselves — cleanup does it
+# on the way out, from one place, so a branch added later cannot forget to.
+#
 # ditto rather than cp, because it keeps the bundle's metadata and so the
 # ad-hoc signature the build applied stays valid.
 if ! /usr/bin/ditto "$APP" "$STAGE"; then
-	rm -rf "$STAGE"
 	fail "could not copy the app into /Applications, so nothing was changed.
 $( [ -e "$APP_DEST" ] && printf '%s' "the copy you already had is still there." )"
 fi
 if [ -e "$APP_DEST" ] && ! rm -rf "$APP_DEST"; then
-	rm -rf "$STAGE"
 	fail "could not replace $APP_DEST. it may belong to another account; nothing was changed."
 fi
 if ! mv "$STAGE" "$APP_DEST"; then
-	rm -rf "$STAGE"
-	fail "could not move the new app into place at $APP_DEST."
+	# the old copy is gone by this line, so the staged one is now the only aibars
+	# on the machine. cleaning it up here would be the installer taking away
+	# something it cannot give back — which is the whole reason for staging — so
+	# it stays, and the user is told where it is.
+	KEEP="$STAGE"
+	STAGE=""
+	fail "could not move the new app into place at $APP_DEST.
+the app that was built is at $KEEP, and it is the only copy you have. move it:
+
+  mv \"$KEEP\" \"$APP_DEST\""
 fi
 
 open "$APP_DEST" || fail "installed to $APP_DEST, but could not launch it. open it from /Applications."
@@ -222,7 +243,47 @@ say "installed to $APP_DEST and running."
 say "look in your MENU BAR, top right of the screen. aibars has no dock icon and no window —"
 say "the bars up there are the app. click them for your usage, the gear for settings."
 say ""
-say "to uninstall: rm -rf $APP_DEST"
-say "that leaves settings and any api keys you pasted; to remove those as well:"
+# everything aibars can leave behind, and where each line was derived from. the
+# list used to name two of the six and claim that was all of them, which is how
+# 400 days of usage rollups came to survive an uninstall:
+#
+#   $APP_DEST                       this script's own copy.
+#   Preferences/$BUNDLE_ID.plist    UserDefaults.standard, read and written from
+#                                   about thirty places. `defaults delete` and
+#                                   not rm: cfprefsd holds the domain in memory
+#                                   and writes a deleted plist straight back.
+#   keychain, service $BUNDLE_ID    KeychainStore.service, Auth/KeychainStore.swift.
+#   Application Support/aibars      UsageHistoryStore.defaultDirectory(),
+#                                   History/UsageHistoryStore.swift — history.sqlite
+#                                   and its two wal sidecars, holding up to the
+#                                   400 days that store retains.
+#   Caches, WebKit, HTTPStorages    nothing in the sources writes these. macos
+#                                   makes them for a bundled app that talks to
+#                                   the network and names them after the bundle
+#                                   id, so they were found by looking at a machine
+#                                   that had run aibars rather than by grepping —
+#                                   which is why they need a line here and cannot
+#                                   have one in a test.
+#   launch at login                 SMAppService, System/LoginItem.swift. the
+#                                   registration belongs to macos, so deleting
+#                                   the bundle orphans the entry rather than
+#                                   removing it, and no command undoes it for
+#                                   one app — only the switch does.
+#
+# printed, never executed. this script is advertised as `curl | bash`, where a
+# --uninstall flag could not be reached anyway, and an rm -rf under $HOME driven
+# by a script piped in over the network is worse than the drift it would prevent.
+say "to uninstall: quit aibars from the menu bar, then rm -rf $APP_DEST"
+say "quitting first matters: a copy still running writes its settings back out."
+say ""
+say "that leaves your settings, any api keys you pasted, and up to 400 days of usage"
+say "history. to remove those as well:"
 say "  defaults delete $BUNDLE_ID"
 say "  security delete-generic-password -s $BUNDLE_ID"
+say "  rm -rf \"\$HOME/Library/Application Support/aibars\""
+say "  rm -rf \"\$HOME/Library/Caches/$BUNDLE_ID\" \"\$HOME/Library/WebKit/$BUNDLE_ID\""
+say "  rm -f \"\$HOME/Library/HTTPStorages/$BUNDLE_ID.binarycookies\""
+say ""
+say "and if you switched launch at login on, switch it off before deleting the app."
+say "macos holds that registration, not aibars, so a deleted app leaves a dead entry"
+say "behind in system settings → general → login items."

@@ -3,6 +3,47 @@ import SwiftUI
 import AppKit
 @testable import aibarsCore
 
+/// The one switch for every harness in this suite that asserts nothing.
+///
+/// The `ZZ` files are here to be read by a human, not to pass or fail: two of
+/// them print numbers and this one writes PNGs. An ordinary `xcodebuild test`
+/// wants none of it, and the harness that was gated the least — it wrote
+/// `/tmp/aibars_states_*.png` on every CI run, unasked — is the one that made
+/// the case for putting the decision in a single place rather than in a
+/// convention each new harness has to notice.
+///
+/// It lives in this file because this is the harness the gate was written for.
+/// A fourth harness should call `skipUnlessAsked` rather than write a fourth
+/// copy of the string literal, which is how the third one came to be missing.
+///
+/// The variable is read as `AIBARS_SNAPSHOT`; under `xcodebuild` it is set as
+/// `TEST_RUNNER_AIBARS_SNAPSHOT`, which the test runner strips the prefix from
+/// before the process sees it.
+enum DebugHarness {
+    static var isEnabled: Bool {
+        ProcessInfo.processInfo.environment["AIBARS_SNAPSHOT"] == "1"
+    }
+
+    /// Skips unless the harnesses were asked for, so the run reports these as
+    /// skipped rather than as passes that measured nothing.
+    static func skipUnlessAsked(
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        try XCTSkipUnless(isEnabled, "set AIBARS_SNAPSHOT=1 to \(what)", file: file, line: line)
+    }
+
+    /// Where the file-writing harnesses put their output. `/tmp` only because
+    /// something has to be the fallback — CI passes a directory it can collect,
+    /// and nothing under `/tmp` survives a reboot to be found later and
+    /// mistaken for the current panel.
+    static var outputDirectory: URL {
+        URL(fileURLWithPath:
+            ProcessInfo.processInfo.environment["AIBARS_SNAPSHOT_DIR"] ?? "/tmp")
+    }
+}
+
 /// Renders the whole panel — header, rule, group headers, every row state — to
 /// a PNG, so a change to the panel can be looked at rather than reasoned about.
 ///
@@ -15,22 +56,12 @@ import AppKit
 ///
 /// Off unless asked for. It writes files and spends about a second per
 /// appearance, and CI has nothing to do with the output — so it is gated on
-/// `AIBARS_SNAPSHOT=1` rather than on a name convention, and reports skipped
-/// otherwise.
+/// `DebugHarness`, above, and reports skipped otherwise.
 final class ZZPanelSnapshot: XCTestCase {
-
-    private static var outputDirectory: URL {
-        URL(fileURLWithPath:
-            ProcessInfo.processInfo.environment["AIBARS_SNAPSHOT_DIR"] ?? "/tmp")
-    }
-
-    private static var isEnabled: Bool {
-        ProcessInfo.processInfo.environment["AIBARS_SNAPSHOT"] == "1"
-    }
 
     @MainActor
     func testWritePanelSnapshot() throws {
-        try XCTSkipUnless(Self.isEnabled, "set AIBARS_SNAPSHOT=1 to write panel PNGs")
+        try DebugHarness.skipUnlessAsked("write panel PNGs")
 
         let state = Self.populatedState()
         for (name, scheme) in [("dark", ColorScheme.dark), ("light", ColorScheme.light)] {
@@ -51,7 +82,7 @@ final class ZZPanelSnapshot: XCTestCase {
     /// reserved-width contract breaks first.
     @MainActor
     func testWritePanelWidthExtremes() throws {
-        try XCTSkipUnless(Self.isEnabled, "set AIBARS_SNAPSHOT=1 to write panel PNGs")
+        try DebugHarness.skipUnlessAsked("write panel PNGs")
 
         let appearance = AppearanceSettings.shared
         let original = appearance.panelWidth
@@ -211,7 +242,7 @@ final class ZZPanelSnapshot: XCTestCase {
         host.cacheDisplay(in: host.bounds, to: rep)
         let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
 
-        let url = outputDirectory.appendingPathComponent(filename)
+        let url = DebugHarness.outputDirectory.appendingPathComponent(filename)
         try data.write(to: url)
         // The reported size is the whole point of the width snapshots: a panel
         // wider than `panelWidth` is content that has escaped its frame.
