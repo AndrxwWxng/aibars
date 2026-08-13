@@ -76,10 +76,19 @@ public struct AppearancePane: View {
     /// The rule between the controls and the sample.
     ///
     /// A `Rectangle` rather than a `Divider`, like every other rule in the app:
-    /// the app has one rule weight and one rule colour, and `Divider` carries its
-    /// own material and its own weight with it. It was also the one rule here that
-    /// did not step up under increased contrast, because a `Divider` held at half
-    /// opacity is a second treatment nothing else could agree with.
+    /// the app has one rule colour and one accessor for it, and `Divider` carries
+    /// its own material and its own weight with it. It was also the one rule here
+    /// that did not step up under increased contrast, because a `Divider` held at
+    /// half opacity is a second treatment nothing else could agree with.
+    ///
+    /// A whole point wide, deliberately, where the panel's header rule and the
+    /// preview's own `headerRule` below take `Control.hair(scale:)` instead. Those
+    /// two are horizontal edges inside a drawing the pane is *showing*, and one
+    /// point of grey at 2× is twice the ink AppKit's separator lays down. This one
+    /// is the window's structure — the split between the controls the user is
+    /// operating and the sample they are watching — at the thickness the system
+    /// splits a window at (`NSSplitView.dividerThickness` is 1.0). Sub-pixel
+    /// structure would also read as an accident beside the pane's 14pt margins.
     private var columnRule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
@@ -755,10 +764,17 @@ private struct SamplePanel: View {
     /// twice the ink AppKit's own separator does and reads as a soft grey band
     /// rather than as an edge. The panel's rule takes the same treatment, and the
     /// preview has to draw the rule the panel draws.
+    ///
+    /// Through `Control.hair(scale:)` rather than `hairline / max(scale, 1)`,
+    /// which is what stood here: the same arithmetic including the guard against
+    /// a reported scale of 0, so nothing moves at any real scale. It was the
+    /// third spelling of one device pixel in the app, and the reason the preview
+    /// and the panel could have stopped agreeing is that they were two spellings
+    /// rather than two calls.
     private var headerRule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-            .frame(height: Tokens.Control.hairline / max(scale, 1))
+            .frame(height: Tokens.Control.hair(scale: scale))
     }
 
     /// The figure is read off the sample rather than typed into the sentence, so
@@ -924,9 +940,17 @@ struct SampleRow: View {
                     ProviderLogo(
                         providerID: service.serviceID,
                         fallbackName: service.displayName,
-                        fallbackColor: service.accent,
                         size: appearance.logoSize,
-                        showsTile: appearance.logoStyle == .tile
+                        showsTile: appearance.logoStyle == .tile,
+                        // The sample is always connected and always answering, so
+                        // this is the one call site in the app that can state
+                        // `true` as a fact rather than read it off a provider.
+                        // Through the resolver and not `BrandMark.liveInk`, so
+                        // flipping either the brand-colour switch or the colour
+                        // ramp previews here exactly as the panel will draw it —
+                        // a preview that answered the ink question its own way is
+                        // how the two came to disagree in the first place.
+                        ink: appearance.markInk(for: service.serviceID, isLive: true)
                     )
                 }
                 if appearance.meterStyle == .ring {

@@ -145,10 +145,12 @@ public struct ProviderRow: View {
     /// Connected, asked, and nothing back yet.
     private var isLoading: Bool { provider.isAuthenticated && result == nil }
 
-    /// Connected and answering: the one state whose brand mark is drawn in the
-    /// mark's own ink. Loading, an error, an expired session and a locked one all
-    /// draw it muted, which is the leading column's share of "this row is not
-    /// reporting right now".
+    /// Connected and answering: the one state in which the brand mark is allowed
+    /// to carry the brand's own hue. It carries it at `Ink.mark`'s own lightness,
+    /// so going live moves the hue and not the weight — within 0.35:1 of the
+    /// neutral on every ground in the app. Loading, an error, an expired session
+    /// and a locked one all draw it muted, which is the leading column's share of
+    /// "this row is not reporting right now".
     private var isLive: Bool {
         guard provider.isAuthenticated, case .success = result else { return false }
         return true
@@ -334,16 +336,19 @@ public struct ProviderRow: View {
     /// telling me anything" one statement rather than three treatments.
     ///
     /// Handed down rather than resolved in the mark, because the row is the only
-    /// thing that knows the state: nil is the mark's own ink, which is what a
-    /// reporting row draws.
+    /// thing that knows the state — and resolved off the settings rather than off
+    /// a ternary here, because the other two inputs to the answer are the user's:
+    /// the brand-colour switch and the colour ramp. `ProviderLogo.ink` has no
+    /// default left to fall back on, so this row and the four surfaces outside the
+    /// panel that draw a mark all have to state which state they are in, and all
+    /// four reach the same function to turn that into a colour.
     private var mark: some View {
         ProviderLogo(
             providerID: provider.serviceID,
             fallbackName: provider.displayName,
-            fallbackColor: provider.accentColor,
             size: appearance.logoSize,
             showsTile: appearance.logoStyle == .tile,
-            ink: ProviderLogo.markInk(isLive: isLive)
+            ink: appearance.markInk(for: provider.serviceID, isLive: isLive)
         )
     }
 
@@ -528,8 +533,8 @@ public struct ProviderRow: View {
     }
 
     /// The figure rail — which is the row's state column, and answers "what is
-    /// this row" in one of five ways: a figure, a green dot, a warning triangle,
-    /// the word `Sign in`, or nothing at all.
+    /// this row" in one of five ways: a figure, a connection dot, a warning
+    /// triangle, the word `Sign in`, or nothing at all.
     ///
     /// This is the invariant the whole panel is squared against — tabular digits
     /// fix the width of a digit, not the length of a string, so "9%" still
@@ -564,13 +569,22 @@ public struct ProviderRow: View {
                 .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
                 .accessibilityLabel("Not reporting")
         } else if isStatusOnly {
-            // The one green dot the panel is allowed, and it is doing real work: a
-            // service with no quota has no meter and no figure to prove the
-            // connection is up, so the dot is the proof. In the rail rather than
-            // in front of its own line, so no glyph ever precedes text in the
-            // text column.
+            // The dot is doing real work: a service with no quota has no meter and
+            // no figure to prove the connection is up, so the dot is the proof. In
+            // the rail rather than in front of its own line, so no glyph ever
+            // precedes text in the text column.
+            //
+            // It was green — `Ink.ok`, now deleted. Green is not in the palette's
+            // vocabulary: two hues are left, amber and red, and both mean alarm.
+            // What replaces the hue is a lit-versus-unlit pair against the
+            // `Ink.muted` this same rail draws for a service that is not
+            // reporting. `body` measures 10.66:1 light and 10.72:1 dark on the
+            // worst plane in the panel, and stands 2.22:1 light / 2.23:1 dark
+            // clear of `muted` — so the two states of this one dot are further
+            // apart in weight than green and grey ever were in hue, and the
+            // distinction survives a greyscale screenshot, which green did not.
             Circle()
-                .fill(Tokens.Ink.ok)
+                .fill(Tokens.Ink.body)
                 .frame(width: Tokens.Control.dot, height: Tokens.Control.dot)
                 // Trailing inside the shared square, not centred. The triangle
                 // fills its 14pt box and the digits fill theirs, so both land on
@@ -611,8 +625,16 @@ public struct ProviderRow: View {
         }
     }
 
-    /// The invitation, in the rail, in the app's own colour — the one place hue
-    /// stands for the app rather than for a measurement.
+    /// The invitation, in the rail, in the loudest neutral the panel has.
+    ///
+    /// It was `Ink.arc`, the app's own indigo, and that token is deleted: the
+    /// palette keeps two hues, amber and red, and both mean alarm. Nothing is
+    /// lost here, because hue was never what made this legible. It is the only
+    /// *word* in a column of figures — every other thing the rail can hold is
+    /// three digits, a 14pt triangle or a 6pt dot — so shape already carries it,
+    /// and it is set at `Ramp.titleWeight` like a name rather than at a caption's
+    /// weight. `body` is the rung for something being answered rather than
+    /// labelled, and it is what the figures in the same rail take.
     ///
     /// Plain, not bordered. First launch is fifteen unconnected rows, and fifteen
     /// bordered buttons is a wall rather than a call to action; one word per row is
@@ -622,7 +644,7 @@ public struct ProviderRow: View {
         Button(action: onSignIn) {
             Text("Sign in")
                 .font(.system(size: metrics.detailSize, weight: Tokens.Ramp.titleWeight))
-                .foregroundColor(Tokens.Ink.arc)
+                .foregroundColor(Tokens.Ink.body)
                 // The one control on a row with no reading, so it is the last
                 // thing that should give: a crowded title line otherwise squeezes
                 // it to "Si…".
@@ -1869,11 +1891,13 @@ public struct MetricCaption: View {
 /// For providers that report a state rather than a quota — there's no bar to
 /// draw, so show the state itself.
 ///
-/// The green dot that used to lead this line is in the row's figure rail now. It
-/// is the same statement — a service with no meter and no figure needs one
-/// non-text proof that the connection is up — made in the column the row keeps for
-/// its state, which leaves this line starting at the same x as every other detail
-/// line in the panel. A glyph in front of one row's text and not the next is the
+/// The dot that used to lead this line is in the row's figure rail now — and it
+/// is no longer green either, since `Ink.ok` is deleted and it is drawn lit
+/// against `Ink.muted` instead of coloured against nothing. It is the same
+/// statement — a service with no meter and no figure needs one non-text proof
+/// that the connection is up — made in the column the row keeps for its state,
+/// which leaves this line starting at the same x as every other detail line in
+/// the panel. A glyph in front of one row's text and not the next is the
 /// two-indent defect the rail exists to close.
 public struct StatusLine: View {
     @ObservedObject private var appearance: AppearanceSettings

@@ -17,21 +17,28 @@ public struct AppMark: View {
     public let size: CGFloat
     /// The mark's colour.
     ///
-    /// `Tokens.Ink.arc` by default. The accent's call sites are a closed list of
-    /// six — this mark in the panel header, this mark in About, a text link, the
-    /// connect affordance on a disconnected row, the same affordance at first
-    /// run, and a focus ring — and the first two are both this default. None of
-    /// the six is a meter, which is why nothing else in this file reaches for
-    /// Arc: the usage ramp below is a different statement, and a meter drawn in
-    /// the app's own colour would say "this is aibars" where it has to say "this
-    /// is how full you are".
+    /// `Tokens.Ink.body` by default, and the default moved because the token it
+    /// used to name is gone. `Tokens.Ink.arc` was the app's own indigo — this
+    /// mark in the header, this mark in About, a text link, the sign-in word on a
+    /// disconnected row, and the connect dialog's buttons. Indigo is not grey,
+    /// amber or red, and the palette now spends chroma on alarm alone, so the
+    /// token is deleted rather than re-cut. Arc's job — "this is the app" — is
+    /// carried by the silhouette below, which is what a mark is for.
+    ///
+    /// `body` rather than `mark` because in both of the places this default is
+    /// taken — the panel header and the About pane — the drawing *is* the
+    /// subject rather than a label beside one, and that is the rung `body` names:
+    /// 15.20:1 light and 17.49:1 dark on `Surface.base`, against `mark`'s 10.58
+    /// and 11.94. Nothing in this file reaches for a hue any more, which is the
+    /// same rule stated from the other side: a mark drawn in a meter's colour
+    /// would say "this is how full you are" where it has to say "this is aibars".
     ///
     /// A caller rasterising the mark into a template image passes a flat colour
     /// instead, because a template is drawn from its alpha and AppKit supplies
-    /// the rest — so the strip's fallback glyph is not a seventh call site.
+    /// the rest — so the strip's fallback glyph is not a third call site.
     public let tint: Color
 
-    public init(size: CGFloat, tint: Color = Tokens.Ink.arc) {
+    public init(size: CGFloat, tint: Color = Tokens.Ink.body) {
         self.size = size
         self.tint = tint
     }
@@ -100,9 +107,18 @@ public struct AppMark: View {
 ///
 /// Each stop is a light/dark pair rather than one value, because the ramp is
 /// also the text colour of a readout and a single value cannot serve both
-/// appearances — the dark stops sit at 2.2:1–3.9:1 on a light panel, well under
-/// the 4.5:1 body text needs. Every stop here clears 4.5:1 against
-/// `Tokens.Surface.base` in its own appearance.
+/// appearances — measured, the dark stops sit at 1.75:1–2.45:1 on a light panel
+/// and the light stops at 1.84:1–2.65:1 on a dark one, all well under the 4.5:1
+/// body text needs.
+///
+/// No pair is written out here any more. All three stops are `Tokens.Ink`
+/// tokens, so each pair lives once, in the palette, and the ramp stops being a
+/// second file's opinion about a colour the first file also holds. That is the
+/// lesson amber taught twice: `0xB45309` and then `0xF5A623` were both "the
+/// ramp's amber" written out beside `Ink.attention`, and both times one of the
+/// two got re-cut for contrast and the other did not. Every stop clears 4.5:1 on
+/// the worst plane in the panel — the pressed row card over the hardest
+/// wallpaper — at 4.80/4.81 resting, 4.90/4.53 amber, 6.92/6.34 red.
 ///
 /// The boundaries are settings (`cautionThreshold`, `warningThreshold`); only
 /// the palette lives here, so there is one place to read the ramp off. The
@@ -126,7 +142,15 @@ public enum UsageTint {
         // something wants looking at. It is also strictly better than
         // teal→amber→red for deuteranomaly and protanopia, which collapse hues
         // towards each other but never towards grey.
-        case ..<0.80: return Tokens.dynamic(light: 0x5F636B, dark: 0x8A8F98)   // resting grey
+        //
+        // `Ink.muted` itself, not a private grey beside it. It was
+        // 0x5F636B / 0x8A8F98, which sat within 3 L* of the token in both
+        // appearances — a duplicate rather than a decision, and the dark half of
+        // it measured 4.48:1 on the pressed row card, under the text floor. The
+        // consequence is worth saying out loud: below caution, `ColorRamp.usage`
+        // and `ColorRamp.mono` now resolve identically. They still differ above
+        // it, which is the only band where that setting was ever saying anything.
+        case ..<0.80: return Tokens.Ink.muted                                  // resting grey
         // One amber, and it is `Ink.attention` itself rather than a second copy
         // of its pair. The light stop used to be 0xB45309, which is a different
         // amber from the one "this needs you" is drawn in — two ambers a user has
@@ -139,11 +163,18 @@ public enum UsageTint {
         // arrangement that produced the two ambers in the first place: one of the
         // two gets re-cut for contrast and the other does not.
         case ..<0.95: return Tokens.Ink.attention                              // amber
-        // Re-cut for that same card: 0xC62A2F measured 4.29:1 on it. This is
-        // 5.97 on the base surface, 4.90 on the card and 4.50 against
-        // `Meter.track`, so the top of the ramp is legal as a figure and not
-        // merely as a bar.
-        default:      return Tokens.dynamic(light: 0xB92126, dark: 0xFF6B6E)   // red
+        // The same move for red, and for the same reason: it was
+        // 0xB92126 / 0xFF6B6E here and nowhere else, so the top of the ramp was
+        // the one stop with no owner in the palette. It is `Ink.alarm` now.
+        //
+        // The new pair is also the fix for a defect the old one had. Amber and
+        // red have to be told apart in a greyscale screenshot and by a
+        // deuteranope, and 0xB92126 sat 1.8 L* from the light amber and
+        // 0xFF6B6E 2.9 L* from the dark one — the same weight in two hues.
+        // `Ink.alarm` is always the stop *further* from the ground: L* 26.53
+        // against amber's 36.02 in light, 76.65 against 65.73 in dark, so the
+        // gaps are 9.49 and 10.92 and "worse than amber" survives the hue going.
+        default:      return Tokens.Ink.alarm                                  // red
         }
     }
 

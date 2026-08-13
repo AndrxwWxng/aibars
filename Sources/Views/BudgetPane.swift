@@ -232,7 +232,6 @@ public struct BudgetPane: View {
         return SpendRow(
             serviceID: line.serviceID,
             name: line.name,
-            accent: line.accent,
             amount: spend?.display,
             confidence: spend?.confidence,
             qualifierRail: qualifier,
@@ -362,7 +361,6 @@ public struct BudgetPane: View {
                 SpendRow(
                     serviceID: nil,
                     name: "Everything",
-                    accent: Tokens.Ink.idle,
                     amount: spend?.display,
                     confidence: spend?.confidence,
                     qualifierRail: qualifier,
@@ -736,7 +734,12 @@ private struct SpendRow: View {
     /// no logo to draw.
     let serviceID: String?
     let name: String
-    let accent: Color
+    // `accent` was here, the provider's banded brand colour, and its only reader
+    // was the mark's deleted `fallbackColor`. The pane still resolves an accent —
+    // `figureTint(for:accent:)` needs one for the amount under `ColorRamp
+    // .provider` — but it does so before building the row and hands down the
+    // finished `tint` below, so the raw colour has no business travelling this
+    // far. A brand `Color` on a row that draws a mark is how a mark gets re-tinted.
     /// Already formatted by `SpendReport`, so this row and the dropdown state
     /// one amount in one way. `nil` when nothing was reported.
     let amount: String?
@@ -770,8 +773,15 @@ private struct SpendRow: View {
                 ProviderLogo(
                     providerID: serviceID,
                     fallbackName: name,
-                    fallbackColor: accent,
-                    size: Tokens.Control.settingsLogo
+                    size: Tokens.Control.settingsLogo,
+                    // No state to report, so this is the one mark in the app that
+                    // does not go through `markInk(for:isLive:)`: a budget row says
+                    // what you have spent against a line you set, not whether the
+                    // service answered this minute. `Ink.mark` is the neutral for
+                    // "no statement", the way `Ink.muted` is the neutral for "not
+                    // reporting" — passing `isLive: false` here would grey every
+                    // row in the pane and say something untrue while doing it.
+                    ink: Tokens.Ink.mark
                 )
             } else {
                 // The column stays, so the overall row's name starts where every

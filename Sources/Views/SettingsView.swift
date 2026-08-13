@@ -55,9 +55,10 @@ private extension Font {
 // Two inks for text in this window and no third, which is the panel's rule read
 // across the divider: `Ink.body` for a row's subject and the prose beside it,
 // `Ink.muted` for every line under one. Marks are the one thing that is neither,
-// and they take the rung between: `Ink.mark`, at 10.22:1 light and 11.72:1 dark,
-// so the ladder down a row is name, then the thing that labels it, then the
-// context under it — three steps that cost no space and no weight.
+// and they take the rung between: `Ink.mark`, at 10.58:1 light and 11.94:1 dark
+// on `Surface.base`, so the ladder down a row is name, then the thing that
+// labels it, then the context under it — three steps that cost no space and no
+// weight.
 //
 // `.secondary` and `.tertiary` are gone from here for the reason they are gone
 // from the panel — they are a fraction of the label colour, so over a near-black
@@ -483,8 +484,15 @@ public struct SettingsView: View {
             // The mark, not the meter. It used to be a `UsageMeterGlyph` given
             // four fixed levels, which is a reporting instrument drawing
             // something it is not reporting; `AppMark` is the same shape with
-            // nothing to say, in the one colour the app keeps for itself.
-            AppMark(size: Tokens.Control.aboutGlyph, tint: Tokens.Ink.arc)
+            // nothing to say.
+            //
+            // The colour the app kept for itself — `Ink.arc` — is deleted, and
+            // this is `AppMark`'s own default now. At 44pt the silhouette is the
+            // identity; it did not need a hue to be one, and the two hues the
+            // palette has left both mean alarm. Passed explicitly rather than
+            // left to the default so this call site and the panel header's read
+            // the same on the page.
+            AppMark(size: Tokens.Control.aboutGlyph, tint: Tokens.Ink.body)
 
             VStack(spacing: Tokens.Space.tight) {
                 // The same wordmark the panel header sets, at the same size and
@@ -510,12 +518,17 @@ public struct SettingsView: View {
                 .foregroundStyle(Tokens.Ink.muted)
 
             if let repository = Self.repository {
-                // Arc, because a text link is one of the four places it is
-                // allowed. Not `.accentColor`: that one is the user's and is
-                // spent on selection and focus, and a link is neither.
+                // A link used to be one of the four places `Ink.arc` was allowed,
+                // and Arc is deleted. Not `.accentColor` either: that one is the
+                // user's and is spent on selection and focus, and a link is
+                // neither. So the link takes `body` and gets its affordance back
+                // as an underline — which is what a link is marked with when the
+                // palette has no colour to spare, and is the one channel that
+                // does not depend on the reader seeing hue at all.
                 Link("View on GitHub", destination: repository)
                     .font(.paneBody)
-                    .foregroundStyle(Tokens.Ink.arc)
+                    .foregroundStyle(Tokens.Ink.body)
+                    .underline()
             }
 
             Text("Product names and logos are trademarks of their respective owners.")
@@ -821,21 +834,42 @@ private struct ServiceRow: View {
     /// clear it exactly to line up with the name it renames.
     private static let textIndent = Tokens.Control.settingsLogo + Tokens.Space.gutter
 
+    /// The same bit the panel's row reads, and deliberately not a second opinion:
+    /// authenticated, answering, and switched on.
+    ///
+    /// This pane is the reason the bit has to be read here at all. It used to draw
+    /// every mark at the reporting ink, so an expired Claude sat in this list
+    /// inked byte-identically to a healthy one — in the one window whose job is to
+    /// tell you which services need you, behind a panel that was already drawing
+    /// the same mark grey.
+    ///
+    /// The extra clause over `ProviderRow.isLive` is `isEnabled`: a service the
+    /// user has switched off is not reporting even if its last fetch succeeded,
+    /// because the panel is not drawing it at all. So it takes the not-reporting
+    /// ink, and the `Dim.disabled` fade below goes on top of that rather than
+    /// instead of it.
+    private var isLive: Bool {
+        guard provider.isEnabled, provider.isAuthenticated, case .success = snapshot else { return false }
+        return true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Space.medium) {
             HStack(spacing: Tokens.Space.gutter) {
                 ProviderLogo(
                     providerID: provider.serviceID,
                     fallbackName: provider.displayName,
-                    fallbackColor: provider.accentColor,
-                    size: Tokens.Control.settingsLogo
+                    size: Tokens.Control.settingsLogo,
+                    ink: AppearanceSettings.shared.markInk(for: provider.serviceID, isLive: isLive)
                 )
                 // The dim stops at the mark, and this is where it has to stop:
-                // `Dim.disabled` composites `Ink.muted` to 3.10:1 light and
-                // 4.08:1 dark, which is legal for a graphic and under the floor
-                // for a label. So a switched-off row keeps its name and its line
-                // at full ink and is told apart by its mark and by the switch
-                // that turned it off — never by unreadable text.
+                // `Dim.disabled` composites `Ink.muted` to 3.39:1 light and
+                // 4.34:1 dark on `Surface.base`, and 3.50 / 3.99 on the
+                // `Surface.raised` this list actually draws on — legal for a
+                // graphic on either, and under the 4.5 floor for a label on
+                // three of the four. So a switched-off row keeps its name and its
+                // line at full ink and is told apart by its mark and by the
+                // switch that turned it off — never by unreadable text.
                 .opacity(provider.isEnabled ? 1 : Tokens.Dim.disabled)
 
                 VStack(alignment: .leading, spacing: Tokens.Space.hairline) {
@@ -929,10 +963,10 @@ private struct ServiceRow: View {
         }
     }
 
-    /// Green is reserved for "working", so it is the one answer this cannot give
-    /// early: a service that has been connected for two seconds and reported
-    /// nothing yet is idle, not healthy, and a service that is connected and not
-    /// answering wants the user rather than a tick.
+    /// The loud neutral is reserved for "working", so it is the one answer this
+    /// cannot give early: a service that has been connected for two seconds and
+    /// reported nothing yet is idle, not healthy, and a service that is connected
+    /// and not answering wants the user rather than a tick.
     ///
     /// Red is not one of the answers. It was: a request that simply failed drew
     /// `Ink.failure`, which was byte-identical to the usage ramp's warning stop,
@@ -948,15 +982,24 @@ private struct ServiceRow: View {
     /// "sign-in expired" against "not responding". Colouring the second one sent
     /// people looking for a dialog that was never going to appear.
     ///
-    /// And this is one of the only two places `Ink.ok` is allowed: a connection
-    /// row here, and the status dot on a connected status-only service in the
-    /// panel. Both are places where the connection *is* the reading. A panel row
-    /// showing 92% has already proved it is connected, and a green tick beside
-    /// that figure is ink spent saying what the figure said.
+    /// Green is not one of the answers either, and that is the change. `Ink.ok`
+    /// is deleted: the palette keeps two hues, amber and red, and both of them
+    /// mean alarm — a third that means "fine" spends colour on the state the user
+    /// has no work to do about. What is left is weight, which is what the two
+    /// places `Ink.ok` was allowed were really using it for: this row, and the
+    /// status dot on a connected status-only service in the panel. Both are
+    /// places where the connection *is* the reading, so both draw it at `body`,
+    /// the rung this app answers in, against the `idle` — which is `Ink.muted` —
+    /// that every other case here returns. The separation is 2.22:1 light and
+    /// 2.23:1 dark, and unlike green it survives a greyscale screenshot.
+    ///
+    /// The word carries it as well as the ink does: `status` below says
+    /// "Connected", and a reader who cannot see the difference between two greys
+    /// has never been asked to.
     private var statusColor: Color {
         guard provider.isAuthenticated else { return Tokens.Ink.idle }
         switch snapshot {
-        case .success: return Tokens.Ink.ok
+        case .success: return Tokens.Ink.body
         case .failure(let error) where wantsTheUser(error): return Tokens.Ink.attention
         // Both of these are "nothing to report and nothing to press": one has
         // not answered yet, the other answered badly. `idle` *is* `Ink.muted`,

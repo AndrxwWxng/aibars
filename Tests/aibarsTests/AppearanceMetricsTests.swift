@@ -12,14 +12,23 @@ import AppKit
 /// four-line fixture is two places for "a fresh install" to mean two things.
 @MainActor
 private func settings(_ name: String, seed: [String: Any] = [:]) -> AppearanceSettings {
+    AppearanceSettings(store: scratchStore(name, seed: seed))
+}
+
+/// The same scratch domain, handed back rather than consumed, for the handful of
+/// tests that have to look at what was *written* — which key a value landed
+/// under, and whether a second instance reads it back. Split out of `settings`
+/// above rather than copied beside it, so there is still exactly one description
+/// of what a fresh install's store looks like.
+private func scratchStore(_ name: String, seed: [String: Any] = [:]) -> UserDefaults {
     let domain = "aibars.metrics-tests.\(name)"
     guard let store = UserDefaults(suiteName: domain) else {
         XCTFail("could not open a scratch defaults domain")
-        return AppearanceSettings(store: .standard)
+        return .standard
     }
     store.removePersistentDomain(forName: domain)
     for (key, value) in seed { store.set(value, forKey: key) }
-    return AppearanceSettings(store: store)
+    return store
 }
 
 /// The derived half of the appearance model: the two type sizes and the two
@@ -88,6 +97,51 @@ final class AppearanceMetricsTests: XCTestCase {
                 "\(density.rawValue) drew the figure smaller than the service name"
             )
         }
+    }
+
+    /// The three heights the row reserves for a trace, and the one relation that
+    /// keeps it an annotation rather than a second meter.
+    ///
+    /// Written as literals because `detailSize * 1.6` is a multiplier chosen to
+    /// land on exactly these three: 10 × 1.6 = 16, 11 × 1.6 = 17.6 → 18,
+    /// 12 × 1.6 = 19.2 → 19. A multiplier nudged to 1.5 gives 15 / 17 / 18 and
+    /// nothing in the app would notice, which is why the arithmetic is recorded
+    /// here rather than left to be re-derived.
+    @MainActor
+    func testTheSparklineHeightIsThreeDistinctBoxesUnderTheirOwnRings() {
+        let expected: [(AppearanceSettings.Density, CGFloat)] = [
+            (.compact, 16),
+            (.cozy, 18),
+            (.comfortable, 19)
+        ]
+        let appearance = settings("sparkline-height")
+        appearance.textScale = 1.0
+        for (density, height) in expected {
+            appearance.density = density
+            let metrics = appearance.metrics
+            XCTAssertEqual(
+                metrics.sparklineHeight, height,
+                "\(density.rawValue) draws its trace at \(metrics.sparklineHeight)pt, not \(height)"
+            )
+            // The trace annotates the meter, so it must not out-measure it. The
+            // rings at the shipped scale are 18 / 22 / 26.
+            XCTAssertLessThan(
+                metrics.sparklineHeight, metrics.ringDiameter,
+                "\(density.rawValue) reserves more height for the trace than for the dial it sits under"
+            )
+        }
+    }
+
+    /// The floor is for a `Metrics` built by hand — a test, a preview — because
+    /// `detailSize` itself floors at 10 and 10 × 1.6 is already 16.
+    func testTheSparklineFloorOnlyBindsForAHandBuiltMetrics() {
+        let metrics = AppearanceSettings.Metrics(
+            rowVerticalPadding: 0, rowHorizontalPadding: 0, rowGap: 0, contentSpacing: 0,
+            titleSize: 6, detailSize: 6, captionSize: 6,
+            barHeight: 1, secondaryBarHeight: 1, ringDiameter: 1
+        )
+        // 6 × 1.6 = 9.6 → 10, which is under the floor.
+        XCTAssertEqual(metrics.sparklineHeight, 12, "a hand-built Metrics produced a trace nothing can be read off")
     }
 
     // MARK: - The rails
@@ -230,6 +284,77 @@ final class AppearanceMetricsTests: XCTestCase {
         )
     }
 
+    /// The three settings this pass added, from their defaults through `apply`
+    /// and `snapshot` and out the other side of a relaunch.
+    ///
+    /// One test rather than three, because the failure they share is the one that
+    /// matters: a field added to `Snapshot` but missed in `apply`, `snapshot`,
+    /// `Key` or `persistAll` is invisible until a user changes it and it does not
+    /// stick. `matchingPreset` is plain equality over every field, so a missed
+    /// field also silently unnames every preset — which is why the assertion at
+    /// the end is that the reloaded snapshot equals the applied one exactly,
+    /// rather than that the three fields happen to agree.
+    @MainActor
+    func testTheThreeNewSettingsSurviveApplySnapshotAndARelaunch() {
+        let store = scratchStore("new-settings")
+        let appearance = AppearanceSettings(store: store)
+        XCTAssertTrue(appearance.coloursBrandMarks, "a fresh install does not carry brand hue on its live marks")
+        XCTAssertFalse(appearance.showsRowSparkline, "a fresh install reserves a trace slot on every connected row")
+        XCTAssertEqual(appearance.menuBarStyle, .markAndFigure, "a fresh install draws something other than mark plus figure")
+
+        appearance.apply(AppearanceSettings.Snapshot(
+            coloursBrandMarks: false,
+            showsRowSparkline: true,
+            menuBarStyle: .worstOnly
+        ))
+        XCTAssertFalse(appearance.coloursBrandMarks, "apply did not carry coloursBrandMarks")
+        XCTAssertTrue(appearance.showsRowSparkline, "apply did not carry showsRowSparkline")
+        XCTAssertEqual(appearance.menuBarStyle, .worstOnly, "apply did not carry menuBarStyle")
+        XCTAssertFalse(appearance.snapshot.coloursBrandMarks, "snapshot did not read coloursBrandMarks back")
+        XCTAssertTrue(appearance.snapshot.showsRowSparkline, "snapshot did not read showsRowSparkline back")
+        XCTAssertEqual(appearance.snapshot.menuBarStyle, .worstOnly, "snapshot did not read menuBarStyle back")
+
+        let reloaded = AppearanceSettings(store: store)
+        XCTAssertEqual(
+            reloaded.snapshot, appearance.snapshot,
+            """
+            A setting did not survive a relaunch. One of the three new fields is missing \
+            from Key, persistAll, or the read in init — the value was held in memory and \
+            never written, or written and never read.
+            """
+        )
+    }
+
+    /// THE INTERIM PIN. If you are here because this failed, read the next
+    /// paragraph before changing anything: this test is meant to be rewritten,
+    /// and only by the change that earns it.
+    ///
+    /// All five presets deliberately name the same three values while the rest of
+    /// this work lands — brand marks on, no trace, mark plus figure — because a
+    /// preset is a promise about what the app looks like the instant it is
+    /// applied, and the styles and the sparkline do not exist yet. Minimal wants
+    /// `.figureOnly`, Monochrome wants `.markOnly` with its marks in grey, and
+    /// Dashboard wants the trace on; each of those flips belongs to the pass that
+    /// ships the drawing it names, so that the promise and the drawing arrive in
+    /// the same commit. Flipping one early is the shipped bug this pins against:
+    /// a preset that writes a style nothing switches on, or reserves a slot
+    /// nothing draws in.
+    ///
+    /// So: rewrite this alongside the flip, in the pass that ships the drawing.
+    /// Do not relax it to make an early flip pass.
+    @MainActor
+    func testNoPresetNamesADrawingTheAppCannotYetMake() {
+        for preset in AppearanceSettings.Preset.allCases {
+            let snapshot = preset.snapshot
+            XCTAssertTrue(snapshot.coloursBrandMarks, "\(preset.id) turns brand marks off ahead of the pass that does")
+            XCTAssertFalse(snapshot.showsRowSparkline, "\(preset.id) reserves a trace slot the row does not draw yet")
+            XCTAssertEqual(
+                snapshot.menuBarStyle, .markAndFigure,
+                "\(preset.id) names a strip style the renderer does not switch on yet"
+            )
+        }
+    }
+
     // MARK: - The menu bar settings
 
     @MainActor
@@ -244,30 +369,127 @@ final class AppearanceMetricsTests: XCTestCase {
     /// A user who set the old bar count keeps a service count near it rather than
     /// being dropped back to the default — six bars meant "show me as many as you
     /// can", and three services is that answer under the new strip.
+    ///
+    /// One is the case worth having, and the six above is the case that hid the
+    /// bug: six clamps to three, three is also the default, so the six-bar
+    /// assertion passes whether the carry-over ran or was never reached. A stored
+    /// one has to survive as one, and can only come from the legacy key.
+    ///
+    /// What this cannot see, stated so nobody reads more into a green tick than
+    /// is there: `adoptCurrentLook` — which used to delete this key before `init`
+    /// could read it — returns early for every store except
+    /// `UserDefaults.standard`, so the scratch domain here never runs the wipe.
+    /// This pins the carry-over arithmetic; `Key.survivesLookAdoption` is what
+    /// makes the arithmetic reachable on a real install, and touching the user's
+    /// own domain to prove it is not a trade a test suite gets to make.
     @MainActor
     func testAStoredBarCountCarriesOver() {
-        let appearance = settings("bar-count", seed: ["aibars.appearance.menuBarBarCount": 6])
-        XCTAssertEqual(appearance.menuBarServiceCount, 3)
+        let many = settings("bar-count-six", seed: ["aibars.appearance.menuBarBarCount": 6])
+        XCTAssertEqual(many.menuBarServiceCount, 3)
+
+        let one = settings("bar-count-one", seed: ["aibars.appearance.menuBarBarCount": 1])
+        XCTAssertEqual(
+            one.menuBarServiceCount, 1,
+            """
+            A user who had asked for one bar was given three services. The stored count \
+            reached neither the read in init nor the carry-over in migrateLegacyKeys, so \
+            the fallback to the default of 3 is what answered.
+            """
+        )
     }
 
     /// "name" was icon plus rotating service names, which the per-service marks
     /// replace. It must land on the default rather than on whichever case happens
     /// to be first.
+    ///
+    /// It doubles as the read half of the key pin: the seed is written under
+    /// `aibars.appearance.menuBarLabel`, which is where the style still lives
+    /// after the property was renamed to `menuBarStyle`.
     @MainActor
     func testAStoredRotatingNameStyleBecomesMarkPlusFigure() {
         let appearance = settings("label-name", seed: ["aibars.appearance.menuBarLabel": "name"])
-        XCTAssertEqual(appearance.menuBarLabel, .iconAndPercent)
-        XCTAssertEqual(appearance.menuBarLabel.rawValue, "percent")
+        XCTAssertEqual(appearance.menuBarStyle, .markAndFigure)
+        XCTAssertEqual(appearance.menuBarStyle.rawValue, "percent")
     }
 
+    /// The six strings a strip style is filed under.
+    ///
+    /// Spelled as literals rather than derived from the cases, because the whole
+    /// point of these six is that three of them do *not* follow their case names:
+    /// `.markAndFigure` is stored as `"percent"`, `.figureOnly` as
+    /// `"percentOnly"` and `.markOnly` as `"icon"`, which are the spellings the
+    /// setting shipped with. A rename that tidied a raw value to match its case
+    /// would read, on the next launch, as a preference that no longer parses —
+    /// and a preference that no longer parses lands the user silently on the
+    /// default with no way to tell it happened.
     @MainActor
-    func testEachLabelStyleDropsExactlyOneThing() {
-        XCTAssertTrue(AppearanceSettings.MenuBarLabelStyle.iconOnly.showsGlyph)
-        XCTAssertFalse(AppearanceSettings.MenuBarLabelStyle.iconOnly.showsFigure)
-        XCTAssertTrue(AppearanceSettings.MenuBarLabelStyle.iconAndPercent.showsGlyph)
-        XCTAssertTrue(AppearanceSettings.MenuBarLabelStyle.iconAndPercent.showsFigure)
-        XCTAssertFalse(AppearanceSettings.MenuBarLabelStyle.percentOnly.showsGlyph)
-        XCTAssertTrue(AppearanceSettings.MenuBarLabelStyle.percentOnly.showsFigure)
+    func testTheSixPersistedStyleSpellingsArePinned() {
+        XCTAssertEqual(AppearanceSettings.MenuBarStyle.markAndFigure.rawValue, "percent")
+        XCTAssertEqual(AppearanceSettings.MenuBarStyle.figureOnly.rawValue, "percentOnly")
+        XCTAssertEqual(AppearanceSettings.MenuBarStyle.markOnly.rawValue, "icon")
+        XCTAssertEqual(AppearanceSettings.MenuBarStyle.microBars.rawValue, "bars")
+        XCTAssertEqual(AppearanceSettings.MenuBarStyle.markAndMeter.rawValue, "markBar")
+        XCTAssertEqual(AppearanceSettings.MenuBarStyle.worstOnly.rawValue, "worst")
+        XCTAssertEqual(
+            AppearanceSettings.MenuBarStyle.allCases.count, 6,
+            "the style chooser draws a chip per case, and the arithmetic in StripFit is written for six"
+        )
+    }
+
+    /// And the key the six are written under, which is the one the property no
+    /// longer shares a name with.
+    ///
+    /// Both directions, because the two halves fail differently: a write under a
+    /// tidied key strands the value the *next* launch reads, and a read from a
+    /// tidied key ignores the value that is already there. Either one is a
+    /// preference dropped, and neither shows up in a screenshot.
+    @MainActor
+    func testTheStyleIsStillFiledUnderTheLabelKey() {
+        let store = scratchStore("style-key")
+        let appearance = AppearanceSettings(store: store)
+        appearance.menuBarStyle = .microBars
+        XCTAssertEqual(
+            store.string(forKey: "aibars.appearance.menuBarLabel"), "bars",
+            "the style was written somewhere other than the key it has always been stored under"
+        )
+
+        let stored = settings("style-stored", seed: ["aibars.appearance.menuBarLabel": "icon"])
+        XCTAssertEqual(
+            stored.menuBarStyle, .markOnly,
+            "an install that had chosen Marks only did not get Marks only back"
+        )
+    }
+
+    /// A half-point strip height is whole by the time anything can draw with it.
+    ///
+    /// The tuner used to offer half steps and the rasteriser passes the height it
+    /// is handed straight into `NSImage(size:)`, so a stored 13.5 renders soft at
+    /// 1× for ever. Rounding on read is the half of the fix that reaches an
+    /// install which already has one in its store.
+    ///
+    /// The clamp's bounds are whole, so rounding cannot push a value out of range
+    /// — 9.6 rounds to 10 and 16.4 to 16, both of which are already in it. The
+    /// two half-point cases are the ones the slider could actually mint.
+    @MainActor
+    func testAHalfPointStripHeightIsWholeByTheTimeAnythingReadsIt() {
+        let cases: [(stored: Double, expected: Double)] = [
+            (12.5, 13),
+            (13.5, 14),
+            (10.4, 10),
+            (9.6, 10),
+            (16.4, 16),
+            (17.5, 16)
+        ]
+        for (stored, expected) in cases {
+            let appearance = settings(
+                "glyph-height-\(stored)",
+                seed: ["aibars.appearance.menuBarGlyphHeight": stored]
+            )
+            XCTAssertEqual(
+                appearance.menuBarGlyphHeight, expected,
+                "a stored \(stored) came back as \(appearance.menuBarGlyphHeight) rather than \(expected)"
+            )
+        }
     }
 
     /// A status-only service carries no urgency, so it can never take a slot from
@@ -651,6 +873,96 @@ final class AppearanceTintTests: XCTestCase {
                 "a monochrome menu bar took colour at \(percent)"
             )
         }
+    }
+
+    // MARK: - The mark's ink
+
+    /// The first branch, and the one the old arrangement got wrong everywhere but
+    /// the panel: a mark that is not reporting is the muted ink, whatever else is
+    /// set. Loading, failed, expired, locked, not connected, switched off — all
+    /// one state, drawn in the ink the row's own name and caption take beside it.
+    ///
+    /// Every ramp and both switch positions, because the point of this branch is
+    /// that nothing above it can reach it. A brand hue that survived into a
+    /// signed-out row would put the loudest treatment on the row with the least
+    /// to say.
+    @MainActor
+    func testAMarkThatIsNotReportingIsTheMutedInkUnderEverySetting() {
+        let appearance = settings("mark-ink-muted")
+        for ramp in AppearanceSettings.ColorRamp.allCases {
+            appearance.colorRamp = ramp
+            for colours in [true, false] {
+                appearance.coloursBrandMarks = colours
+                for serviceID in ["claude", "gemini", "chatgpt", "there-is-no-such-service"] {
+                    assertSameInk(
+                        appearance.markInk(for: serviceID, isLive: false), Tokens.Ink.muted,
+                        "\(serviceID) under \(ramp.rawValue) with colour \(colours ? "on" : "off"), not reporting"
+                    )
+                }
+            }
+        }
+    }
+
+    /// The third branch and the two things that suppress it.
+    ///
+    /// The switch is the user's. `.provider` is the double-up rule: under that
+    /// ramp the meter and the figure are already painted the brand, so a brand
+    /// mark would make three shades of one hue out of a single row — a fully
+    /// coloured row, which is what "chroma means measurement or state" exists to
+    /// prevent. The meter wins because the meter is the thing the ramp was
+    /// switched to colour.
+    @MainActor
+    func testALiveMarkCarriesTheBrandsHueUntilSomethingSuppressesIt() throws {
+        let appearance = settings("mark-ink-live")
+        let claude = try XCTUnwrap(BrandMark.mark(for: "claude"), "the fixture brand has no mark")
+
+        appearance.colorRamp = .usage
+        assertSameInk(appearance.markInk(for: "claude", isLive: true), claude.liveInk, "a live Claude under .usage")
+        assertDifferentInk(
+            appearance.markInk(for: "claude", isLive: true), Tokens.Ink.mark,
+            "a live Claude drew the neutral mark ink with nothing suppressing its hue"
+        )
+
+        appearance.coloursBrandMarks = false
+        assertSameInk(
+            appearance.markInk(for: "claude", isLive: true), Tokens.Ink.mark,
+            "the switch is off and the mark kept its hue"
+        )
+
+        appearance.coloursBrandMarks = true
+        appearance.colorRamp = .provider
+        assertSameInk(
+            appearance.markInk(for: "claude", isLive: true), Tokens.Ink.mark,
+            "the meter is already painted the brand and the mark took it a second time"
+        )
+
+        // The other three ramps spend no brand hue on the meter, so the mark is
+        // free to carry it.
+        for ramp: AppearanceSettings.ColorRamp in [.usage, .accent, .mono] {
+            appearance.colorRamp = ramp
+            assertSameInk(
+                appearance.markInk(for: "claude", isLive: true), claude.liveInk,
+                "a live Claude under \(ramp.rawValue)"
+            )
+        }
+    }
+
+    /// A brand with no hue is the general rule evaluated at zero chroma, and at
+    /// zero chroma the live band's lightness *is* `Ink.mark` — so the seven
+    /// achromatic brands draw exactly what they drew before this rule existed. A
+    /// service with no mark at all has no hue to lend and lands in the same
+    /// place, rather than on the user's accent.
+    @MainActor
+    func testABrandWithNoHueAndAServiceWithNoMarkBothLandOnTheMarkInk() {
+        let appearance = settings("mark-ink-achromatic")
+        assertSameInk(
+            appearance.markInk(for: "chatgpt", isLive: true), Tokens.Ink.mark,
+            "an achromatic brand's live ink is not the mark ink"
+        )
+        assertSameInk(
+            appearance.markInk(for: "there-is-no-such-service", isLive: true), Tokens.Ink.mark,
+            "a service with no vector mark was given a colour to draw its lettermark in"
+        )
     }
 
     // MARK: - Calling, and resolving

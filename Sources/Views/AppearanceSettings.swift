@@ -183,38 +183,80 @@ public final class AppearanceSettings: ObservableObject {
         }
     }
 
-    /// What each service contributes to the menu bar strip: its mark, its
-    /// figure, or both.
+    /// What the strip draws per service.
     ///
-    /// The raw values are unchanged so a stored preference survives, but they no
-    /// longer mean what they used to. The strip draws one mark and one figure per
-    /// service rather than one number for the whole app, so `.iconAndPercent` is
-    /// "mark plus figure, per service" and not "icon plus the highest percentage".
+    /// Six styles, and the case names are the drawings. The first three keep the
+    /// raw values the retired `MenuBarLabelStyle` shipped — `"percent"`,
+    /// `"percentOnly"`, `"icon"` — because those strings are already sitting in
+    /// people's defaults, and a case renamed for readability that takes its raw
+    /// value with it is a preference silently dropped on upgrade. The three new
+    /// ones are spelled for what they draw.
     ///
-    /// `.iconAndName` — icon plus rotating service names — is retired. Rotating a
-    /// name through a single slot was the old strip's way of saying which service
-    /// the number belonged to; a per-service brand mark says it continuously and
-    /// without waiting. A stored "name" is migrated to `.iconAndPercent` in
-    /// `migrateLegacyKeys`.
-    public enum MenuBarLabelStyle: String, CaseIterable, Identifiable {
-        case iconOnly = "icon"
-        case iconAndPercent = "percent"
-        case percentOnly = "percentOnly"
+    /// The setting has been inert since the strip started drawing one mark and
+    /// one figure per service: declared, persisted, written by three presets and
+    /// compared by `matchingPreset`, and read by nothing that draws. Applying
+    /// Minimal wrote "Figures only" into the store and the strip carried on
+    /// drawing marks and figures. This pass fixes the vocabulary the store
+    /// speaks; each case becomes a type in `Sources/Views/StripStyles/` in the
+    /// pass that gives the renderer its styles, and only then do the presets
+    /// point at anything but `.markAndFigure` (see `Preset.snapshot`).
+    ///
+    /// `showsGlyph` and `showsFigure` went with the rename, and not as a tidy-up.
+    /// Two booleans span four combinations and there are six styles: `microBars`
+    /// shows neither a mark nor a figure, `markAndMeter` shows a mark and a
+    /// magnitude that is not a figure, and `worstOnly` shows a *word* and a
+    /// figure. Any predicate pair would have had to answer for drawings it
+    /// cannot name, which is how the Appearance preview and the renderer come to
+    /// disagree about what a style means. The renderer switches over the case.
+    ///
+    /// `.iconAndName` — icon plus rotating service names — stays retired.
+    /// Rotating a name through a single slot was the old strip's way of saying
+    /// which service the number belonged to; a per-service brand mark says it
+    /// continuously and without waiting. A stored `"name"` no longer parses and
+    /// `migrateLegacyKeys` rewrites the dead string.
+    public enum MenuBarStyle: String, CaseIterable, Identifiable {
+        case markAndFigure = "percent"
+        case figureOnly    = "percentOnly"
+        case markOnly      = "icon"
+        case microBars     = "bars"
+        case markAndMeter  = "markBar"
+        case worstOnly     = "worst"
+
         public var id: String { rawValue }
+
         public var label: String {
             switch self {
-            case .iconOnly:       return "Marks only"
-            case .iconAndPercent: return "Mark + figure"
-            case .percentOnly:    return "Figures only"
+            case .markAndFigure: return "Mark + figure"
+            case .figureOnly:    return "Figures only"
+            case .markOnly:      return "Marks only"
+            case .microBars:     return "Micro bars"
+            case .markAndMeter:  return "Mark + meter"
+            case .worstOnly:     return "Closest to its cap"
             }
         }
-        /// `.percentOnly` is the one style that drops the marks entirely.
-        public var showsGlyph: Bool { self != .percentOnly }
-        /// `.iconOnly` is the one style that drops the figures entirely. Named
-        /// beside `showsGlyph` rather than derived at each call site, so the
-        /// renderer and the Appearance pane's preview cannot disagree about what
-        /// a style means.
-        public var showsFigure: Bool { self != .iconOnly }
+
+        /// The sentence under the chip in the Appearance pane.
+        ///
+        /// Each one names the style's cost as well as its shape, because the
+        /// choice between them is a trade the user is making with a bar that is
+        /// 148pt wide at most: width against identity against a reading. The
+        /// widths quoted are the arithmetic at the shipped 13pt strip height.
+        public var summary: String {
+            switch self {
+            case .markAndFigure:
+                return "A brand mark and its own reading per service. 127pt at three services."
+            case .figureOnly:
+                return "One number, no mark. One service only — three bare figures say nothing about which service each belongs to."
+            case .markOnly:
+                return "Silhouettes, tinted by how close each service is to its cap. Nothing is tinted under Monochrome."
+            case .microBars:
+                return "One column per service on a shared baseline. The only style that still measures under Monochrome, and the only one that does not say which column is which."
+            case .markAndMeter:
+                return "A mark and a small column beside it. Identity and a magnitude in 21pt a service."
+            case .worstOnly:
+                return "One service — whichever is nearest its cap — spelled out with its reading."
+            }
+        }
     }
 
     // MARK: - Density and size
@@ -226,6 +268,16 @@ public final class AppearanceSettings: ObservableObject {
     /// with a mark sitting on the ground instead of on a plate, the size that
     /// reads well beside a 12pt name in Compact is below what a plate needed.
     @Published public var logoSize: Double { didSet { clampAndWrite(\.logoSize, 16...40, .logoSize) } }
+    /// Whether a live row's brand mark carries the brand's own hue.
+    ///
+    /// The escape hatch, and the only one: everything else about a mark — its
+    /// box, its optical scale, its two neutral inks — is fixed. Off, every mark
+    /// in the application draws `Ink.mark` exactly as it did before this
+    /// existed, and no contrast ratio anywhere moves, because the live band
+    /// holds `Ink.mark`'s own lightness and differs from it by at most 0.35:1 on
+    /// any ground in the app. That is what makes this a colour switch rather
+    /// than a look: turning it off removes a hue and moves no measurement.
+    @Published public var coloursBrandMarks: Bool { didSet { write(coloursBrandMarks, .coloursBrandMarks) } }
     @Published public var panelWidth: Double { didSet { clampAndWrite(\.panelWidth, 300...520, .panelWidth) } }
     @Published public var rowBackground: RowBackground { didSet { write(rowBackground.rawValue, .rowBackground) } }
 
@@ -236,6 +288,16 @@ public final class AppearanceSettings: ObservableObject {
     @Published public var showsCountdowns: Bool { didSet { write(showsCountdowns, .showsCountdowns) } }
     @Published public var showsPlanNames: Bool { didSet { write(showsPlanNames, .showsPlanNames) } }
     @Published public var showsAccountLabels: Bool { didSet { write(showsAccountLabels, .showsAccountLabels) } }
+    /// Whether every connected row reserves a slot for its twenty-four-hour trace.
+    ///
+    /// It lives here and not in the store that holds the samples, and the
+    /// difference is geometry. A drawing that costs nothing when it says nothing
+    /// can have its switch wherever its data lives; a trace that is absent still
+    /// costs its slot, because reserving the slot whether or not there is a day
+    /// of history behind it is the only way the row's height stays a function of
+    /// the settings. So this is a measurement, and measurements are
+    /// `AppearanceSettings`'.
+    @Published public var showsRowSparkline: Bool { didSet { write(showsRowSparkline, .showsRowSparkline) } }
     @Published public var secondaryWindows: SecondaryWindowStyle { didSet { write(secondaryWindows.rawValue, .secondaryWindows) } }
     @Published public var secondaryWindowLimit: Int { didSet { clampAndWrite(\.secondaryWindowLimit, 1...6, .secondaryWindowLimit) } }
     @Published public var rowActions: RowActionVisibility { didSet { write(rowActions.rawValue, .rowActions) } }
@@ -271,7 +333,7 @@ public final class AppearanceSettings: ObservableObject {
 
     // MARK: - The menu bar
 
-    @Published public var menuBarLabel: MenuBarLabelStyle { didSet { write(menuBarLabel.rawValue, .menuBarLabel) } }
+    @Published public var menuBarStyle: MenuBarStyle { didSet { write(menuBarStyle.rawValue, .menuBarStyle) } }
     /// Which single figure the header summary reads out, and which one the alert
     /// tint is measured against.
     ///
@@ -305,6 +367,7 @@ public final class AppearanceSettings: ObservableObject {
         self.textScale = Self.readDouble(store, .textScale) ?? defaults.textScale
         self.logoStyle = Self.readCase(store, .logoStyle) ?? defaults.logoStyle
         self.logoSize = Self.readDouble(store, .logoSize) ?? defaults.logoSize
+        self.coloursBrandMarks = Self.readBool(store, .coloursBrandMarks) ?? defaults.coloursBrandMarks
         self.panelWidth = Self.readDouble(store, .panelWidth) ?? defaults.panelWidth
         self.rowBackground = Self.readCase(store, .rowBackground) ?? defaults.rowBackground
 
@@ -313,6 +376,7 @@ public final class AppearanceSettings: ObservableObject {
         self.showsCountdowns = Self.readBool(store, .showsCountdowns) ?? defaults.showsCountdowns
         self.showsPlanNames = Self.readBool(store, .showsPlanNames) ?? defaults.showsPlanNames
         self.showsAccountLabels = Self.readBool(store, .showsAccountLabels) ?? defaults.showsAccountLabels
+        self.showsRowSparkline = Self.readBool(store, .showsRowSparkline) ?? defaults.showsRowSparkline
         self.secondaryWindows = Self.readCase(store, .secondaryWindows) ?? defaults.secondaryWindows
         self.secondaryWindowLimit = Self.readInt(store, .secondaryWindowLimit) ?? defaults.secondaryWindowLimit
         self.rowActions = Self.readCase(store, .rowActions) ?? defaults.rowActions
@@ -333,12 +397,17 @@ public final class AppearanceSettings: ObservableObject {
         self.showsHeaderSummary = Self.readBool(store, .showsHeaderSummary) ?? defaults.showsHeaderSummary
 
         // A stored "name" no longer parses, so the fallback already lands this on
-        // `.iconAndPercent`; `migrateLegacyKeys` rewrites the dead string.
-        self.menuBarLabel = Self.readCase(store, .menuBarLabel) ?? defaults.menuBarLabel
+        // `.markAndFigure`; `migrateLegacyKeys` rewrites the dead string.
+        self.menuBarStyle = Self.readCase(store, .menuBarStyle) ?? defaults.menuBarStyle
         self.menuBarValue = Self.readCase(store, .menuBarValue) ?? defaults.menuBarValue
         // A stored bar count is a count of the same kind of thing — how many
         // services the item speaks for — so it carries over rather than being
         // discarded. `normalize` is what pulls a stored 4 or 6 into range.
+        //
+        // This line only started doing anything in this pass. `adoptCurrentLook`
+        // runs above and used to remove the legacy key before this read, so the
+        // carry-over ran for scratch domains and never once for a real install;
+        // see `Key.survivesLookAdoption` for the exemption that fixed it.
         self.menuBarServiceCount = Self.readInt(store, .menuBarServiceCount)
             ?? Self.readInt(store, .legacyMenuBarBarCount)
             ?? defaults.menuBarServiceCount
@@ -428,6 +497,23 @@ public final class AppearanceSettings: ObservableObject {
         /// forecast sentence. Half the gap between two separate things, because
         /// this is one block of text set in two sizes.
         public var captionGap: CGFloat { max(2, (contentSpacing / 2).rounded()) }
+
+        /// The box a row's sparkline is drawn in, when the setting reserves one.
+        ///
+        /// Derived from `detailSize` rather than from `barHeight`, and the two
+        /// are different questions: the meter's thickness is a taste the user
+        /// sets, and this is a trace that has to be tall enough for a shape to be
+        /// read off it. 1.6 lands it at 16 / 18 / 19pt across the three densities
+        /// — 10 × 1.6 = 16, 11 × 1.6 = 17.6 → 18, 12 × 1.6 = 19.2 → 19 — three
+        /// distinct heights, each shorter at the shipped text scale than the ring
+        /// its own density draws beside it (16 < 18, 18 < 22, 19 < 26), so the
+        /// sparkline never out-measures the meter it annotates. It moves with
+        /// text scale for free, which is what stops a user at 130% getting a
+        /// trace they cannot see the shape of.
+        ///
+        /// The floor is for a `Metrics` built by hand in a test; `detailSize`
+        /// itself floors at 10, so 12 never binds in the app.
+        public var sparklineHeight: CGFloat { max(12, (detailSize * 1.6).rounded()) }
 
         /// The width reserved for the headline figure and its unit: three digits,
         /// a hairline, and one unit character.
@@ -568,6 +654,47 @@ public final class AppearanceSettings: ObservableObject {
             return tint(for: percent, providerAccent: providerAccent)
         }
         return Tokens.Ink.body
+    }
+
+    /// The ink a provider's mark is drawn in, on every surface that draws one.
+    ///
+    /// The single place that decision is made, and it has to live here rather
+    /// than on `ProviderLogo` because two of its three inputs are settings. The
+    /// previous arrangement put the rule in `ProviderLogo.markInk(isLive:)` and
+    /// then gave the parameter beside it a `nil`-means-live default, so four of
+    /// the five views that draw a mark never called it: the Settings list, the
+    /// Budget pane, the connect dialog and the Appearance sample all drew every
+    /// mark at the reporting ink. A signed-out Claude in Settings was inked
+    /// identically to a healthy one, in the one list whose job is to say which
+    /// services need you.
+    ///
+    /// Three answers, in this order:
+    ///
+    /// - **Not reporting** — loading, failed, expired, locked, not connected,
+    ///   switched off — is `Ink.muted`, unchanged by this rule. It is the ink the
+    ///   row's name and caption take in the same state, so "nothing here yet"
+    ///   stays one statement in one ink rather than three treatments.
+    /// - **Reporting, with the hue suppressed** is `Ink.mark`, also unchanged.
+    ///   Two things suppress it: the user's own switch, and `ColorRamp.provider`.
+    /// - **Reporting, otherwise** is the brand's hue at `Ink.mark`'s lightness.
+    ///
+    /// `.provider` is in the second branch and that is the whole of the double-up
+    /// rule. Under that ramp the bar, the ring and the figure are already painted
+    /// `AnyUsageProvider.accentColor`, which is the same brand through
+    /// `BrandMark.brandInk`; colouring the mark too would leave a row whose mark,
+    /// meter and number are three shades of one hue — a fully coloured row, which
+    /// is exactly what "chroma means measurement or state" exists to prevent.
+    /// Brand hue appears at most once per row, and the meter wins, because the
+    /// meter is the thing the user switched the ramp to colour. `.usage`,
+    /// `.accent` and `.mono` spend no brand hue on the meter, so under those
+    /// three the mark is free to carry it.
+    ///
+    /// A service with no vector mark draws a lettermark, and a lettermark has no
+    /// brand colour to lend — it falls to `Ink.mark`, not to the user's accent.
+    public func markInk(for serviceID: String, isLive: Bool) -> Color {
+        guard isLive else { return Tokens.Ink.muted }
+        guard coloursBrandMarks, colorRamp != .provider else { return Tokens.Ink.mark }
+        return BrandMark.mark(for: serviceID)?.liveInk ?? Tokens.Ink.mark
     }
 
     /// Menu bar tint, nil below `warningThreshold` so the glyph stays quiet —
@@ -883,6 +1010,23 @@ public final class AppearanceSettings: ObservableObject {
 
         /// The values this preset stands for. A table, so applying a preset and
         /// recognising one can never drift apart.
+        ///
+        /// Three of these values are deliberately the same in all five presets
+        /// while the rest of this work lands: `coloursBrandMarks: true`,
+        /// `showsRowSparkline: false`, `menuBarStyle: .markAndFigure`. That is
+        /// not indecision, it is the ordering rule. A preset is a promise about
+        /// what the app will look like the instant it is applied, so a preset may
+        /// only name a drawing that exists: `.figureOnly` and `.markOnly` are
+        /// vocabulary the renderer does not yet switch on, and a sparkline the
+        /// row does not yet reserve a slot for is a preset that changes nothing
+        /// and then changes the panel's height a release later. If this rollout
+        /// stops halfway — and any of them can — the presets are still honest,
+        /// because every one of them points at the strip the app actually draws
+        /// and at the row it actually measures. Minimal takes `.figureOnly`,
+        /// Monochrome takes `.markOnly` with `menuBarColour: .alertOnly`, and
+        /// Dashboard turns the sparkline on, in the pass that ships the styles
+        /// and the trace — the same pass, so the promise and the drawing arrive
+        /// together.
         public var snapshot: Snapshot {
             switch self {
             case .comfortable:
@@ -892,16 +1036,23 @@ public final class AppearanceSettings: ObservableObject {
                 // and Minimal, not after `Density.comfortable`: the panel
                 // ships at cozy with a 4pt bar, and an upgrade that loosened
                 // every row on its own would be this refactor changing the app
-                // rather than reorganising it.
+                // rather than reorganising it. The three values the other four
+                // presets now spell out are the defaults as well, so there is
+                // nothing to add here: the conservative value *is* the shipped
+                // one, which is what makes it conservative.
                 return Snapshot()
             case .compact:
                 return Snapshot(
                     density: .compact, textScale: 1.0,
                     // It already folded its windows onto one line; only the
                     // plate and the thresholds were off-message.
-                    logoStyle: .plain, logoSize: 16, panelWidth: 340, rowBackground: .always,
+                    logoStyle: .plain, logoSize: 16, coloursBrandMarks: true,
+                    panelWidth: 340, rowBackground: .always,
                     showsPercentage: true, showsAmounts: false, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: false,
+                    // Every service on screen at once is the whole preset, and a
+                    // reserved trace is 24pt a row against rows that are 38.
+                    showsRowSparkline: false,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
                     // The bar is the shipped 5pt even here. Compact buys its
                     // density from line-height, and a preset that fits every
@@ -911,7 +1062,7 @@ public final class AppearanceSettings: ObservableObject {
                     cautionThreshold: 0.80, warningThreshold: 0.95,
                     sortOrder: .urgency, grouping: .flat, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
-                    menuBarLabel: .iconAndPercent, menuBarValue: .highest,
+                    menuBarStyle: .markAndFigure, menuBarValue: .highest,
                     menuBarServiceCount: 3, menuBarColour: .alertOnly, menuBarGlyphHeight: 13
                 )
             case .minimal:
@@ -919,19 +1070,24 @@ public final class AppearanceSettings: ObservableObject {
                     density: .compact, textScale: 1.0,
                     // The preset the whole direction was always closest to: a
                     // plain mark, no windows, no meter. Only the mark was big.
-                    logoStyle: .plain, logoSize: 16, panelWidth: 300, rowBackground: .plain,
+                    logoStyle: .plain, logoSize: 16, coloursBrandMarks: true,
+                    panelWidth: 300, rowBackground: .plain,
                     showsPercentage: true, showsAmounts: false, showsCountdowns: false,
                     showsPlanNames: false, showsAccountLabels: false,
+                    showsRowSparkline: false,
                     secondaryWindows: .hidden, secondaryWindowLimit: 1, rowActions: .never,
                     meterStyle: .numberOnly, meterThickness: 4, colorRamp: .usage,
                     cautionThreshold: 0.80, warningThreshold: 0.95,
                     sortOrder: .alphabetical, grouping: .flat, disconnectedServices: .hidden,
                     showsAllAccounts: false, hidesQuotalessServices: true, showsHeaderSummary: false,
-                    // One service, because this is the preset that drops the
-                    // marks: three bare figures in a row have nothing to say
-                    // which service each belongs to, which is the fault the
-                    // per-service marks were added to fix.
-                    menuBarLabel: .percentOnly, menuBarValue: .highest,
+                    // One service, and it stays one when the style flips. This
+                    // is the preset that will drop the marks, and three bare
+                    // figures in a row have nothing to say which service each
+                    // belongs to — the fault the per-service marks were added to
+                    // fix. The style is `.markAndFigure` in the interim rather
+                    // than the `.figureOnly` this preset wants, because that
+                    // drawing does not exist yet; see `snapshot`'s doc above.
+                    menuBarStyle: .markAndFigure, menuBarValue: .highest,
                     menuBarServiceCount: 1, menuBarColour: .alertOnly, menuBarGlyphHeight: 12
                 )
             case .dashboard:
@@ -942,23 +1098,42 @@ public final class AppearanceSettings: ObservableObject {
                     // coloured strip — but a 32pt mark on a plate was dated
                     // rather than dense, and an expanded window now costs a line
                     // rather than a second bar, so the density is still honest.
-                    logoStyle: .plain, logoSize: 22, panelWidth: 460, rowBackground: .always,
+                    logoStyle: .plain, logoSize: 22, coloursBrandMarks: true,
+                    panelWidth: 460, rowBackground: .always,
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: true, showsAccountLabels: true,
+                    // The one preset that will turn the trace on — it is the
+                    // preset for someone who wants everything — and the one that
+                    // cannot until there is a trace to turn on.
+                    showsRowSparkline: false,
                     secondaryWindows: .expanded, secondaryWindowLimit: 6, rowActions: .always,
                     meterStyle: .bar, meterThickness: 5, colorRamp: .usage,
                     cautionThreshold: 0.75, warningThreshold: 0.92,
                     sortOrder: .urgency, grouping: .usageBand, disconnectedServices: .shown,
                     showsAllAccounts: true, hidesQuotalessServices: false, showsHeaderSummary: true,
-                    menuBarLabel: .iconAndPercent, menuBarValue: .average,
+                    menuBarStyle: .markAndFigure, menuBarValue: .average,
                     menuBarServiceCount: 3, menuBarColour: .perBar, menuBarGlyphHeight: 14
                 )
             case .monochrome:
                 return Snapshot(
                     density: .cozy, textScale: 1.0,
-                    logoStyle: .plain, logoSize: 18, panelWidth: 356, rowBackground: .plain,
+                    logoStyle: .plain, logoSize: 18,
+                    // The one place the interim costs something, so it is written
+                    // down rather than left to be noticed: this preset wants
+                    // `false` and carries `true` until the styles land, so until
+                    // then a preset named Monochrome draws brand hue on its live
+                    // marks. Deferred rather than taken now for the same reason
+                    // as the strip style — the flip and the summary that promises
+                    // it ("Greyscale rings and greyscale marks") have to arrive
+                    // together — and because writing `false` today drops every
+                    // existing Monochrome user to "Custom" the moment they
+                    // launch, their unwritten key reading `true` against a preset
+                    // that says `false`.
+                    coloursBrandMarks: true,
+                    panelWidth: 356, rowBackground: .plain,
                     showsPercentage: true, showsAmounts: true, showsCountdowns: true,
                     showsPlanNames: false, showsAccountLabels: true,
+                    showsRowSparkline: false,
                     secondaryWindows: .chips, secondaryWindowLimit: 3, rowActions: .onHover,
                     meterStyle: .ring, meterThickness: 4, colorRamp: .mono,
                     // The warning is the one moment this preset spends a colour,
@@ -966,10 +1141,15 @@ public final class AppearanceSettings: ObservableObject {
                     cautionThreshold: 0.60, warningThreshold: 0.95,
                     sortOrder: .manual, grouping: .status, disconnectedServices: .collapsed,
                     showsAllAccounts: false, hidesQuotalessServices: false, showsHeaderSummary: true,
-                    // Two, because this preset draws marks and no figures: a
-                    // third undifferentiated mark adds width without adding a
-                    // reading.
-                    menuBarLabel: .iconOnly, menuBarValue: .highest,
+                    // Two, and the count is sized for the style this preset will
+                    // take rather than the one it is holding: under `.markOnly`
+                    // a third undifferentiated mark adds width without adding a
+                    // reading. `.markAndFigure` in the interim, for the reason on
+                    // `snapshot` above; `menuBarColour` moves to `.alertOnly` in
+                    // the same pass, because a monochrome strip drawing marks
+                    // that carry their reading as a tint would have identity and
+                    // no reading at all.
+                    menuBarStyle: .markAndFigure, menuBarValue: .highest,
                     menuBarServiceCount: 2, menuBarColour: .monochrome, menuBarGlyphHeight: 13
                 )
             }
@@ -987,6 +1167,7 @@ public final class AppearanceSettings: ObservableObject {
         public var textScale: Double
         public var logoStyle: LogoStyle
         public var logoSize: Double
+        public var coloursBrandMarks: Bool
         public var panelWidth: Double
         public var rowBackground: RowBackground
         public var showsPercentage: Bool
@@ -994,6 +1175,7 @@ public final class AppearanceSettings: ObservableObject {
         public var showsCountdowns: Bool
         public var showsPlanNames: Bool
         public var showsAccountLabels: Bool
+        public var showsRowSparkline: Bool
         public var secondaryWindows: SecondaryWindowStyle
         public var secondaryWindowLimit: Int
         public var rowActions: RowActionVisibility
@@ -1008,7 +1190,7 @@ public final class AppearanceSettings: ObservableObject {
         public var showsAllAccounts: Bool
         public var hidesQuotalessServices: Bool
         public var showsHeaderSummary: Bool
-        public var menuBarLabel: MenuBarLabelStyle
+        public var menuBarStyle: MenuBarStyle
         public var menuBarValue: MenuBarValue
         public var menuBarServiceCount: Int
         public var menuBarColour: MenuBarColour
@@ -1022,6 +1204,17 @@ public final class AppearanceSettings: ObservableObject {
             // most dated thing the panel drew, and the size was set by it.
             logoStyle: LogoStyle = .plain,
             logoSize: Double = 18,
+            // On, and it is the one default here that can be argued both ways,
+            // so the argument is written down. A brand mark in its own hue is
+            // the one place the panel spends colour on identity rather than on
+            // measurement, and that is a rule this design otherwise holds
+            // absolutely. It is allowed because the live band holds `Ink.mark`'s
+            // own lightness: the hue arrives, the weight does not move, and
+            // every ink in the panel measures within 0.35:1 of what it measured
+            // before. The alternative — off by default, on by choice — ships
+            // fifteen identical grey silhouettes to every new install, which
+            // makes a mark worth less than the first letter of its own name.
+            coloursBrandMarks: Bool = true,
             panelWidth: Double = 356,
             rowBackground: RowBackground = .hover,
             showsPercentage: Bool = true,
@@ -1033,6 +1226,22 @@ public final class AppearanceSettings: ObservableObject {
             // muted run as the account: `ada@example.com · Pro`.
             showsPlanNames: Bool = true,
             showsAccountLabels: Bool = true,
+            // Off, and the four reasons are about what "on by default" would
+            // cost rather than about whether the drawing is any good. It costs
+            // height that cannot be reclaimed: 18pt of trace plus 6pt of pitch
+            // is 24pt per connected row, and nine rows is 216pt on a panel whose
+            // rows are 38–66pt — half a panel again, for a drawing about
+            // yesterday. It is empty exactly when a user is most likely to see
+            // it, because a fresh install has no history, so on by default ships
+            // as fifteen blank reserved slots that read as a rendering fault
+            // rather than as a feature waiting for data. It is the only optional
+            // drawing in the row that has to reserve at all — the pace line is
+            // on by default precisely because it costs nothing when it says
+            // nothing. And it is a second reading of a window the row already
+            // reports: a default should be the smallest panel that answers "how
+            // much have I got left", and this answers "and how did I get here",
+            // which is a question the user asks by turning it on.
+            showsRowSparkline: Bool = false,
             // The windows fold onto the trailing half of the caption line. A
             // second full-width bar per row cost 24pt each and was what turned
             // one service crossing a threshold into a panel washed in amber.
@@ -1059,7 +1268,7 @@ public final class AppearanceSettings: ObservableObject {
             showsAllAccounts: Bool = false,
             hidesQuotalessServices: Bool = false,
             showsHeaderSummary: Bool = true,
-            menuBarLabel: MenuBarLabelStyle = .iconAndPercent,
+            menuBarStyle: MenuBarStyle = .markAndFigure,
             menuBarValue: MenuBarValue = .highest,
             menuBarServiceCount: Int = 3,
             // The strip obeys the panel's rule: hue means something is wrong.
@@ -1070,6 +1279,7 @@ public final class AppearanceSettings: ObservableObject {
             self.textScale = textScale
             self.logoStyle = logoStyle
             self.logoSize = logoSize
+            self.coloursBrandMarks = coloursBrandMarks
             self.panelWidth = panelWidth
             self.rowBackground = rowBackground
             self.showsPercentage = showsPercentage
@@ -1077,6 +1287,7 @@ public final class AppearanceSettings: ObservableObject {
             self.showsCountdowns = showsCountdowns
             self.showsPlanNames = showsPlanNames
             self.showsAccountLabels = showsAccountLabels
+            self.showsRowSparkline = showsRowSparkline
             self.secondaryWindows = secondaryWindows
             self.secondaryWindowLimit = secondaryWindowLimit
             self.rowActions = rowActions
@@ -1091,7 +1302,7 @@ public final class AppearanceSettings: ObservableObject {
             self.showsAllAccounts = showsAllAccounts
             self.hidesQuotalessServices = hidesQuotalessServices
             self.showsHeaderSummary = showsHeaderSummary
-            self.menuBarLabel = menuBarLabel
+            self.menuBarStyle = menuBarStyle
             self.menuBarValue = menuBarValue
             self.menuBarServiceCount = menuBarServiceCount
             self.menuBarColour = menuBarColour
@@ -1102,16 +1313,18 @@ public final class AppearanceSettings: ObservableObject {
     public var snapshot: Snapshot {
         Snapshot(
             density: density, textScale: textScale,
-            logoStyle: logoStyle, logoSize: logoSize, panelWidth: panelWidth, rowBackground: rowBackground,
+            logoStyle: logoStyle, logoSize: logoSize, coloursBrandMarks: coloursBrandMarks,
+            panelWidth: panelWidth, rowBackground: rowBackground,
             showsPercentage: showsPercentage, showsAmounts: showsAmounts, showsCountdowns: showsCountdowns,
             showsPlanNames: showsPlanNames, showsAccountLabels: showsAccountLabels,
+            showsRowSparkline: showsRowSparkline,
             secondaryWindows: secondaryWindows, secondaryWindowLimit: secondaryWindowLimit, rowActions: rowActions,
             meterStyle: meterStyle, meterThickness: meterThickness, colorRamp: colorRamp,
             cautionThreshold: cautionThreshold, warningThreshold: warningThreshold,
             sortOrder: sortOrder, grouping: grouping, disconnectedServices: disconnectedServices,
             showsAllAccounts: showsAllAccounts, hidesQuotalessServices: hidesQuotalessServices,
             showsHeaderSummary: showsHeaderSummary,
-            menuBarLabel: menuBarLabel, menuBarValue: menuBarValue,
+            menuBarStyle: menuBarStyle, menuBarValue: menuBarValue,
             menuBarServiceCount: menuBarServiceCount, menuBarColour: menuBarColour,
             menuBarGlyphHeight: menuBarGlyphHeight
         )
@@ -1125,6 +1338,7 @@ public final class AppearanceSettings: ObservableObject {
         textScale = snapshot.textScale
         logoStyle = snapshot.logoStyle
         logoSize = snapshot.logoSize
+        coloursBrandMarks = snapshot.coloursBrandMarks
         panelWidth = snapshot.panelWidth
         rowBackground = snapshot.rowBackground
         showsPercentage = snapshot.showsPercentage
@@ -1132,6 +1346,7 @@ public final class AppearanceSettings: ObservableObject {
         showsCountdowns = snapshot.showsCountdowns
         showsPlanNames = snapshot.showsPlanNames
         showsAccountLabels = snapshot.showsAccountLabels
+        showsRowSparkline = snapshot.showsRowSparkline
         secondaryWindows = snapshot.secondaryWindows
         secondaryWindowLimit = snapshot.secondaryWindowLimit
         rowActions = snapshot.rowActions
@@ -1146,7 +1361,7 @@ public final class AppearanceSettings: ObservableObject {
         showsAllAccounts = snapshot.showsAllAccounts
         hidesQuotalessServices = snapshot.hidesQuotalessServices
         showsHeaderSummary = snapshot.showsHeaderSummary
-        menuBarLabel = snapshot.menuBarLabel
+        menuBarStyle = snapshot.menuBarStyle
         menuBarValue = snapshot.menuBarValue
         menuBarServiceCount = snapshot.menuBarServiceCount
         menuBarColour = snapshot.menuBarColour
@@ -1181,6 +1396,7 @@ public final class AppearanceSettings: ObservableObject {
         case textScale = "aibars.appearance.textScale"
         case logoStyle = "aibars.appearance.logoStyle"
         case logoSize = "aibars.appearance.logoSize"
+        case coloursBrandMarks = "aibars.appearance.coloursBrandMarks"
         case panelWidth = "aibars.appearance.panelWidth"
         case rowBackground = "aibars.appearance.rowBackground"
         case showsPercentage = "aibars.appearance.showsPercentage"
@@ -1188,6 +1404,7 @@ public final class AppearanceSettings: ObservableObject {
         case showsCountdowns = "aibars.appearance.showsCountdowns"
         case showsPlanNames = "aibars.appearance.showsPlanNames"
         case showsAccountLabels = "aibars.appearance.showsAccountLabels"
+        case showsRowSparkline = "aibars.appearance.showsRowSparkline"
         case secondaryWindows = "aibars.appearance.secondaryWindows"
         case secondaryWindowLimit = "aibars.appearance.secondaryWindowLimit"
         case rowActions = "aibars.appearance.rowActions"
@@ -1204,7 +1421,13 @@ public final class AppearanceSettings: ObservableObject {
         case showsAllAccounts = "aibars.appearance.showsAllAccounts"
         case hidesQuotalessServices = "aibars.appearance.hidesQuotalessServices"
         case showsHeaderSummary = "aibars.appearance.showsHeaderSummary"
-        case menuBarLabel = "aibars.appearance.menuBarLabel"
+        /// The strip style, still stored under the string the setting shipped
+        /// with. The case is named for the property and the property is named
+        /// for what it now controls, but the *key* is what a user's preference is
+        /// filed under, and renaming a persisted key to tidy a call site is how a
+        /// preference gets silently dropped on upgrade — the same rule
+        /// `menuBarPercent` states for `menuBarValue` and keeps its own name for.
+        case menuBarStyle = "aibars.appearance.menuBarLabel"
         case menuBarValue = "aibars.appearance.menuBarValue"
         case menuBarServiceCount = "aibars.appearance.menuBarServiceCount"
         case menuBarColour = "aibars.appearance.menuBarColour"
@@ -1229,13 +1452,31 @@ public final class AppearanceSettings: ObservableObject {
         /// `migrateLegacyKeys` can delete it.
         case legacyGradientFill = "aibars.appearance.usesGradientFill"
 
-        /// What the look adoption below leaves alone: the stamp itself, and the
-        /// record that the one-time import from AppState has already run. Clearing
-        /// that record would re-run the import, and a key written by a version two
-        /// generations back would then overwrite exactly the defaults the wipe
-        /// exists to deliver.
+        /// What the look adoption below leaves alone: the stamp itself, the record
+        /// that the one-time import from AppState has already run, and the one
+        /// legacy key `init` still reads. Clearing the import record would re-run
+        /// the import, and a key written by a version two generations back would
+        /// then overwrite exactly the defaults the wipe exists to deliver.
+        ///
+        /// `legacyMenuBarBarCount` is here because the wipe was eating it. The
+        /// order is `adoptCurrentLook` (the first statement of `init`) → the reads
+        /// → `migrateLegacyKeys`, so a key removed by the wipe is gone before the
+        /// read at `menuBarServiceCount` can see it: a user who had set one bar
+        /// silently got three services, and the carry-over — and the comment
+        /// promising it — were dead code for the entire population they were
+        /// written for. Nothing caught it because `adoptCurrentLook` returns early
+        /// for every store except `UserDefaults.standard`, so the scratch domain
+        /// the tests use never ran the wipe at all.
+        ///
+        /// Exempting it costs nothing beyond this launch: `migrateLegacyKeys`
+        /// writes the clamped count under the current key and removes this one on
+        /// the same launch it is read, so it survives the wipe exactly once and
+        /// then is not there to survive anything.
         var survivesLookAdoption: Bool {
-            self == .adoptedLookGeneration || self == .didMigrate
+            switch self {
+            case .adoptedLookGeneration, .didMigrate, .legacyMenuBarBarCount: return true
+            default: return false
+            }
         }
     }
 
@@ -1246,6 +1487,19 @@ public final class AppearanceSettings: ObservableObject {
     /// colour rule became "chroma means measurement or state" — which is carried by
     /// tokens for everybody, but only reaches a stored `meterThickness` of 4
     /// through the adoption below.
+    ///
+    /// Deliberately still 3 for `coloursBrandMarks`, `showsRowSparkline` and the
+    /// six strip styles, and the next author to reach for this should read the
+    /// reason first. Adoption exists to deliver a moved DEFAULT to an install that
+    /// already has a value stored under that key. Both new keys have never been
+    /// written for anybody, so `readBool ?? defaults` already lands every existing
+    /// install on the shipped value at the next launch — there is nothing stored
+    /// to overrule. And `menuBarStyle` keeps its key *and* its raw values, so what
+    /// is stored there is either the shipped default or a value a preset wrote
+    /// while saying what it wanted the strip to look like; honouring it is the fix
+    /// this pass makes, not a regression to migrate away. A bump would clear every
+    /// user's density, panel width, thresholds and custom order to correct
+    /// precisely nothing.
     private static let lookGeneration = 3
 
     /// Takes an existing install to the current look, once per generation.
@@ -1350,7 +1604,15 @@ public final class AppearanceSettings: ObservableObject {
             max(menuBarServiceCount, MenuBarStripContent.range.lowerBound),
             MenuBarStripContent.range.upperBound
         )
-        menuBarGlyphHeight = min(max(menuBarGlyphHeight, 10), 16)
+        // Whole points only, and rounded *before* the clamp so the bounds stay
+        // exact: 13.5 → 14, 9.6 → 10, 16.4 → 16. The tuner offered half steps and
+        // the rasteriser rounds the width it measures but passes the height
+        // through raw, so a stored 13.5 renders a soft strip at 1× for ever and
+        // the readout beside the slider disagrees with the menu bar. Rounding on
+        // read is the half of that fix that reaches an install which already has
+        // a fractional value in its store; the tuner's step is the half that
+        // stops another one being minted.
+        menuBarGlyphHeight = min(max(menuBarGlyphHeight.rounded(), 10), 16)
         warningThreshold = min(max(warningThreshold, 0.50), 0.98)
         cautionThreshold = min(max(cautionThreshold, cautionRange.lowerBound), cautionRange.upperBound)
     }
@@ -1360,6 +1622,7 @@ public final class AppearanceSettings: ObservableObject {
         write(textScale, .textScale)
         write(logoStyle.rawValue, .logoStyle)
         write(logoSize, .logoSize)
+        write(coloursBrandMarks, .coloursBrandMarks)
         write(panelWidth, .panelWidth)
         write(rowBackground.rawValue, .rowBackground)
         write(showsPercentage, .showsPercentage)
@@ -1367,6 +1630,7 @@ public final class AppearanceSettings: ObservableObject {
         write(showsCountdowns, .showsCountdowns)
         write(showsPlanNames, .showsPlanNames)
         write(showsAccountLabels, .showsAccountLabels)
+        write(showsRowSparkline, .showsRowSparkline)
         write(secondaryWindows.rawValue, .secondaryWindows)
         write(secondaryWindowLimit, .secondaryWindowLimit)
         write(rowActions.rawValue, .rowActions)
@@ -1381,7 +1645,7 @@ public final class AppearanceSettings: ObservableObject {
         write(showsAllAccounts, .showsAllAccounts)
         write(hidesQuotalessServices, .hidesQuotalessServices)
         write(showsHeaderSummary, .showsHeaderSummary)
-        write(menuBarLabel.rawValue, .menuBarLabel)
+        write(menuBarStyle.rawValue, .menuBarStyle)
         write(menuBarValue.rawValue, .menuBarValue)
         write(menuBarServiceCount, .menuBarServiceCount)
         write(menuBarColour.rawValue, .menuBarColour)
@@ -1411,8 +1675,8 @@ public final class AppearanceSettings: ObservableObject {
         // "name" was icon plus rotating service names, which the per-service
         // marks replace. The read in `init` has already fallen back to the
         // default, so this only rewrites the dead string.
-        if store.string(forKey: Key.menuBarLabel.rawValue) == "name" {
-            store.set(menuBarLabel.rawValue, forKey: Key.menuBarLabel.rawValue)
+        if store.string(forKey: Key.menuBarStyle.rawValue) == "name" {
+            store.set(menuBarStyle.rawValue, forKey: Key.menuBarStyle.rawValue)
         }
 
         guard !store.bool(forKey: Key.didMigrate.rawValue) else { return }
@@ -1420,8 +1684,8 @@ public final class AppearanceSettings: ObservableObject {
         // A raw value that no longer parses — "name" is the only one — leaves the
         // default in place, which is where the retirement above sends it anyway.
         if let raw = store.string(forKey: "aibars.menuBarDisplay"),
-           let style = MenuBarLabelStyle(rawValue: raw) {
-            menuBarLabel = style
+           let style = MenuBarStyle(rawValue: raw) {
+            menuBarStyle = style
         }
         if let allWindows = store.object(forKey: "aibars.showsAllWindows") as? Bool {
             // Off used to mean "fold them into chips", not "drop them".

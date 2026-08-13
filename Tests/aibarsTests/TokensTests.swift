@@ -171,11 +171,29 @@ final class TokensTests: XCTestCase {
         XCTAssertEqual(Tokens.scrimAlpha(isDark: false, reduceTransparency: true), 1)
     }
 
+    /// The two literals, and they are derived rather than chosen.
+    ///
+    /// They were 0.88 dark / 0.92 light, and both moved because `Meter.track` is
+    /// an absolute pair drawn *inside* a panel whose ground is `Surface.base` at
+    /// this alpha over the user's desktop. Modelling the material as fully
+    /// transparent — the strict upper bound on what the wallpaper contributes —
+    /// a white desktop composited the dark ground to within 1.0715:1 of the
+    /// track at the retired 0.88 and to 1.0005:1 at 0.86, which is the two of
+    /// them being one colour: the empty half of every bar and dial stops being a
+    /// container and becomes a hole. At **0.94** the dark ground is
+    /// `12 + 243·0.06 = 26.6 → #1B1C1F` (L\* 10.28) against the track's L\* 19.42,
+    /// **1.2735:1 with the track still above it**; at **0.96** the light ground
+    /// is `246·0.96 → #ECEDF0` (L\* 93.75) against the track's L\* 85.25,
+    /// **1.2545:1 with the track still below it**.
+    ///
+    /// `PanelShellTests.testTheTrackNeverInvertsAgainstTheGround` measures those
+    /// two ratios off the same arithmetic, so these literals and that
+    /// measurement move together or one of them fails.
     func testScrimIsHeavierOnLightThanOnDark() {
         let dark = Tokens.scrimAlpha(isDark: true, reduceTransparency: false)
         let light = Tokens.scrimAlpha(isDark: false, reduceTransparency: false)
-        XCTAssertEqual(dark, 0.88, accuracy: 0.0001)
-        XCTAssertEqual(light, 0.92, accuracy: 0.0001)
+        XCTAssertEqual(dark, 0.94, accuracy: 0.0001)
+        XCTAssertEqual(light, 0.96, accuracy: 0.0001)
         // The light base sits nearer a bright wallpaper, so it needs more cover
         // to keep the same distance from the card planes above it.
         XCTAssertGreaterThan(light, dark)
@@ -233,9 +251,28 @@ final class TokensTests: XCTestCase {
     /// Distinct hexes are not the claim worth testing — three values that differ
     /// in the third decimal of their luminance are a ladder on paper and one
     /// plane on a display. So each step is also held to a measurable separation.
-    /// The shipped steps measure 1.09 and 1.08 light, 1.07 and 1.15 dark; the
-    /// floor is set at 1.05, which is loose enough to let a step be retuned and
-    /// tight enough to catch one being lost.
+    /// The shipped steps measure **1.1041** well→base and **1.0712** base→raised
+    /// in light, **1.0556** and **1.1632** in dark; the floor is set at 1.05,
+    /// which is loose enough to let a step be retuned and tight enough to catch
+    /// one being lost. Measured off the retired hexes (`#EDEEF1`/`#F7F8FA` light,
+    /// `#08090A`/`#101114`/`#1A1B1F` dark) the same four steps were 1.0918 /
+    /// 1.0626 and 1.0555 / 1.0972, so the rebuild widened three of them and left
+    /// dark's well where it was.
+    ///
+    /// Dark's well is now the binding case at 1.0556, 0.0056 above the floor,
+    /// and it cannot be given much more room: the *entire* headroom beneath
+    /// `Surface.base` `#0C0D11` is `ratio(base, #000000)` = 1.0813:1, so a well
+    /// that is not pure black has 0.08 of a ratio to live in and `#030407`
+    /// spends two thirds of it. That is also why the two appearances put their
+    /// larger step at opposite ends — light has room below its base and almost
+    /// none above `#FFFFFF`, dark has room above and almost none below.
+    ///
+    /// What does *not* flip is the direction: a well is a hole and a raised
+    /// surface catches light in both appearances, so the order is
+    /// `well < base < raised` in luminance in dark exactly as in light. A dark
+    /// ladder that inverted would put the sunk plane above the ground it is cut
+    /// into, which is why this is asserted in a loop over both rather than
+    /// per-appearance.
     ///
     /// Elevation has exactly three planes. A fourth ground is the change this
     /// test cannot see, and is a review question rather than an assertion.
@@ -274,6 +311,117 @@ final class TokensTests: XCTestCase {
             XCTAssertGreaterThan(offset, 0, "the base is not cool in \(dark ? "dark" : "light")")
             XCTAssertLessThan(offset, 0.05, "the base reads as tinted in \(dark ? "dark" : "light")")
         }
+    }
+
+    // MARK: - The planes over the ground
+
+    /// `Tokens.quiet(_:)` lays down pure ink at exactly the alpha it is handed.
+    ///
+    /// This is the premise every plane hex below rests on, and it did not hold
+    /// until the palette rebuild. `quiet(_:)` returned `Color.primary.opacity(o)`;
+    /// `Color.primary` resolves to `NSColor.labelColor`, which is black or white
+    /// at **alpha 0.8471**, and `Color.opacity(_:)` *multiplies*. Every value in
+    /// `Fill` was therefore laying down 84.71% of the ink it names — `card` 0.05
+    /// composited at 0.0424 — so the whole elevation ladder ran 15% quieter than
+    /// every number written against it, including the hexes this file and
+    /// `GlyphColourTests` both record.
+    ///
+    /// All eight opacities rather than the six that make cards: `rule` and
+    /// `border` go through the same function, and a regression here would be a
+    /// regression in the panel's one hairline too.
+    func testQuietIsPureInkAtTheStatedAlpha() throws {
+        let opacities: [(name: String, value: Double)] = [
+            ("card", Tokens.Fill.card), ("hover", Tokens.Fill.hover),
+            ("logoTile", Tokens.Fill.logoTile), ("controlHover", Tokens.Fill.controlHover),
+            ("cardHover", Tokens.Fill.cardHover), ("pressed", Tokens.Fill.pressed),
+            ("rule", Tokens.Fill.rule), ("border", Tokens.Fill.border)
+        ]
+        for dark in [false, true] {
+            let ink: CGFloat = dark ? 1 : 0
+            for opacity in opacities {
+                let resolved = try resolve(Tokens.quiet(opacity.value), dark: dark)
+                for channel in [resolved.redComponent, resolved.greenComponent, resolved.blueComponent] {
+                    XCTAssertEqual(
+                        channel, ink, accuracy: 0.001,
+                        "quiet(\(opacity.name)) is not pure ink in \(dark ? "dark" : "light")"
+                    )
+                }
+                XCTAssertEqual(
+                    Double(resolved.alphaComponent), opacity.value, accuracy: 0.001,
+                    "quiet(\(opacity.name)) laid down \(resolved.alphaComponent) of the "
+                    + "\(opacity.value) it names — a second alpha has got in"
+                )
+            }
+        }
+    }
+
+    /// The six card planes, as hexes.
+    ///
+    /// A `Fill` value is an opacity rather than a colour precisely so that one
+    /// ground carries the whole ladder, which means nothing in the palette
+    /// states what these planes actually *are* — they exist only once something
+    /// composites them, and they are what almost every ink in the app is read
+    /// against. Recorded here so that a change to `Surface.base`, to a `Fill`
+    /// value, or to `quiet(_:)` shows up as a named plane moving rather than as
+    /// a distant contrast figure drifting a tenth.
+    ///
+    /// Light, over `#F6F7FA`, with the ΔL\* each one buys:
+    /// `card` −4.18, `hover` −5.24, `logoTile` −5.94, `controlHover` −7.00,
+    /// `cardHover` −7.70, `pressed` −10.54. Dark, over `#0C0D11`: +5.14, +6.61,
+    /// +7.64, +8.63, +10.05, +13.43. A single opacity buys a 23% larger step in
+    /// dark than in light because L\* is compressive near black; that asymmetry
+    /// is stated in `Fill`'s own doc and is the price of the property that makes
+    /// the ladder one set of numbers instead of a pair per value.
+    ///
+    /// `logoTile` light is the one entry sitting on a rounding tie: its blue
+    /// channel composites to exactly `250 − 250·0.07 = 232.5`, and `.rounded()`
+    /// goes half away from zero, so the plane is `#E5E6E9` and not the `#E5E6E8`
+    /// the same arithmetic rounded to even would give. Both are the same colour
+    /// to a display; the value is written down here so the next reader knows the
+    /// last bit is a coin toss rather than a measurement.
+    func testTheCardPlanesResolveToTheRecordedHexes() throws {
+        let planes: [(name: String, opacity: Double, light: UInt32, dark: UInt32)] = [
+            ("card", Tokens.Fill.card, 0xEAEBEE, 0x18191D),
+            ("hover", Tokens.Fill.hover, 0xE7E8EB, 0x1B1C1F),
+            ("logoTile", Tokens.Fill.logoTile, 0xE5E6E9, 0x1D1E22),
+            ("controlHover", Tokens.Fill.controlHover, 0xE2E3E6, 0x1F2024),
+            ("cardHover", Tokens.Fill.cardHover, 0xE0E1E4, 0x222326),
+            ("pressed", Tokens.Fill.pressed, 0xD8D9DC, 0x292A2E)
+        ]
+        for dark in [false, true] {
+            let base = try resolve(Tokens.Surface.base, dark: dark)
+            for plane in planes {
+                let ink = try resolve(Tokens.quiet(plane.opacity), dark: dark)
+                let drawn = composite(ink, over: base)
+                XCTAssertEqual(
+                    drawn, dark ? plane.dark : plane.light,
+                    String(
+                        format: "%@ resolved to #%06X in %@, not #%06X",
+                        plane.name, drawn, dark ? "dark" : "light", dark ? plane.dark : plane.light
+                    )
+                )
+            }
+        }
+    }
+
+    /// One plane laid over another, the way the palette states the arithmetic:
+    /// `round(bg + (fg − bg)·α)` per 8-bit channel, with the ink's own resolved
+    /// alpha rather than the `Fill` constant it was built from — the point of the
+    /// pairing with `testQuietIsPureInkAtTheStatedAlpha` is that both halves are
+    /// read back off the token rather than restated here.
+    ///
+    /// Quantised per step rather than at the end because each of these is a real
+    /// drawn surface and a drawn surface is eight bits.
+    private func composite(_ ink: NSColor, over ground: NSColor) -> UInt32 {
+        func channel(_ component: (NSColor) -> CGFloat) -> UInt32 {
+            let background = (component(ground) * 255).rounded()
+            let foreground = (component(ink) * 255).rounded()
+            let drawn = background + (foreground - background) * ink.alphaComponent
+            return UInt32(min(max(drawn.rounded(), 0), 255))
+        }
+        return channel { $0.redComponent } << 16
+             | channel { $0.greenComponent } << 8
+             | channel { $0.blueComponent }
     }
 
     // MARK: - Increased contrast

@@ -9,13 +9,18 @@ import SwiftUI
 /// remain trademarks of their respective owners and appear here only to
 /// identify the service each row reports usage for.
 ///
-/// Every mark draws in one ink — `Tokens.Ink.mark` — in both appearances and at
-/// every size, because chroma in this app means measurement or state and
-/// identity is carried by the silhouette. That is also what the set publishes:
-/// a single path with no `fill`, for the host to ink. So the two things this
-/// file normalises per mark are the ink (one value, not stored here) and the
-/// optical mass (`opticalScale`, below), which is the other half of the "row of
-/// stickers" problem — coverage varies 2.7× across the set.
+/// A mark is inked by its host, not by this file: the set publishes a single
+/// path with no `fill`, and every entry here carries geometry, a raw brand hex
+/// as data, and an optical scale. What the file supplies instead of a colour is
+/// two *bands*, each a rule for turning a raw brand hex into something legal on
+/// this app's grounds — `brandInk` for a mark's colour used as a figure or a
+/// meter fill, `liveInk` for the mark itself. Both hold one lightness and spend
+/// the brand on hue alone, because chroma in this app means measurement or
+/// state and identity is carried by the silhouette.
+///
+/// The other thing normalised per mark is optical mass (`opticalScale`, below),
+/// which is the other half of the "row of stickers" problem — coverage varies
+/// 2.7× across the set.
 ///
 /// A mark can be replaced without touching this file: drop an image named
 /// `logo-<providerID>` into an asset catalog and `ProviderLogo` prefers it.
@@ -73,17 +78,33 @@ public struct BrandMark {
     /// `menuBarColour == .perBar`, and meters and figures under
     /// `ColorRamp.provider`. Both are the user asking for it. Neither can take
     /// the raw literal: `hex` is authored for a logo on white, so Copilot's
-    /// near-black drew a meter at 1.08:1 on a dark panel and Claude's orange set
-    /// a percentage at 3.04:1 on a light one.
+    /// near-black drew a meter at 1.09:1 on a dark panel and Claude's orange set
+    /// a percentage at 2.91:1 on a light one.
     ///
-    /// So hue is kept and lightness and chroma are not: OKLCh L 0.48 / C ≤ 0.08
+    /// So hue is kept and lightness and chroma are not: OKLCh L 0.455 / C ≤ 0.08
     /// light, L 0.80 / C ≤ 0.07 dark. Every entry clears 4.60:1 on the worst
-    /// ground in the panel (a hovered `.always` card) in both appearances, which
-    /// makes it legal as a *figure* and not merely as a bar, and 3.9:1 against
-    /// `Meter.track`. The cost is that Claude, Mistral and MiniMax come out
-    /// near-identical — three warm browns one band apart. That is what banding
-    /// a brand palette to one luminance does, and it is the right trade here,
-    /// because the thing telling those rows apart is the glyph.
+    /// plane in the panel in both appearances, which makes it legal as a *figure*
+    /// and not merely as a bar, and 4.80:1 against `Meter.track`. The cost is
+    /// that Claude, Mistral and MiniMax come out near-identical — three warm
+    /// browns one band apart. That is what banding a brand palette to one
+    /// luminance does, and it is the right trade here, because the thing telling
+    /// those rows apart is the glyph.
+    ///
+    /// The light half was L 0.48, and it moved because the ground under it did.
+    /// "The worst ground in the panel" used to mean a hovered `.always` card at
+    /// `#E1E2E4`; it now means the *pressed* card over the wallpaper that pushes
+    /// hardest, `#D0D1D3` light and `#36373A` dark, which is a step lighter and a
+    /// step darker respectively. Measured there, the shipped light half ran
+    /// 3.91–3.93:1 — under the 4.5:1 this doc claims — so it is re-cut rather
+    /// than re-described. 4.5:1 on `#D0D1D3` bounds a light figure at L\* ≤ 38.32
+    /// and 4.6:1 at L\* ≤ 37.73; at OKLCh L 0.455 the band's loudest entry is
+    /// Perplexity's cyan at L\* 37.63, so the 4.60 above is the measurement and
+    /// not a rounding of 4.5. Light now runs L\* 35.66–37.63, 4.62–4.97 on the
+    /// worst plane, 6.59–7.09 on `Surface.base`.
+    ///
+    /// The dark half did not move: L\* 75.80–77.74 measures 6.18–6.55 on
+    /// `#36373A` and 10.09–10.69 on `Surface.base`, so it clears the new floor
+    /// with the values it already had.
     ///
     /// Resolved rather than dynamic because the strip is rasterised through
     /// `ImageRenderer`, which draws in the light appearance whatever the menu
@@ -104,20 +125,43 @@ public struct BrandMark {
     /// The banded pair, keyed by provider.
     ///
     /// Grouped the way the brands are: Claude and Claude Code are one company
-    /// and one colour, and the six near-black marks (OpenAI's two, Cursor,
-    /// Grok, OpenCode, Z.ai) have no hue left to keep once they are lifted to a
-    /// readable lightness, so they land on the neutral with everything else that
-    /// has no band of its own.
+    /// and one colour, and the seven near-black marks (OpenAI's two, Cursor,
+    /// Copilot, Grok, OpenCode, Z.ai) have no hue left to keep once they are
+    /// lifted to a readable lightness, so they land on the neutral with
+    /// everything else that has no band of its own.
+    ///
+    /// Copilot is in that list and used to have a `case` of its own returning
+    /// `(0x656363, 0xBFBDBD)` — OKLab ΔE **0.0031** light and **0.0027** dark
+    /// from `neutralBand`, one 8-bit step per channel, and about a thirtieth of
+    /// the smallest difference an eye resolves. The case is deleted rather than
+    /// re-cut: its raw `0x181717` measures OKLCh C 0.0016, which is quantisation
+    /// noise in a near-black and not a brand decision, so it belongs with the
+    /// achromatic set. Re-derived at the new light lightness it would have come
+    /// out `0x575656` against the neutral's `0x575757` — ΔE 0.0030, the same
+    /// invisible distinction arriving again, which is why the answer is to stop
+    /// keying it rather than to keep the number in step.
+    ///
+    /// Mistral keeps a case of its own even though `0x7C4635` is one 8-bit step
+    /// from Claude's `0x7C4634`, which looks like the distinction Copilot just
+    /// lost. It is not the same thing. Copilot's case duplicated the `default`,
+    /// so deleting it removes a branch and changes nothing; Claude and Mistral are
+    /// two entries that both have to exist, and merging them would be a grouping
+    /// choice rather than the removal of a dead one. `liveBand` below does merge
+    /// them, because there the two derive to a byte-identical light half.
+    ///
+    /// Every light value below is re-derived at OKLCh L 0.455; the dark values
+    /// are unchanged. The derivation is one function of the raw `hex`, so the
+    /// same code that produces these also reproduces every dark hex byte for
+    /// byte — which is the check that the light half was re-cut and not retyped.
     private static func band(_ providerID: String) -> (light: UInt32, dark: UInt32) {
         switch providerID {
-        case "claude", "claudecode": return (0x8C5544, 0xE6AF9D)
-        case "mistral":             return (0x8D5545, 0xE6AF9E)
-        case "minimax":             return (0x8D544C, 0xE7ADA4)
-        case "perplexity":          return (0x1E6D79, 0x87CBD7)
-        case "openrouter":          return (0x596091, 0xB2BAEB)
-        case "deepseek":            return (0x52628F, 0xACBCEC)
-        case "gemini":              return (0x6F5A8B, 0xC6B3E4)
-        case "copilot":             return (0x656363, 0xBFBDBD)
+        case "claude", "claudecode": return (0x7C4634, 0xE6AF9D)
+        case "mistral":             return (0x7C4635, 0xE6AF9E)
+        case "minimax":             return (0x7D443D, 0xE7ADA4)
+        case "perplexity":          return (0x00626F, 0x87CBD7)
+        case "openrouter":          return (0x4C5283, 0xB2BAEB)
+        case "deepseek":            return (0x455483, 0xACBCEC)
+        case "gemini":              return (0x5F4B7B, 0xC6B3E4)
         default:                    return neutralBand
         }
     }
@@ -125,7 +169,112 @@ public struct BrandMark {
     /// Where a mark with no hue worth banding lands, and the safe answer for a
     /// mark added tomorrow: grey that reads, rather than a saturated literal
     /// that outshouts the alert.
-    private static let neutralBand: (light: UInt32, dark: UInt32) = (0x636363, 0xBEBEBE)
+    ///
+    /// The light half was `0x636363` (L\* 41.96, 3.93:1 on the worst plane) and
+    /// is the band's own rule at C 0: the grey at OKLCh L 0.455, L\* 36.99,
+    /// 4.73:1.
+    private static let neutralBand: (light: UInt32, dark: UInt32) = (0x575757, 0xBEBEBE)
+
+    // MARK: - The brand as a mark rather than as a figure
+
+    /// The brand's colour as a *mark* is drawn in it: hue only, at `Ink.mark`'s
+    /// own lightness.
+    ///
+    /// A second band and not a second opinion. `brandInk` above is cut for a
+    /// meter fill and a percentage — a figure has to clear 4.5:1 — and a mark is
+    /// neither of those. It is an 18pt silhouette in the leading column, standing
+    /// in the ladder the whole panel's hierarchy is built from (`body` 15.20 →
+    /// `mark` 10.58 → `muted` 6.85 on `Surface.base`). Painting it at the figure
+    /// band's lightness measures **7.04:1** for a live Claude, which is the
+    /// `muted` rung and not the `mark` one: a service that *is* reporting would
+    /// be drawn at the weight this app uses to say a service is not. Measured,
+    /// not feared — that is the number the band above produces.
+    ///
+    /// So this band holds `Ink.mark`'s lightness exactly (OKLCh L 0.3496 light,
+    /// L 0.8414 dark) and spends the brand only on hue, at C ≤ 0.070. Every entry
+    /// lands within **0.35:1** of `Ink.mark`'s own contrast on every ground in
+    /// the app — base, hovered card, raised, logo tile, the worst plane and both
+    /// ends of the menu bar's range, in both appearances — and the worst of them
+    /// is 7.11:1 (MiniMax, dark worst plane) against a 3:1 floor. That is the
+    /// property an escape hatch rests on: turning brand colour off removes a hue
+    /// and moves no measurement.
+    ///
+    /// **The chroma ceiling is C ≤ 0.070, one value for both appearances.** It is
+    /// the tighter half of the ceiling `brandInk` already holds (0.08 light /
+    /// 0.07 dark), applied to both because a mark is a far denser shape than a
+    /// 5pt bar and must not be allowed the looser of the two. No brand exceeds
+    /// it, and the reason is arithmetic rather than luck: the ceiling is applied
+    /// *before* the derivation, so a raw hue louder than it is simply clamped —
+    /// the loudest value the set produces after 8-bit quantisation is C 0.0705
+    /// (OpenRouter dark), and the only entry under the ceiling is Perplexity's
+    /// light half at C 0.0619, where the sRGB gamut at L 0.3496 and h 209.8 runs
+    /// out before the ceiling does.
+    ///
+    /// The ceiling is also chosen against the alarms, which are the only other
+    /// chroma in the application: `Ink.attention` is OKLCh C **0.0965** light and
+    /// 0.1506 dark, `Ink.alarm` C 0.1414 light and 0.1069 dark. The binding case
+    /// is the light amber, the quietest thing in the app that means "act", and
+    /// 0.070 is **0.725×** it — 0.465× the dark amber, 0.495× the light red,
+    /// 0.655× the dark red. The loudest derived value, 0.0705, is 0.730× the
+    /// light amber. A brand mark cannot out-shout an alarm because it is not
+    /// permitted three quarters of its saturation.
+    ///
+    /// Resolved rather than dynamic, for the reason `brandInk(dark:)` is: the
+    /// strip is rasterised through `ImageRenderer`, which draws in the light
+    /// appearance whatever the menu bar is doing. Panel-side callers take
+    /// `liveInk` below.
+    public func liveInk(dark: Bool) -> Color {
+        let band = Self.liveBand(providerID)
+        return Color(hex: dark ? band.dark : band.light)
+    }
+
+    /// The same pair as a dynamic value, for a call site with an appearance to
+    /// resolve against — which is every surface except the strip.
+    public var liveInk: Color {
+        let band = Self.liveBand(providerID)
+        return Tokens.dynamic(light: band.light, dark: band.dark)
+    }
+
+    /// The live band, keyed by provider.
+    ///
+    /// Grouped the way the derivation came out rather than the way the companies
+    /// are. Claude and Claude Code are one company and one colour, which is the
+    /// same grouping `band(_:)` makes. Mistral joins them because at C 0.070 and
+    /// one lightness it *is* that colour: raw hues 38.8° and 37.6° derive to a
+    /// byte-identical light half and to dark halves `0xF4BCAA` and `0xF4BCAB`,
+    /// OKLab ΔE 0.0013 apart. Shipping those as two cases would be the distinction
+    /// `band(_:)`'s deleted Copilot entry was. The seven brands with no entry are
+    /// the achromatic set — OpenAI's two, Cursor, Copilot, Grok, Z.ai, OpenCode,
+    /// and anything added tomorrow — and they fall through to the mark ink, which
+    /// is this band's own rule evaluated at C 0 rather than an exception to it.
+    ///
+    /// DeepSeek and OpenRouter stay separate at ΔE 0.0100 light and 0.0101 dark:
+    /// perceptibly two periwinkles, barely. They are two independent derivations
+    /// that happen to land close, not two names for one colour.
+    private static func liveBand(_ providerID: String) -> (light: UInt32, dark: UInt32) {
+        switch providerID {
+        case "claude", "claudecode", "mistral": return (0x592C1E, 0xF4BCAA)
+        case "minimax":    return (0x592B25, 0xF5BAB1)
+        case "gemini":     return (0x423158, 0xD4C1F1)
+        // The one entry below the ceiling, and not by choice: the sRGB gamut at
+        // L 0.3496 and h 209.8 runs out at C 0.0619.
+        case "perplexity": return (0x00434C, 0x94D8E4)
+        case "deepseek":   return (0x2C385F, 0xB9CAFA)
+        case "openrouter": return (0x32365E, 0xBFC7F9)
+        default:           return achromaticBand
+        }
+    }
+
+    /// Where a brand with no hue lands, byte-identical to `Tokens.Ink.mark`.
+    ///
+    /// It has to be. This band's claim is that brand colour changes hue and never
+    /// weight, so a brand with no hue must come out at exactly the ink a mark
+    /// already draws in — which makes the whole achromatic set a strict no-op and
+    /// not a special case. Written as literals rather than reached through
+    /// `Tokens.Ink.mark` because `liveInk(dark:)` is resolved rather than dynamic
+    /// and the strip takes one half of it; a test asserts the two stay equal in
+    /// both appearances, so the duplication cannot drift.
+    private static let achromaticBand: (light: UInt32, dark: UInt32) = (0x383A42, 0xC7CBD3)
 
     /// The OpenAI glyph, carried by two entries.
     ///

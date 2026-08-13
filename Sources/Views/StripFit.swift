@@ -20,23 +20,34 @@ public enum StripFit {
 
     // MARK: - The strip's rhythm
 
-    /// A brand mark to the figure beside it.
-    ///
-    /// This and `segmentGap` are the two gaps that decide whether the strip
-    /// reads as "mark, number, mark, number" or as one run of debris, and the
-    /// answer is a legibility judgement at 12–14pt rather than a proportion of
-    /// anything. They are deliberately not on `Tokens.Space`: that scale is
-    /// calibrated for a 300pt panel, this is a 22pt bar.
-    ///
-    /// They are public because the view that draws the strip and the function
-    /// that measures it have to be adding up the same strip. A private copy on
-    /// either side is a width contract that can quietly stop being true, which
-    /// is the class of bug this file exists to close.
-    public static let markGap: CGFloat = 3
+    // This file used to *own* the strip's rhythm and geometry: `markGap`,
+    // `segmentGap`, `figureDigits`, `markBox` and `figureSize` were all declared
+    // here, and `Tokens.Strip` declared every one of them again. The view drew
+    // from the Tokens copies and this file measured from its own, so the width
+    // contract had two authors who agreed by luck — which is precisely the bug
+    // the paragraph at the top of this file says the file exists to close, in the
+    // file itself.
+    //
+    // Two of the five had already drifted. `Tokens.Strip.figureSize` was an
+    // unguarded `height - 1` while the copy here was `max(1, height - 1)` behind
+    // a non-finite guard, so at a height of 0.5 the renderer set a font from one
+    // definition and reserved a cell from the other. And `markBox` here returned
+    // `height` unrounded while the tuner offers half points, so at 13.5 the
+    // figure cell began at x = 16.5 and every boundary after it landed between
+    // pixels.
+    //
+    // So there is one author now, `Tokens.Strip`, and what is left below are
+    // forwards. They are kept rather than deleted because the strip's callers and
+    // its tests name them, and because a forward is where the reader of *this*
+    // file finds out that the arithmetic is not here.
 
-    /// One service's pair to the next service's. Wider than `markGap`, so a mark
-    /// binds to its own number before it binds to the neighbour.
-    public static let segmentGap: CGFloat = 5
+    /// `Tokens.Strip.markGap`. A brand mark to the figure beside it.
+    public static let markGap: CGFloat = Tokens.Strip.markGap
+
+    /// `Tokens.Strip.segmentGap`. One service's pair to the next service's, and
+    /// wider than `markGap`, so a mark binds to its own number before it binds to
+    /// the neighbour.
+    public static let segmentGap: CGFloat = Tokens.Strip.segmentGap
 
     // MARK: - Measuring
 
@@ -47,9 +58,13 @@ public enum StripFit {
     /// and the figure is set one point under it, because SF Mono's digits sit
     /// inside their line box and otherwise out-measure the logo beside them.
     /// Three cells wide whatever is in it, so "7", "100" and the em dash a
-    /// status-only service shows all end on the same trailing edge.
+    /// status-only service shows all reserve the same column — *leading*-aligned,
+    /// not trailing: this doc and `Tokens.Strip.figureCell`'s both used to claim
+    /// the trailing edge while `MenuBarStripRenderer.figure(for:)` drew leading
+    /// and recorded, beside the drawing, that trailing had been measured and
+    /// rejected. Where the figure sits inside the cell is stated once, there.
     public static func figureCell(height: CGFloat) -> CGFloat {
-        Tokens.figureWidth(figureSize(height), digits: figureDigits)
+        Tokens.Strip.figureCell(height: height)
     }
 
     /// Total width the strip will occupy for a given segment count. A function
@@ -106,26 +121,19 @@ public enum StripFit {
     /// One service's showing: the mark's box, the gap, and the reserved figure
     /// cell.
     private static func segmentWidth(height: CGFloat) -> CGFloat {
-        markBox(height) + markGap + figureCell(height: height)
+        Tokens.Strip.markBox(height: height) + markGap + figureCell(height: height)
     }
 
-    /// The mark is drawn in a box as wide as it is tall, so a wide logo and a
-    /// narrow one take the same column and the figures stay in step across the
-    /// strip.
-    private static func markBox(_ height: CGFloat) -> CGFloat {
-        guard height.isFinite else { return minimumSize }
-        return max(minimumSize, height)
-    }
-
-    /// The figure's point size: one under the mark, and guarded for the reason
-    /// `MenuBarEntry` guards its percentage — a non-finite argument survives
-    /// every `max` here and then traps in the rounding inside `figureWidth`. The
-    /// setting is clamped to 10…16, but this is public and pure and does not get
-    /// to assume the settings object is its only caller.
-    private static func figureSize(_ height: CGFloat) -> CGFloat {
-        guard height.isFinite else { return minimumSize }
-        return max(minimumSize, height - 1)
-    }
+    // `markBox(_:)` and `figureSize(_:)` were here. `Tokens.Strip.markBox` and
+    // `Tokens.Strip.figureSize` are the definitions now, and they are not the
+    // same functions these were: both round to a whole point, which this file's
+    // copies did not, so a strip measured at the tuner's 13.5 no longer reserves
+    // half-point cells. The non-finite guard came from here and survives there —
+    // once, rather than as two guards with two different floors.
+    //
+    // `figureDigits` (3) and `minimumSize` (1) went with them: the first is
+    // `Tokens.Strip.figureDigits` and the second was only ever the floor inside
+    // those two guards.
 
     /// How many segments fit inside `Tokens.Strip.maxWidth`.
     ///
@@ -160,13 +168,4 @@ public enum StripFit {
             MenuBarStripContent.range.upperBound
         )
     }
-
-    /// Three, because "100" is the widest reading `MenuBarEntry.figure` can
-    /// produce. The cell is sized from that once, not from whatever is being
-    /// shown now.
-    private static let figureDigits = 3
-
-    /// A floor with no meaning beyond keeping the arithmetic sane on an argument
-    /// the settings could never produce.
-    private static let minimumSize: CGFloat = 1
 }

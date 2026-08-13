@@ -99,10 +99,16 @@ public struct ConnectDialog: View {
     /// because dimming a system control is not the same as reading an opacity.
     /// One weight, one colour, one accessor, the same as the panel header's —
     /// including its thickness, which is one device pixel rather than one point.
+    ///
+    /// Through `Control.hair(scale:)` rather than the `1 / displayScale` that
+    /// used to be written here. Same value at every real scale, so this is a
+    /// refactor and not a change; what it buys is that the zero guard has one
+    /// home. There were three spellings of "one device pixel" in the app and a
+    /// token that had none of them as a call site.
     private var rule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-            .frame(height: 1 / displayScale)
+            .frame(height: Tokens.Control.hair(scale: displayScale))
     }
 
     // MARK: - Headline
@@ -112,8 +118,16 @@ public struct ConnectDialog: View {
             ProviderLogo(
                 providerID: flow.provider.serviceID,
                 fallbackName: flow.provider.displayName,
-                fallbackColor: flow.provider.accentColor,
-                size: Tokens.Control.dialogLogo
+                size: Tokens.Control.dialogLogo,
+                // False, always, and not a state to look up: this window is open
+                // *because* this service is not reporting. It used to draw the
+                // reporting ink at 34pt — the largest mark in the app, at the full
+                // weight of a healthy service, on the one surface that exists to
+                // say the service is not one. Routed through the resolver rather
+                // than writing `Ink.muted` here so the dialog and the panel row
+                // behind it stay one decision: 7.34:1 light and 6.75:1 dark on the
+                // `Surface.raised` this window draws on.
+                ink: AppearanceSettings.shared.markInk(for: flow.provider.serviceID, isLive: false)
             )
             VStack(alignment: .leading, spacing: Tokens.Space.tight) {
                 // `Ink.body` rather than the inherited `Color.primary`, which on
@@ -295,7 +309,7 @@ public struct ConnectDialog: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: Tokens.Space.medium)
-                    // `.bordered` in `Ink.arc`, never `.borderedProminent`, and
+                    // `.bordered` in `Ink.body`, never `.borderedProminent`, and
                     // the same recipe the stage's own button takes — see
                     // `actionButton`. Five accounts found is five buttons, and
                     // five filled ones stacked down a window is a wall; the row's
@@ -305,7 +319,7 @@ public struct ConnectDialog: View {
                         flow.perform(.connectTo(candidate))
                     }
                     .buttonStyle(.bordered)
-                    .tint(Tokens.Ink.arc)
+                    .tint(Tokens.Ink.body)
                     .controlSize(.small)
                     .fixedSize()
                 }
@@ -360,7 +374,7 @@ public struct ConnectDialog: View {
                     .onSubmit { submit() }
                 Button("Save") { submit() }
                     .buttonStyle(.bordered)
-                    .tint(Tokens.Ink.arc)
+                    .tint(Tokens.Ink.body)
                     // Also off while a save is in flight: Return and a click on
                     // Save are two submissions of the same field, and the second
                     // one saves and verifies a token the first already cleared.
@@ -429,21 +443,27 @@ public struct ConnectDialog: View {
     private var linkRow: some View {
         if !linkActions.isEmpty || flow.offersTokenField {
             HStack(spacing: Tokens.Space.large) {
-                // A text link is on the app colour's closed list, so these take
-                // `Ink.arc` rather than the system's link blue. Left alone they
-                // are a second saturated colour in a window that is already
-                // spending its one on the button beside them.
+                // Not the system's link blue: left alone these are a saturated
+                // colour in a window whose palette has none to spend, and blue
+                // means nothing in this app. They used to take `Ink.arc`, which
+                // is deleted with the rest of the third hue, so what marks them
+                // as links now is the underline — the channel a link had before
+                // it had a colour, and the only one that works for a reader who
+                // cannot separate two hues at the same lightness. `.tint` still
+                // has to be set, because `.link` colours itself from it.
                 ForEach(linkActions) { action in
                     Button(action.label) { flow.perform(action) }
                         .buttonStyle(.link)
-                        .tint(Tokens.Ink.arc)
+                        .tint(Tokens.Ink.body)
+                        .underline()
                 }
                 if flow.offersTokenField {
                     Button(flow.showsTokenField ? "Hide manual entry" : "Paste a token instead") {
                         flow.toggleTokenField()
                     }
                     .buttonStyle(.link)
-                    .tint(Tokens.Ink.arc)
+                    .tint(Tokens.Ink.body)
+                    .underline()
                 }
                 Spacer(minLength: 0)
             }
@@ -451,22 +471,25 @@ public struct ConnectDialog: View {
     }
 
     /// The stage's own button, and the window's one emphasis recipe: `.bordered`
-    /// tinted `Ink.arc`, never `.borderedProminent`.
+    /// tinted `Ink.body`, never `.borderedProminent`.
     ///
     /// `.borderedProminent` fills with the *user's* accent, and that colour has a
     /// short list of jobs — selected chips, focus rings, the accent ramp — none
-    /// of which is chrome. A filled accent button here would also put a second
-    /// saturated colour on screen beside the picker's Connect, which is the one
-    /// thing the direction rules out. So the dialog spends the app's colour once,
-    /// on whatever the stage is actually asking for, and the button beside it —
-    /// Done, Cancel — stays the plain system bezel, which is the difference
-    /// between them.
+    /// of which is chrome. So the dialog spends emphasis once, on whatever the
+    /// stage is actually asking for, and the button beside it — Done, Cancel —
+    /// stays the plain system bezel, which is the difference between them.
+    ///
+    /// The tint was `Ink.arc` and the token is deleted. What is being said here
+    /// is "this one", not "this is aibars", and the ladder already has a rung for
+    /// that: `body` is the loudest neutral, so a bordered button in it reads
+    /// heavier than the system bezel beside it without adding a hue the app spends
+    /// only on alarm.
     @ViewBuilder
     private func actionButton(_ action: ConnectionFlow.Action, isPrimary: Bool) -> some View {
         if isPrimary {
             Button(action.label) { flow.perform(action) }
                 .buttonStyle(.bordered)
-                .tint(Tokens.Ink.arc)
+                .tint(Tokens.Ink.body)
         } else {
             Button(action.label) { flow.perform(action) }
         }

@@ -632,7 +632,27 @@ final class AlertsPaneTests: XCTestCase {
     /// same amber and the same red. But a log row is not reporting a reading, it
     /// is reporting whether macOS showed the warning — `Ink.attention` for one it
     /// swallowed, `Ink.idle` for one it showed — and neither of those states is a
-    /// place on a ramp.
+    /// place on the ramp *at a reading an alert can be about*.
+    ///
+    /// That qualifier is new, and it is the whole of what this test had to give
+    /// up. `Ink.idle` is `Ink.muted`, and the ramp's resting stop became
+    /// `Ink.muted` when the private grey standing beside it (0x5F636B / 0x8A8F98,
+    /// within 3 L\* of the token in both appearances and 4.48:1 on the pressed row
+    /// card in dark, under the 4.5:1 text floor) was deleted as a duplicate. So
+    /// below caution the two resolve to the same bytes now, and the sweeping form
+    /// this check used to take — "there is no percentage `UsageTint` answers with
+    /// `Ink.idle`", asserted over 0.0, 0.59, 0.60, 0.84, 0.85 and 1.0 — is false
+    /// by design rather than by accident, and the first three of those readings
+    /// were what failed it.
+    ///
+    /// What survives is the half that was ever doing work. An alert exists only
+    /// at or above a level it fired on, the shipped levels are 0.80 and 0.95
+    /// (`ThresholdRules.levels`), and across all of that range the ramp answers
+    /// amber or red. A log wired to the ramp still could not draw a delivered
+    /// row, which is the claim; the healthy readings the loop dropped are ones no
+    /// row in this list can ever carry. The equality the deletion created is then
+    /// asserted in its own right below, so it stays a decision rather than a
+    /// coincidence a future re-cut could quietly undo.
     ///
     /// Checked two ways, because either alone proves nothing. The colours below
     /// establish that the two vocabularies genuinely disagree about an alert, so
@@ -655,15 +675,43 @@ final class AlertsPaneTests: XCTestCase {
             )
         }
 
-        // And the delivered row's grey is not on the ramp at all, in either
-        // appearance: there is no percentage `UsageTint` answers with it. A log
-        // that spoke the ramp's language could not draw a delivered row.
+        // And the delivered row's grey is not on the ramp at any reading a row in
+        // this list can carry. The readings below are the ones an alert can be
+        // about: 0.80 is the lowest shipped level and therefore the lowest
+        // percentage any row here reports, 0.95 is the upper one, 1.0 is the cap,
+        // and 0.84/0.94 sit inside each band so the check does not live only on
+        // the boundaries. Over all of it `UsageTint` answers amber or red, so the
+        // grey on a delivered row is not something the ramp could have produced
+        // for that alert — a log speaking the ramp's language would have painted
+        // it amber or red like every other row and lost the distinction the row
+        // exists to draw.
         for dark in [false, true] {
             let idle = try XCTUnwrap(hex(Tokens.Ink.idle, dark: dark))
-            for percent in [0.0, 0.59, 0.60, 0.84, 0.85, 1.0] {
+            for percent in [0.80, 0.84, 0.94, 0.95, 1.0] {
                 XCTAssertNotEqual(
                     idle, hex(UsageTint.color(for: percent), dark: dark),
-                    "the ramp reaches Ink.idle at \(percent) on \(dark ? "dark" : "light")"
+                    "the ramp reaches Ink.idle at \(percent) on \(dark ? "dark" : "light"), which is a "
+                        + "reading an alert can fire on, so a delivered row is no longer distinguishable "
+                        + "from one the ramp would have drawn"
+                )
+            }
+        }
+
+        // The other side of that same fact, asserted rather than left implied:
+        // below caution the ramp *is* `Ink.idle`, byte for byte. This is the pair
+        // the loop above had to stop asserting the opposite of, and pinning it is
+        // what stops the deleted private grey coming back — a second resting stop
+        // written out beside the token would satisfy every assertion above while
+        // re-opening exactly the drift that once put two ambers in the app. 0.79
+        // is the last reading below the shipped caution level; 0.0 is the other
+        // end of the same band.
+        for dark in [false, true] {
+            let idle = try XCTUnwrap(hex(Tokens.Ink.idle, dark: dark))
+            for percent in [0.0, 0.59, 0.60, 0.79] {
+                XCTAssertEqual(
+                    idle, hex(UsageTint.color(for: percent), dark: dark),
+                    "the ramp's resting stop at \(percent) on \(dark ? "dark" : "light") is not Ink.idle, "
+                        + "so the app has a second grey again"
                 )
             }
         }

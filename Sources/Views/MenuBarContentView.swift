@@ -144,10 +144,19 @@ public struct MenuBarContentView: View {
     /// gap above it is a whole point, so at any scale the line starts on a pixel
     /// boundary and covers exactly one row of them. `BrowserLoginView` draws its
     /// rule the same way and says so.
+    ///
+    /// Through `Tokens.Control.hair(scale:)` rather than the `1 / displayScale`
+    /// this used to spell out. Value-identical at every scale a display reports,
+    /// so no pixel moves; what changes is that the token stops being a definition
+    /// with no callers. Five rules, three spellings of two thicknesses: this and
+    /// `BrowserLoginView`'s inline division, `AppearancePane`'s
+    /// `hairline / max(scale, 1)`, and two more taking the whole point — while
+    /// the function written to settle the question was never called once. Three
+    /// of the five call it now, and the two that keep the point say why there.
     private var headerRule: some View {
         Rectangle()
             .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
-            .frame(height: 1 / displayScale)
+            .frame(height: Tokens.Control.hair(scale: displayScale))
     }
 
     /// What `adoptExpansion` watches: which blocks exist and which of them carry
@@ -591,11 +600,16 @@ public struct PanelHeader<Trailing: View>: View {
             // the gutter with no nudge of its own, which puts it on the same
             // left edge as every logo in the list below.
             //
-            // Arc is the app's own colour, and this is the first entry on the
-            // closed list of four places it may appear: this mark, the mark on
-            // the About pane, a text link, and the sign-in affordance. It is
-            // never a surface, a meter, a border or a row background.
-            AppMark(size: Tokens.Control.headerGlyph, tint: Tokens.Ink.arc)
+            // `Ink.body`, and there is no longer an app colour to prefer over
+            // it. The closed list Arc used to head — this mark, the About mark,
+            // a text link, the sign-in affordance, the connect dialog's buttons
+            // — is closed by deletion: the palette keeps two hues, amber and
+            // red, and both mean alarm, so identity is carried by the mark's
+            // silhouette, which is what a mark is for. `body` rather than `mark`
+            // because the header is where the app names itself rather than
+            // labels something, and it is the same rung the wordmark beside it
+            // takes — the two are one masthead and were being inked two ways.
+            AppMark(size: Tokens.Control.headerGlyph, tint: Tokens.Ink.body)
 
             // A wordmark, so it takes `Ramp.title` rather than the panel's
             // scaled `titleSize`: the text-scale slider sizes the reading

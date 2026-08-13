@@ -720,10 +720,19 @@ private struct DayHeaderRow: View {
             // A heading over a table earns a rule, which the panel's section
             // labels no longer do — a word over a group of rows is a word, but a
             // word over a column of figures is a column head, and this is the
-            // line that says where the heads stop and the readings start. It is
-            // the app's one rule weight: 1pt, at `ruleOpacity`, stepping up under
-            // increased contrast. A `Rectangle` rather than a `Divider` because a
-            // `Divider` brings its own material and a second weight with it.
+            // line that says where the heads stop and the readings start. A
+            // `Rectangle` rather than a `Divider` because a `Divider` brings its
+            // own material and a second weight with it.
+            //
+            // A whole point, and not the `Control.hair(scale:)` the panel's
+            // header rule and the connect dialog's take. Those two are *chrome*:
+            // an edge between the app's own furniture, where one point at 2× lays
+            // down twice the ink AppKit's separator does and reads as a grey
+            // band. This is a table's ruling, at the weight the system rules a
+            // table at — `NSBox(.separator)` reports an intrinsic height of 1 —
+            // and it has a column of figures under it rather than a header above
+            // it. `Control.hairline` is the token for exactly that: the point,
+            // kept for anything that genuinely wants one.
             Rectangle()
                 .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
                 .frame(height: Tokens.Control.hairline)

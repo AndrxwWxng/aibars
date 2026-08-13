@@ -241,12 +241,35 @@ public struct HistoryChart: View {
     private static let dotRing: CGFloat = 1
     /// The ink both reference rules take — the threshold and the pointer.
     ///
-    /// `notchColour(increased:)` used to answer this. The pace riser it was named
-    /// for has gone, and neither of these marks may take a colour anyway: hue on
-    /// this plot names a service, so a rule carrying one reads as one more
-    /// service. The one neutral ink is what is left, and it clears the well by
-    /// more than the resting notch pair did, so only the width still steps.
-    private static let ruleInk = Tokens.Ink.muted
+    /// `notchColour(increased:)` used to answer this, then `Tokens.Ink.muted`
+    /// did. Neither of these marks may take a colour: hue on this plot names a
+    /// service, so a rule carrying one reads as one more service. But `muted` is
+    /// an *ink* — the rung captions are set at, 6.21:1 light and 8.29:1 dark on
+    /// the well these are drawn on — and a rule at caption strength was only ever
+    /// survivable because the trace beside it carried a hue. It no longer does
+    /// below caution: the usage ramp's resting stop is `Ink.muted` now, so a
+    /// resting trace and these two rules were about to be the same grey at the
+    /// same weight. A reference line drawn as loudly as the reading it is a
+    /// reference for is the plot arguing with itself.
+    ///
+    /// So it is furniture now, at the panel's own rule opacity, which puts every
+    /// rule in the application on one accessor. On `Surface.well` it resolves to
+    /// `#DADBDF` light and `#151618` dark — 1.170:1 and 1.132:1 — stepping to
+    /// `#C5C6CA` / `#2B2C2F` (1.443 / 1.468) under increased contrast. That is
+    /// quieter than the gridlines, which are `Meter.track` at 1.242 / 1.532, and
+    /// deliberately so: the grid is the plot's ruling and these two are marks on
+    /// it. What tells them apart is not weight but shape — the threshold rule is
+    /// dashed 3-on-3-off and the pointer rule is the only vertical line in the
+    /// well — and `ruleWidth` below doubles both on a display that is losing
+    /// hairlines, which is the case where a difference in opacity would not have
+    /// helped anyway.
+    ///
+    /// An instance property rather than a `static let`, because it reads the
+    /// environment now: an opacity that steps under increased contrast cannot be
+    /// resolved once at type level.
+    private var ruleInk: Color {
+        Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased))
+    }
     /// A rule's width, stepped up under increased contrast, because colour alone
     /// cannot rescue a hairline on a display that is losing hairlines.
     private var ruleWidth: CGFloat {
@@ -435,7 +458,7 @@ public struct HistoryChart: View {
                 // The width steps up under increased contrast: a 1pt dashed mark
                 // is what such a display loses first, and this one is the only
                 // thing on the plot saying where the panel starts warning.
-                Self.ruleInk,
+                ruleInk,
                 style: StrokeStyle(lineWidth: ruleWidth, dash: [3, 3])
             )
 
@@ -542,7 +565,7 @@ public struct HistoryChart: View {
                 // like every other line on the plot — this one moves with the
                 // pointer, so it is the one that would smear at every second
                 // bucket.
-                .fill(Self.ruleInk)
+                .fill(ruleInk)
                 .frame(width: ruleWidth, height: rect.height)
                 .position(x: snapped(x, thickness: ruleWidth), y: rect.midY)
         }

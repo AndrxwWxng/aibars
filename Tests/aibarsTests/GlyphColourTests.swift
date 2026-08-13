@@ -7,16 +7,34 @@ import AppKit
 ///
 /// This matters more than a palette test usually would, because every stop here
 /// is also the colour of a percentage: the ramp is not decoration on a bar, it
-/// is body text. So each stop has to clear 4.5:1 against `Tokens.Surface.base`
-/// in the appearance it resolves to — which is the whole reason each stop is a
-/// light/dark pair rather than one fixed value.
+/// is body text. So each stop has to clear 4.5:1 — which is the whole reason
+/// each stop is a light/dark pair rather than one fixed value.
+///
+/// **Where that is measured moved with the palette rebuild**, and the change is
+/// the point rather than a detail. It used to be `Tokens.Surface.base`, with a
+/// hovered `.always` card named as "the worst ground any ink in the panel lands
+/// on". `Fill.pressed` (0.12) is a step above `Fill.cardHover` (0.09) and
+/// `rowBackground` returns it for the whole row card, so the hovered card was
+/// never the worst ground; and neither is measured over the desktop, which the
+/// scrim only ever partly covers. The floor is now held on the **pressed row
+/// card over the wallpaper that pushes hardest**, modelling `.regularMaterial`
+/// as fully transparent — `#D0D1D3` light and `#36373A` dark. `Surface.base`
+/// stays the ground the recorded table below is quoted on, because it is the
+/// one plane that is the same in every drawing; the floor lives in
+/// `testNoInkFallsBelowFourFiveOnThePressedCard`.
 final class UsageRampContrastTests: XCTestCase {
     /// The three stops, sampled inside their own bands rather than at the
     /// boundaries, so a boundary moving cannot quietly change which colour is
     /// under test.
+    ///
+    /// Caution was sampled at 0.70 while the band starts at 0.80, which meant
+    /// this array named amber and handed the resting grey to every case that
+    /// read it — the ramp's middle stop was untested from the reskin that moved
+    /// the boundary until the palette rebuild that re-recorded these figures.
+    /// 0.85 is inside caution by 0.05 at each end.
     private let stops: [(name: String, percent: Double)] = [
-        ("teal", 0.10),
-        ("amber", 0.70),
+        ("grey", 0.10),
+        ("amber", 0.85),
         ("red", 0.95)
     ]
 
@@ -43,23 +61,33 @@ final class UsageRampContrastTests: XCTestCase {
     /// the third.
     func testTheRecordedContrastFiguresStillHold() throws {
         let expected: [(name: String, percent: Double, light: Double, dark: Double)] = [
-            // Measured against Surface.base in each appearance. The resting
-            // stop is no longer teal: a healthy row carries no hue, so the
-            // lowest band is grey and the recorded pair moved with it.
+            // Measured against Surface.base in each appearance. All three pairs
+            // moved with the palette rebuild, and none of them moved because a
+            // stop was re-cut for contrast: the ramp stopped holding colours of
+            // its own. Every stop is now a `Tokens.Ink` token, so what these
+            // figures record is the palette's, read back through `UsageTint`.
             //
-            // Both alarm stops were re-cut for the ground `Surface.base` is not:
-            // a hovered `.always` row card, light #E1E2E4 / dark #262629, which
-            // three of the five presets ship and which is the worst ground any
-            // ink in the panel lands on. Amber's light stop was #B45309, which
-            // measured 3.87:1 there — a figure under the floor — and was also a
-            // second amber beside `Ink.attention`'s. It is now `Ink.attention`'s
-            // own #8A5A00, so the panel has one amber. Red's was #C62A2F at
-            // 4.29:1 on the same card and is now #B92126. Both went up here as a
-            // consequence, which is what these numbers are for: a stop moving
-            // shows up as a number rather than as "still above 4.5".
-            ("grey", 0.10, 5.67, 5.81),
-            ("amber", 0.85, 5.58, 6.19),
-            ("red", 0.95, 5.97, 6.81)
+            //   resting  #5F636B / #8A8F98  ->  Ink.muted      #53565E / #A0A5AE
+            //   caution  #8A5A00 / #D08214  ->  Ink.attention  #764C00 / #E08D1C
+            //   warning  #B92126 / #FF6B6E  ->  Ink.alarm      #7E1217 / #FFA5A7
+            //
+            // The grounds moved as well — `Surface.base` went #F7F8FA ->
+            // #F6F7FA light and #101114 -> #0C0D11 dark — but they are the
+            // small half of every delta below: holding the old stops and
+            // swapping only the ground moves the dark column by about +0.2 and
+            // the light column by about -0.04. The stops did the rest.
+            //
+            // Re-recorded rather than corrected: grey 5.67 -> 6.85 light and
+            // 5.81 -> 7.85 dark, amber 5.58 -> 6.99 and 6.19 -> 7.39, red
+            // 5.97 -> 9.87 and 6.81 -> 10.35. The red pair moves furthest
+            // because #7E1217 is deliberately much darker than the #B92126 it
+            // replaces — red now has to sit a greyscale step away from amber,
+            // which `testAmberAndRedSeparateInGreyscale` is the assertion for,
+            // and the contrast is what that buys rather than what it was cut
+            // for.
+            ("grey", 0.10, 6.85, 7.85),
+            ("amber", 0.85, 6.99, 7.39),
+            ("red", 0.95, 9.87, 10.35)
         ]
         for stop in expected {
             let light = try XCTUnwrap(
@@ -82,6 +110,129 @@ final class UsageRampContrastTests: XCTestCase {
             let light = try XCTUnwrap(hex(colour, dark: false))
             let dark = try XCTUnwrap(hex(colour, dark: true))
             XCTAssertNotEqual(light, dark, "\(stop.name) resolved to one value in both appearances")
+        }
+    }
+
+    // MARK: - The floor, on the ground it is actually measured on
+
+    /// Every ink in the palette, on the worst plane it can land on, in both
+    /// appearances. Nothing that carries text is under 4.5:1.
+    ///
+    /// The five inks and not only the ramp's three, because they share one
+    /// ground and the ramp is where two of them are also read as figures: a
+    /// change to `Surface.base`, to `Fill.pressed` or to the scrim moves all ten
+    /// of these numbers at once, and the ramp's own recorded table above cannot
+    /// see it.
+    ///
+    /// Light on `#D0D1D3` / dark on `#36373A`:
+    ///
+    ///     body       10.66 / 10.72        attention   4.90 / 4.53
+    ///     mark        7.42 /  7.32        alarm       6.92 / 6.34
+    ///     muted       4.80 /  4.81
+    ///
+    /// The measured minimum is **4.53**, dark `attention`, which is 0.03 over
+    /// the floor and is therefore the binding constraint in the whole palette:
+    /// it is the first thing to re-measure if any of the three inputs to the
+    /// plane moves, and the reason the amber's dark half cannot be quietened
+    /// further. Both figures under 4.5 before the rebuild were on this plane and
+    /// unmeasured — light `attention` at 4.44 and the ramp's own resting grey at
+    /// 4.48 dark — because the file measured on a hovered card instead.
+    func testNoInkFallsBelowFourFiveOnThePressedCard() throws {
+        let inks: [(name: String, colour: Color)] = [
+            ("body", Tokens.Ink.body),
+            ("mark", Tokens.Ink.mark),
+            ("muted", Tokens.Ink.muted),
+            ("attention", Tokens.Ink.attention),
+            ("alarm", Tokens.Ink.alarm)
+        ]
+        var lowest = (name: "", appearance: "", ratio: Double.greatestFiniteMagnitude)
+        for dark in [false, true] {
+            let appearance = dark ? "dark" : "light"
+            let plane = try XCTUnwrap(worstPressedPlane(dark: dark))
+            // The plane has to be the one the palette says it is, or the ten
+            // ratios under it are ten measurements of somewhere else.
+            XCTAssertEqual(
+                hex(plane), dark ? 0x36373A : 0xD0D1D3,
+                String(format: "the worst %@ plane composited to #%06X", appearance, hex(plane))
+            )
+            for ink in inks {
+                let resolved = try XCTUnwrap(resolve(ink.colour, dark: dark))
+                let ratio = contrast(resolved, on: plane)
+                XCTAssertGreaterThanOrEqual(
+                    ratio, 4.5,
+                    "\(ink.name) measures \(ratio):1 on the \(appearance) pressed card"
+                )
+                guard ratio < lowest.ratio else { continue }
+                lowest = (ink.name, appearance, ratio)
+            }
+        }
+        XCTAssertEqual(lowest.name, "attention", "the binding ink is now \(lowest.name)")
+        XCTAssertEqual(lowest.appearance, "dark")
+        XCTAssertEqual(
+            lowest.ratio, 4.53, accuracy: 0.01,
+            "the palette's thinnest margin is \(lowest.ratio):1, recorded as 4.53"
+        )
+    }
+
+    /// Amber and red are still two marks with the hue taken off.
+    ///
+    /// They are the entire colour vocabulary of the application, so which alarm
+    /// it is has to survive a greyscale screenshot and a deuteranope, and that
+    /// is a lightness gap rather than a contrast one — both stops clear 4.5:1
+    /// against the ground and are still indistinguishable from each other if
+    /// they sit at the same L\*. The pair this replaces failed exactly there:
+    /// `Ink.attention` light L\* 42.33 against the ramp's red at 40.51 is
+    /// **1.8 apart**, and 61.16 against 64.08 in dark is 2.9.
+    ///
+    /// Measured now: light 36.02 amber against 26.53 red, **9.49 apart**; dark
+    /// 65.73 against 76.65, **10.92**. The floor is 9, which is under both and
+    /// far over what the retired pair could reach.
+    ///
+    /// The direction is asserted as well as the distance, because it is what
+    /// makes red readable as *worse* than amber without naming a hue: red is
+    /// always the stop further from the ground. It is forced as much as chosen —
+    /// the pressed card bounds a light figure at L\* ≤ 38.32 and a dark one at
+    /// L\* ≥ 65.51, amber sits on the bound in both, and red takes the only room
+    /// left.
+    func testAmberAndRedSeparateInGreyscale() throws {
+        for dark in [false, true] {
+            let amber = lightness(try XCTUnwrap(resolve(Tokens.Ink.attention, dark: dark)))
+            let red = lightness(try XCTUnwrap(resolve(Tokens.Ink.alarm, dark: dark)))
+            let ground = lightness(try XCTUnwrap(resolve(Tokens.Surface.base, dark: dark)))
+            XCTAssertGreaterThanOrEqual(
+                abs(amber - red), 9,
+                "amber L* \(amber) and red L* \(red) are \(abs(amber - red)) apart in "
+                + "\(dark ? "dark" : "light") — one alarm in a greyscale screenshot"
+            )
+            XCTAssertGreaterThan(
+                abs(red - ground), abs(amber - ground),
+                "red is nearer the \(dark ? "dark" : "light") ground than amber, "
+                + "so it reads as the quieter of the two"
+            )
+        }
+    }
+
+    /// The lit and unlit halves of the connection dot are two inks, and they are
+    /// far enough apart to be two states.
+    ///
+    /// `Ink.ok` is deleted — green is not in the vocabulary — so the 6pt dot in
+    /// a row's figure rail is `Ink.body` when the service is reporting and
+    /// `Ink.muted` when it is not. That is the whole of the signal now, so the
+    /// separation between the two is worth a number: **2.22:1 light and 2.23:1
+    /// dark**, measured against each other rather than against a ground. It is a
+    /// wider gap than the hue it replaces ever gave a colour-blind reader, which
+    /// is the argument for the deletion and is exactly the claim that would rot
+    /// silently if `body` or `muted` were ever nudged towards each other.
+    func testTheLitAndUnlitStatusDotsSeparate() throws {
+        for dark in [false, true] {
+            let lit = try XCTUnwrap(resolve(Tokens.Ink.body, dark: dark))
+            let unlit = try XCTUnwrap(resolve(Tokens.Ink.muted, dark: dark))
+            let separation = contrast(lit, on: unlit)
+            XCTAssertGreaterThanOrEqual(
+                separation, 2.2,
+                "the \(dark ? "dark" : "light") dot's two states are \(separation):1 apart"
+            )
+            XCTAssertEqual(separation, dark ? 2.23 : 2.22, accuracy: 0.01)
         }
     }
 
@@ -194,6 +345,10 @@ final class UsageRampContrastTests: XCTestCase {
 
     private func hex(_ color: Color, dark: Bool) -> UInt32? {
         guard let srgb = resolve(color, dark: dark) else { return nil }
+        return hex(srgb)
+    }
+
+    private func hex(_ srgb: NSColor) -> UInt32 {
         func channel(_ value: CGFloat) -> UInt32 { UInt32((min(max(value, 0), 1) * 255).rounded()) }
         return channel(srgb.redComponent) << 16
              | channel(srgb.greenComponent) << 8
@@ -205,8 +360,69 @@ final class UsageRampContrastTests: XCTestCase {
     private func contrast(_ color: Color, on background: Color, dark: Bool) -> Double? {
         guard let ink = resolve(color, dark: dark),
               let ground = resolve(background, dark: dark) else { return nil }
+        return contrast(ink, on: ground)
+    }
+
+    /// The same ratio between two colours that are already resolved — the worst
+    /// plane is composited rather than declared, so there is no `Color` left to
+    /// resolve by the time it is measured against.
+    private func contrast(_ ink: NSColor, on ground: NSColor) -> Double {
         let a = luminance(ink), b = luminance(ground)
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    /// CIE L\*, which is the greyscale axis: the number that says whether two
+    /// colours are still two colours once the hue is taken off. Same relative
+    /// luminance as the contrast ratio uses, so the two measurements cannot
+    /// disagree about what a colour is.
+    private func lightness(_ colour: NSColor) -> Double {
+        let y = luminance(colour)
+        return y > 216.0 / 24389.0 ? 116 * pow(y, 1.0 / 3.0) - 16 : y * 24389.0 / 27.0
+    }
+
+    /// The worst plane an ink in the panel can land on, built rather than
+    /// written down: `Surface.base` under the wallpaper that pushes hardest,
+    /// with the pressed row card over that.
+    ///
+    /// Three facts put the floor here. The panel's ground is `Surface.base` at
+    /// `Tokens.scrimAlpha` over `.regularMaterial`, so the desktop is never
+    /// fully covered — modelled here as fully transparent, which is the strict
+    /// upper bound on what it can contribute and so pessimistic on purpose,
+    /// since a real material adds its own tint and pulls the ground back towards
+    /// `base`. The hardest wallpaper is the one that pushes the ground *towards*
+    /// the ink: pure black in light, pure white in dark. And `rowBackground`
+    /// returns `Fill.pressed` for the whole row card under all three background
+    /// settings, with `RowButtonStyle` drawing the row's entire contents, text
+    /// included, on top of it.
+    ///
+    /// Composited per the palette's own arithmetic, `round(bg + (fg − bg)·α)`
+    /// per 8-bit channel at each step: light `246·0.96 → #ECEDF0`, then
+    /// `236·0.88 → #D0D1D3`; dark `12 + 243·0.06 → #1B1C1F`, then
+    /// `27 + 228·0.12 → #36373A`. Derived rather than hardcoded so that a change
+    /// to the scrim, to `Fill.pressed` or to `Surface.base` moves the
+    /// measurement instead of dating a comment — the two hexes are asserted at
+    /// the top of the case that uses them.
+    private func worstPressedPlane(dark: Bool) -> NSColor? {
+        guard let base = resolve(Tokens.Surface.base, dark: dark) else { return nil }
+        let extreme: CGFloat = dark ? 1 : 0
+        let wallpaper = NSColor(srgbRed: extreme, green: extreme, blue: extreme, alpha: 1)
+        let scrim = Tokens.scrimAlpha(isDark: dark, reduceTransparency: false)
+        let ground = composite(wallpaper, at: 1 - scrim, over: base)
+        return composite(wallpaper, at: Tokens.Fill.pressed, over: ground)
+    }
+
+    private func composite(_ ink: NSColor, at alpha: Double, over ground: NSColor) -> NSColor {
+        func channel(_ component: (NSColor) -> CGFloat) -> CGFloat {
+            let background = (component(ground) * 255).rounded()
+            let foreground = (component(ink) * 255).rounded()
+            return (background + (foreground - background) * CGFloat(alpha)).rounded() / 255
+        }
+        return NSColor(
+            srgbRed: channel { $0.redComponent },
+            green: channel { $0.greenComponent },
+            blue: channel { $0.blueComponent },
+            alpha: 1
+        )
     }
 
     private func luminance(_ colour: NSColor) -> Double {

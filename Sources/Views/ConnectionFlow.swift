@@ -156,21 +156,26 @@ public final class ConnectionFlow: ObservableObject {
     /// "you are at your cap" were the same colour in an app whose whole premise
     /// is that red means near-cap. A request that simply failed is `Ink.muted`
     /// like any other line of context, and the words carry it.
-    /// Never `Ink.arc` either: the app's own colour has a closed list of call
-    /// sites and a state is not on it.
+    /// Never the app's own colour either — there is no longer one. `Ink.arc` had
+    /// a closed list of call sites, a state was not on it, and the token is now
+    /// deleted outright: indigo is neither grey, amber nor red.
     ///
-    /// `Ink.ok` is spent here deliberately. Green beside a figure is redundant,
-    /// because a row reporting 92% has already proved the connection works —
-    /// which is why the panel body has no use for it. This window has no figure:
-    /// "Connected." is the whole reading, and the ink is doing real work rather
-    /// than decorating one. It never does it alone — the word and `symbol`'s
-    /// tick say the same thing, so the state survives greyscale.
+    /// Green is gone with it. `.ok` used to draw `Ink.ok`, and the argument for
+    /// spending a hue here was that this window has no figure — "Connected." is
+    /// the whole reading, so the ink was doing real work rather than decorating
+    /// one. That argument survives; the hue does not. Two colours are left in the
+    /// application and both mean alarm, so a third meaning "nothing to do" would
+    /// be the loudest possible way to say the quietest possible thing. `.ok`
+    /// takes `Ink.body` — the rung this app answers in, 2.22:1 light and 2.23:1
+    /// dark clear of the `muted` that `.failure` and `.idle` return, which is more
+    /// separation than green and grey had and it survives greyscale. It never
+    /// works alone in any case: the word and `symbol`'s tick say the same thing.
     public enum Tone {
         case ok, attention, failure, idle
 
         public var ink: Color {
             switch self {
-            case .ok:        return Tokens.Ink.ok
+            case .ok:        return Tokens.Ink.body
             case .attention: return Tokens.Ink.attention
             case .failure:   return Tokens.Ink.muted
             case .idle:      return Tokens.Ink.idle
@@ -218,13 +223,15 @@ public final class ConnectionFlow: ObservableObject {
         /// it is the escape hatch beside whatever the stage is actually asking,
         /// and the dialog draws that as a link rather than a button.
         ///
-        /// The emphasis the true case earns is the user's accent, which keeps
-        /// primary buttons. `Tokens.Ink.arc` is a different fact and never fills
-        /// a control: the app's own colour has a closed list of call sites, and
-        /// on that list Connect is `.bordered`. `connectTo` sits outside this
-        /// question in any case — it never reaches `actions`, because the picker
-        /// draws its own Connect per row — so what it answers here is only what a
-        /// later call site would inherit.
+        /// The emphasis the true case earns is weight, not fill. `BrowserLoginView`
+        /// draws it `.bordered` tinted `Ink.body`; nothing in the dialog is
+        /// `.borderedProminent`, which would fill with the *user's* accent — a
+        /// colour with a short list of jobs, none of them chrome. The tint used
+        /// to be `Tokens.Ink.arc`, the app's own indigo, and that token is
+        /// deleted along with the idea that the app has a colour. `connectTo`
+        /// sits outside this question in any case — it never reaches `actions`,
+        /// because the picker draws its own Connect per row — so what it answers
+        /// here is only what a later call site would inherit.
         public var isProminent: Bool {
             switch self {
             case .openPageAgain: return false

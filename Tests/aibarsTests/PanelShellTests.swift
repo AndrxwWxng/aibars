@@ -175,6 +175,55 @@ final class PanelShellTests: XCTestCase {
         XCTAssertLessThan(Tokens.scrimAlpha(isDark: false, reduceTransparency: false), 1)
     }
 
+    /// The empty half of every bar survives any desktop.
+    ///
+    /// This is what the scrim is *for*, and it is the only reason the two alphas
+    /// are the numbers they are. `Meter.track` is the one absolute pair the app
+    /// draws inside the panel — every other plane in there is `Surface.base` or
+    /// an opacity over it — while the ground beneath it is `base` at
+    /// `scrimAlpha` over `.regularMaterial`, which is to say partly the user's
+    /// wallpaper. So the track and its container move independently, and a
+    /// bright enough desktop used to lift the dark ground straight through the
+    /// track: as shipped (`#2A2B2F` on `#101114` at 0.88) a white wallpaper put
+    /// the ground at `#2D2E30` and the track **1.0404:1 below it** — the empty
+    /// half of every bar and dial was a hole rather than a container.
+    ///
+    /// Measured on the same pessimistic model the palette uses throughout, with
+    /// the material contributing nothing: light **1.2545:1 with the track below
+    /// its ground**, dark **1.2735:1 with the track above its ground**. Both
+    /// sides matter, which is why the direction is asserted and not only the
+    /// ratio — a track that clears the ground by 1.27 on the wrong side of it is
+    /// the same defect with a passing number.
+    ///
+    /// The alphas were solved for this and nothing else: at 0.92 the dark pair
+    /// is 1.2164, at 0.88 it is 1.0715, and at 0.86 it reaches 1.0005 and
+    /// vanishes. The floor here is 1.2, which sits under both shipped values and
+    /// over everything the retired alphas could reach.
+    func testTheTrackNeverInvertsAgainstTheGround() throws {
+        for dark in [true, false] {
+            let name = dark ? "dark" : "light"
+            let base = try resolve(Tokens.Surface.base, dark: dark)
+            let track = try resolve(Tokens.Meter.track, dark: dark)
+            // The wallpaper that pushes the ground hardest towards the track:
+            // white under a dark panel, black under a light one.
+            let extreme: CGFloat = dark ? 1 : 0
+            let wallpaper = NSColor(srgbRed: extreme, green: extreme, blue: extreme, alpha: 1)
+            let scrim = Tokens.scrimAlpha(isDark: dark, reduceTransparency: false)
+            let ground = Self.composite(wallpaper, at: 1 - scrim, over: base)
+
+            let ratio = Self.contrast(track, ground)
+            XCTAssertGreaterThan(
+                ratio, 1.2,
+                "the \(name) track measures \(ratio):1 against a ground of "
+                + "\(Self.describe(ground)) — the container has stopped being one"
+            )
+            XCTAssertEqual(
+                Tokens.relativeLuminance(track) > Tokens.relativeLuminance(ground), dark,
+                "the \(name) track is on the wrong side of its ground"
+            )
+        }
+    }
+
     /// Every pixel of the panel is covered: the body is drawn on a ground, and
     /// nothing carrying a number is composited straight onto the desktop.
     ///
@@ -363,17 +412,37 @@ final class PanelShellTests: XCTestCase {
         return Rule(mostColoured: worst, sample: sample)
     }
 
-    /// A warm graphite is not a pure grey — `Surface.base` measures about 0.02
-    /// saturation in the light appearance and 0.11 in the dark one — so "carries
-    /// no hue" has to be a step above the ground rather than a step above zero.
-    /// What the rule used to take is a long way past that step: the ramp's red at
-    /// 0.55 over the light base measures 0.39, and still 0.18 where it lands on a
-    /// pixel row at half coverage.
+    /// A cool graphite is not a pure grey — the panel's own ground measures
+    /// 0.013 saturation where this raster resolves, and `Surface.base` measures
+    /// 0.016 as a token in light and **0.294** in dark, where five 8-bit steps
+    /// of blue over red are most of what a near-black has — so "carries no hue"
+    /// has to be a step above the ground rather than a step above zero.
+    ///
+    /// The dark figure is the one that moved, and it is arithmetic rather than a
+    /// decision: the base went `#101114`, 4 steps of blue over red on a maximum
+    /// of 20, to `#0C0D11`, 5 over a maximum of 17 — so HSB saturation went
+    /// 0.200 to 0.294 while the panel got no more colourful. A cool offset is a
+    /// larger fraction of a darker value, which is exactly why this allowance is
+    /// a difference from the ground and never an absolute.
+    ///
+    /// What the rule used to take is still a long way past the allowance:
+    /// `Ink.alarm` at 0.55 over the light base measures 0.33, and 0.14 where it
+    /// lands on a pixel row at half coverage. Those were 0.39 and 0.18 with the
+    /// retired `#B92126` — red went darker rather than duller, deliberately, so
+    /// that it separates from amber in greyscale, and shed a little saturation
+    /// on the way. The tighter of the two is still more than twice this
+    /// allowance, which is the same argument with smaller numbers in it.
     private static let hueAllowance: CGFloat = 0.06
 
     /// How far a pixel has to sit from the ground in its own column to count as
-    /// inked. A hairline at `Fill.rule` 0.07 moves the light ground by about 0.07
-    /// and the dark one by 0.06, and half that where it falls across two rows.
+    /// inked. At full coverage a hairline at `Fill.rule` 0.07 moves the light
+    /// ground by 0.07 of it (about 0.068) and the dark one by 0.07 of the way to
+    /// white (about 0.066); the header's rule is one device pixel under a
+    /// fractional header height, so what this raster actually sees is **0.054**
+    /// on the row it falls across. That was about 0.046 until `quiet(_:)` stopped
+    /// multiplying by `Color.primary`'s hidden 0.8471 alpha — 0.012 cleared the
+    /// quieter figure by four times and clears this one by four and a half, so
+    /// the threshold did not have to move with the palette.
     private static let inked: CGFloat = 0.012
 
     /// How much of a pixel row a rule covers. Nine tenths rather than all of it,
@@ -392,6 +461,52 @@ final class PanelShellTests: XCTestCase {
     /// for.
     private static func distance(_ one: NSColor, _ other: NSColor) -> CGFloat {
         channels.map { abs($0.read(one) - $0.read(other)) }.max() ?? 0
+    }
+
+    // MARK: - Compositing a ground that is not drawn anywhere
+
+    /// A dynamic colour resolved in a named appearance.
+    ///
+    /// `performAsCurrentDrawingAppearance` rather than assigning
+    /// `NSAppearance.current`: the second is deprecated, and a deprecation
+    /// warning is a build regression here.
+    private func resolve(_ color: Color, dark: Bool) throws -> NSColor {
+        let appearance = try XCTUnwrap(NSAppearance(named: dark ? .darkAqua : .aqua))
+        var resolved: NSColor?
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = NSColor(color).usingColorSpace(.sRGB)
+        }
+        return try XCTUnwrap(resolved, "colour would not resolve in sRGB")
+    }
+
+    /// One plane over another, `round(bg + (fg − bg)·α)` per 8-bit channel —
+    /// the arithmetic the palette states its own figures in, quantised at each
+    /// step because each step is a real drawn surface.
+    ///
+    /// Needed because the ground the track has to clear is a ground nothing in
+    /// the app draws in one go: it is the panel's own surface with the desktop
+    /// still showing through it, which is why the raster cases above cannot see
+    /// it. Offscreen a material resolves opaque, so a rendered panel is the one
+    /// desktop this suite can never sample.
+    private static func composite(_ ink: NSColor, at alpha: Double, over ground: NSColor) -> NSColor {
+        func channel(_ component: (NSColor) -> CGFloat) -> CGFloat {
+            let background = (component(ground) * 255).rounded()
+            let foreground = (component(ink) * 255).rounded()
+            return (background + (foreground - background) * CGFloat(alpha)).rounded() / 255
+        }
+        return NSColor(
+            srgbRed: channel { $0.redComponent },
+            green: channel { $0.greenComponent },
+            blue: channel { $0.blueComponent },
+            alpha: 1
+        )
+    }
+
+    /// WCAG contrast, off the app's own luminance so a failure here is directly
+    /// comparable with the figures recorded in `DesignSystem.swift`.
+    private static func contrast(_ one: NSColor, _ other: NSColor) -> Double {
+        let a = Tokens.relativeLuminance(one), b = Tokens.relativeLuminance(other)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
     }
 
     private static func describe(_ colour: NSColor) -> String {
