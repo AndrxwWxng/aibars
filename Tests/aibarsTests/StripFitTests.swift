@@ -7,10 +7,15 @@ import AppKit
 /// The bug this file exists to close: the status item drew each figure at its
 /// natural width, so one service crossing 99 into 100 widened the item by a
 /// whole cell and shoved every icon to its left sideways. `StripFit.width` is
-/// therefore a function of the segment *count* and nothing else, and that is a
-/// claim about a signature as much as about arithmetic — so most of what
+/// therefore a function of the segment *count* and the style's own cell, and that
+/// is a claim about a signature as much as about arithmetic — so most of what
 /// follows measures the same strip with two different readings in it and
 /// insists the answer does not move.
+///
+/// Stated here at the shipped `markAndFigure`, which `StripFit` takes as its
+/// default: this file owns the *fitting* rules — the count, the cap, the ranking —
+/// and they are one set of rules however the segments are drawn.
+/// `StripStyleWidthTests` is where the same invariant is run across all six.
 ///
 /// It is all pure, so none of it needs a menu bar to look at. The one exception
 /// is the cell-holds-the-figure test, which really does have to ask AppKit how
@@ -274,12 +279,17 @@ final class StripFitWidthTests: XCTestCase {
 
 /// Which segments survive the cap.
 ///
-/// Two things can cost a segment — the user's count and the width cap — and
-/// they are applied in that order, because the count is a preference and the
-/// cap is a constraint. What comes back is a subsequence of what went in: the
-/// least urgent are dropped, and the survivors keep the order they arrived in,
-/// because a strip that reshuffled as one reading crossed a neighbour's would be
-/// its own kind of jitter.
+/// Three things can cost a segment — the user's count, the style's own ceiling
+/// and the width cap — and the count goes first, because it is a preference and
+/// the other two are constraints. What comes back is a subsequence of what went
+/// in: the least urgent are dropped, and the survivors keep the order they
+/// arrived in, because a strip that reshuffled as one reading crossed a
+/// neighbour's would be its own kind of jitter.
+///
+/// The ceiling is asserted in `StripStyleWidthTests`, where the styles that have
+/// one live. Everything here runs at the shipped `markAndFigure`, whose ceiling is
+/// three and therefore never the binding constraint — so what these measure is
+/// the count and the cap, one at a time.
 final class StripFitFittingTests: XCTestCase {
     private let shipped: CGFloat = 13
 

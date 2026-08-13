@@ -11,11 +11,21 @@ import CoreGraphics
 /// So every figure gets a reserved cell, sized once from the widest reading the
 /// strip can produce and never from the string in hand. Measuring the current
 /// string is exactly what reintroduces the jitter, which is why nothing here
-/// takes a figure as an argument — `width(segments:height:)` is a function of
-/// the count alone, and that is the contract rather than an optimisation.
+/// takes a figure as an argument — `width(segments:style:height:)` is a function
+/// of the count and the style's own cell, and that is the contract rather than an
+/// optimisation.
+///
+/// Six styles now, and the contract survived being multiplied by six because it
+/// is stated in a signature: a style answers `cellWidth(height:)` and there is no
+/// parameter there that could carry a reading. `worstOnly` is the case that shows
+/// what that buys — it draws a *name*, which changes when one service overtakes
+/// another, inside a rail reserved in mono advances that does not.
 ///
 /// Pure, and free of the rasteriser: the whole width contract is assertable
-/// without a menu bar to look at or an image to measure.
+/// without a menu bar to look at or an image to measure. That is also why a style
+/// arrives here as a `StripStyleBox` rather than as an `any StripStyle` — the box
+/// carries `cellWidth` as a plain closure, so nothing in this file has to know
+/// that a style also draws something.
 public enum StripFit {
 
     // MARK: - The strip's rhythm
@@ -40,6 +50,13 @@ public enum StripFit {
     // forwards. They are kept rather than deleted because the strip's callers and
     // its tests name them, and because a forward is where the reader of *this*
     // file finds out that the arithmetic is not here.
+    //
+    // Of the three, only `segmentGap` is still load-bearing in this file: it is
+    // the gap `width` puts between segments, and it is the one number a style does
+    // not get to choose, so that switching between two styles never moves a
+    // neighbouring status item by more than their cells differ. `markGap` and
+    // `figureCell` are a style's business now — `Tokens.Strip` is where the six of
+    // them read them from.
 
     /// `Tokens.Strip.markGap`. A brand mark to the figure beside it.
     public static let markGap: CGFloat = Tokens.Strip.markGap
@@ -60,23 +77,36 @@ public enum StripFit {
     /// Three cells wide whatever is in it, so "7", "100" and the em dash a
     /// status-only service shows all reserve the same column — *leading*-aligned,
     /// not trailing: this doc and `Tokens.Strip.figureCell`'s both used to claim
-    /// the trailing edge while `MenuBarStripRenderer.figure(for:)` drew leading
-    /// and recorded, beside the drawing, that trailing had been measured and
-    /// rejected. Where the figure sits inside the cell is stated once, there.
+    /// the trailing edge while the drawing had been leading for as long as there
+    /// had been a drawing, and recorded beside itself that trailing had been
+    /// measured and rejected. Where the figure sits inside the cell is stated
+    /// once, at `StripFigure` — which is what `MenuBarStripRenderer.figure(for:)`
+    /// became when the six styles landed and three of them needed the same figure.
     public static func figureCell(height: CGFloat) -> CGFloat {
         Tokens.Strip.figureCell(height: height)
     }
 
     /// Total width the strip will occupy for a given segment count. A function
-    /// of the count alone — never of the figures — which is the invariant.
+    /// of the count and the style — never of the figures — which is the
+    /// invariant.
     ///
     /// The drawn content only. The status item adds its own margins either side
     /// and those are the system's to choose, so a cap stated here is a statement
     /// about what we draw.
-    public static func width(segments: Int, height: CGFloat) -> CGFloat {
+    ///
+    /// `style` is defaulted for one reason and it is not convenience: the
+    /// Appearance pane and its tests read this function and belong to the change
+    /// that gives the pane a style chooser. Until they have a style to pass, the
+    /// honest value is the one the strip drew before there were six — see
+    /// `StripStyleBox.markAndFigure`.
+    public static func width(
+        segments: Int,
+        style: StripStyleBox = .markAndFigure,
+        height: CGFloat
+    ) -> CGFloat {
         guard segments > 0 else { return 0 }
         let count = CGFloat(segments)
-        return count * segmentWidth(height: height) + (count - 1) * segmentGap
+        return count * style.cellWidth(height) + (count - 1) * segmentGap
     }
 
     // MARK: - Fitting
@@ -84,17 +114,18 @@ public enum StripFit {
     /// The segments that actually fit, least urgent dropped first, source order
     /// preserved. Never returns empty while it was given anything.
     ///
-    /// Two things can cost a segment: the user's own count and the width cap.
-    /// The count is applied first because it is a preference and the cap is a
-    /// constraint — someone who asked for one service is not owed two because
-    /// there happened to be room.
+    /// Three things can cost a segment: the user's own count, the style's own
+    /// ceiling, and the width cap. The count is applied first because it is a
+    /// preference and the other two are constraints — someone who asked for one
+    /// service is not owed two because there happened to be room.
     public static func fit(
         _ entries: [MenuBarEntry],
         limit: Int,
+        style: StripStyleBox = .markAndFigure,
         height: CGFloat
     ) -> [MenuBarEntry] {
         let capped = Array(entries.prefix(clamped(limit)))
-        let room = maxSegments(height: height)
+        let room = maxSegments(style: style, height: height)
         guard capped.count > room else { return capped }
 
         // Which segments survive is a ranking question; what order they draw in
@@ -118,11 +149,10 @@ public enum StripFit {
 
     // MARK: - Geometry
 
-    /// One service's showing: the mark's box, the gap, and the reserved figure
-    /// cell.
-    private static func segmentWidth(height: CGFloat) -> CGFloat {
-        Tokens.Strip.markBox(height: height) + markGap + figureCell(height: height)
-    }
+    // `segmentWidth(height:)` was here, and it was the mark's box, the gap and
+    // the reserved figure cell — one style's arithmetic, written in the file that
+    // measures every style. It is `StripStyleBox.cellWidth` now: there are six
+    // answers and the type that draws each one is the type that states it.
 
     // `markBox(_:)` and `figureSize(_:)` were here. `Tokens.Strip.markBox` and
     // `Tokens.Strip.figureSize` are the definitions now, and they are not the
@@ -135,18 +165,25 @@ public enum StripFit {
     // `Tokens.Strip.figureDigits` and the second was only ever the floor inside
     // those two guards.
 
-    /// How many segments fit inside `Tokens.Strip.maxWidth`.
+    /// How many segments fit inside `Tokens.Strip.maxWidth`, and how many the
+    /// style will draw at all.
     ///
     /// Never fewer than one: a status item with nothing in it is one the user
     /// can neither find nor click, and no width budget is worth that. Solved
     /// rather than accumulated — `width` is linear in the count, so adding
     /// segments up until one overflows would only restate the same arithmetic.
-    private static func maxSegments(height: CGFloat) -> Int {
+    ///
+    /// The ceiling is the style's own statement and the cap is the bar's; the
+    /// narrower of the two wins. `figureOnly` and `worstOnly` are the two that
+    /// bind on the ceiling — the first because three bare numbers name nothing,
+    /// the second because it draws the one service nearest its cap by definition —
+    /// and for both the room the cap allows is larger than one.
+    private static func maxSegments(style: StripStyleBox, height: CGFloat) -> Int {
         // n segments measure n * pitch - segmentGap, so the cap inverts cleanly.
-        let pitch = segmentWidth(height: height) + segmentGap
+        let pitch = style.cellWidth(height) + segmentGap
         let room = (Tokens.Strip.maxWidth + segmentGap) / pitch
         guard room.isFinite else { return 1 }
-        return max(1, Int(room))
+        return max(1, min(style.segmentCeiling, Int(room)))
     }
 
     // MARK: - Ranking

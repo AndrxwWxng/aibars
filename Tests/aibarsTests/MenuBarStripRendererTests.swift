@@ -179,6 +179,50 @@ final class MenuBarStripRendererTests: XCTestCase {
         )
     }
 
+    /// Where the reading sits inside the cell it reserved.
+    ///
+    /// Two token doc comments used to call the cell trailing-aligned "like every
+    /// other rail in the app" while the drawing had been leading for as long as
+    /// there had been a drawing, and nothing anywhere asserted it — so the prose
+    /// was free to be wrong and the alignment was free to be changed back. This is
+    /// what makes it a fact.
+    ///
+    /// The failure it prevents is not clipping. Trailing-aligned, a one-digit
+    /// reading sits `markGap` from the NEXT service's logo and two digit-widths
+    /// from the logo it belongs to, so the strip reads "0 ChatGPT" instead of
+    /// "Claude 0" — a pairing error, which pixels can see and a width assertion
+    /// never could.
+    @MainActor
+    func testAOneDigitReadingIsDrawnAtTheLeadingEdgeOfItsCell() {
+        let cell = figureCell(0)
+        let middle = cell.lowerBound + (cell.upperBound - cell.lowerBound) / 2
+
+        // "0" measures 7.418pt in SF Mono semibold at 12pt, inside a 23pt cell, so
+        // the leading half (11.5pt) holds the whole glyph with 4pt to spare and the
+        // trailing half must be empty.
+        let zero = MenuBarEntry(serviceID: "claude", displayName: "Claude", percent: 0)
+        let one = image([zero, gemini])
+        XCTAssertGreaterThan(
+            opaquePixels(in: one, xRange: cell.lowerBound..<middle), 3,
+            "the reading is not at the leading edge of its cell"
+        )
+        XCTAssertEqual(
+            opaquePixels(in: one, xRange: middle..<cell.upperBound), 0,
+            "a one-digit reading reached the trailing half, so the slack is falling in front of it"
+        )
+
+        // The premise: the cell really is wider than one digit, and the widest
+        // reading really does use the half that just came back empty. Without this
+        // the assertion above would also pass on a cell that draws nothing past its
+        // midpoint for any reading at all.
+        let hundred = MenuBarEntry(serviceID: "claude", displayName: "Claude", percent: 1)
+        XCTAssertEqual(hundred.figure, "100")
+        XCTAssertGreaterThan(
+            opaquePixels(in: image([hundred, gemini]), xRange: middle..<cell.upperBound), 3,
+            "the widest reading does not reach the trailing half, so the cell is not the one being tested"
+        )
+    }
+
     // MARK: - The retina fix
 
     /// `ImageRenderer.scale` does not reach `nsImage`, so a strip built that way
@@ -362,6 +406,61 @@ final class MenuBarStripRendererTests: XCTestCase {
         // exactly why it is easy to leave out of the key.
         let renamed = MenuBarEntry(serviceID: "claude", displayName: "Claude Max", percent: 0.924)
         XCTAssertNotIdentical(image([claude]), image([renamed]), "the display name is not in the key")
+    }
+
+    /// The worst shape this bug can take, and the reason it gets its own test.
+    ///
+    /// If `style` reaches the signature but not `Memo.matches`, the user picks a
+    /// style, the Appearance pane's preview updates — it builds the view directly
+    /// and never consults the memo — and the menu bar keeps the previous bitmap,
+    /// because AppKit compares the status item's image by identity and this hands
+    /// back the same instance. The setting appears broken while the preview says
+    /// it worked.
+    ///
+    /// Identity, not equality: two styles can draw the same pixels at one segment
+    /// (`markOnly` and `microBars` measure identically by construction) and an
+    /// equality assertion would pass on the stale image.
+    @MainActor
+    func testTheMemoMissesWhenTheStyleChanges() {
+        let entries = [claude, gemini]
+        let reference = image(entries, style: .markAndFigure)
+        for style in AppearanceSettings.MenuBarStyle.allCases where style != .markAndFigure {
+            XCTAssertNotIdentical(
+                reference, image(entries, style: style),
+                "\(style.rawValue) returned the mark-and-figure bitmap — the style is not in the key"
+            )
+        }
+    }
+
+    /// The brand-mark switch, same failure. It is not a colour mode and not a
+    /// reading: `.perBar` still colours every figure with it off, so nothing else
+    /// in the key moves and the memo is the only thing between the switch and a
+    /// menu bar that ignores it.
+    @MainActor
+    func testTheMemoMissesWhenBrandMarkColourFlips() {
+        XCTAssertNotIdentical(
+            image([claude, gemini], coloursMarks: true),
+            image([claude, gemini], coloursMarks: false),
+            "turning brand hue off returned the coloured bitmap"
+        )
+        // And the flip really does change the drawing, or the assertion above is
+        // about a key rather than about a picture. Under `.perBar` the mark is the
+        // only brand-coloured thing in the strip, so switching it off must take
+        // colour out of the mark box while leaving the figure's alone.
+        let on = image([claude], colour: .perBar, coloursMarks: true)
+        let off = image([claude], colour: .perBar, coloursMarks: false)
+        XCTAssertGreaterThan(
+            colouredPixels(in: on, xRange: markBox(0)), 0,
+            "the mark carried no brand hue with the switch on"
+        )
+        XCTAssertEqual(
+            colouredPixels(in: off, xRange: markBox(0)), 0,
+            "the mark kept its brand hue with the switch off"
+        )
+        XCTAssertGreaterThan(
+            colouredPixels(in: off, xRange: figureCell(0)), 0,
+            "the switch took the reading's colour with it"
+        )
     }
 
     /// Nothing reporting is a state the app spends its first seconds in, and the
@@ -618,29 +717,50 @@ final class MenuBarStripRendererTests: XCTestCase {
     @MainActor
     func testTheStripViewRendersOnItsOwn() {
         // The Appearance pane draws this view directly rather than through the
-        // renderer, so it has to stand up outside the rasteriser too.
-        let renderer = ImageRenderer(
-            content: MenuBarStripView(
-                entries: [claude, statusOnly],
-                height: 13,
-                colour: .perBar,
-                warningThreshold: 0.85
+        // renderer, so it has to stand up outside the rasteriser too — in every
+        // style, because the pane's chooser draws a sample of each one beside its
+        // own name.
+        for style in AppearanceSettings.MenuBarStyle.allCases {
+            let renderer = ImageRenderer(
+                content: MenuBarStripView(
+                    entries: [claude, statusOnly],
+                    style: StripStyleBox.box(for: style),
+                    height: 13,
+                    colour: .perBar,
+                    warningThreshold: 0.85
+                )
             )
-        )
-        XCTAssertNotNil(renderer.nsImage)
+            let drawn = renderer.nsImage
+            XCTAssertNotNil(drawn, "\(style.rawValue) rendered nothing outside the rasteriser")
+            // And it measures what the status item reserves for it, or the pane's
+            // preview and the bar disagree about the thing the preview is for.
+            let box = StripStyleBox.box(for: style)
+            let fitted = StripFit.fit([claude, statusOnly], limit: 2, style: box, height: 13).count
+            XCTAssertEqual(
+                drawn?.size.width, StripFit.width(segments: fitted, style: box, height: 13),
+                "\(style.rawValue)'s preview is not the width the bar reserves"
+            )
+        }
     }
 
     // MARK: - Helpers
 
+    /// `.markAndFigure` and coloured marks are the shipped configuration, so
+    /// every test that is not about the style itself measures the strip the app
+    /// actually draws. The two are parameters rather than fixed because both are
+    /// in the memo key, and the memo tests are the ones that have to vary them.
     @MainActor
     private func image(
         _ entries: [MenuBarEntry],
         height: CGFloat = shipped,
         colour: AppearanceSettings.MenuBarColour = .perBar,
-        warningThreshold: Double = 0.85
+        warningThreshold: Double = 0.85,
+        style: AppearanceSettings.MenuBarStyle = .markAndFigure,
+        coloursMarks: Bool = true
     ) -> NSImage {
         MenuBarStripRenderer.image(
-            entries: entries, height: height, colour: colour, warningThreshold: warningThreshold
+            entries: entries, height: height, colour: colour,
+            warningThreshold: warningThreshold, style: style, coloursMarks: coloursMarks
         )
     }
 
@@ -661,25 +781,28 @@ final class MenuBarStripRendererTests: XCTestCase {
 
     /// One segment's mark box, in points from the strip's leading edge.
     ///
-    /// Reconstructed from `StripFit`'s own gaps and cell rather than from
-    /// measured ink: the claim being tested is which column a colour landed in,
-    /// so the columns have to come from the file that decides them. The mark is
-    /// drawn in a box as wide as it is tall, which is what keeps a wide logo and
-    /// a narrow one in the same column.
+    /// Reconstructed from the style's own arithmetic rather than from measured
+    /// ink: the claim being tested is which column a colour landed in, so the
+    /// columns have to come from the type that decides them. The mark is drawn in
+    /// a box as wide as it is tall, which is what keeps a wide logo and a narrow
+    /// one in the same column.
     private func markBox(_ index: Int, height: CGFloat = shipped) -> Range<CGFloat> {
         let start = CGFloat(index) * pitch(height)
-        return start..<(start + height)
+        return start..<(start + Tokens.Strip.markBox(height: height))
     }
 
     /// The reserved figure cell of the segment at `index`.
     private func figureCell(_ index: Int, height: CGFloat = shipped) -> Range<CGFloat> {
-        let start = CGFloat(index) * pitch(height) + height + StripFit.markGap
+        let start = CGFloat(index) * pitch(height)
+            + Tokens.Strip.markBox(height: height) + StripFit.markGap
         return start..<(start + StripFit.figureCell(height: height))
     }
 
-    /// One segment's leading edge to the next one's.
+    /// One segment's leading edge to the next one's. Off `MarkAndFigureStyle`
+    /// rather than added up here, so the columns this file reads pixels out of are
+    /// the ones the drawing actually laid down.
     private func pitch(_ height: CGFloat) -> CGFloat {
-        height + StripFit.markGap + StripFit.figureCell(height: height) + StripFit.segmentGap
+        MarkAndFigureStyle.cellWidth(height: height) + StripFit.segmentGap
     }
 
     // MARK: - Reading the pixels
