@@ -278,6 +278,12 @@ public struct SettingsView: View {
             // says so in place rather than leaving a switch that unticks itself.
             LaunchAtLoginSection()
 
+            // Second, and above Refresh rather than below it, because it answers
+            // the same question the row above does — how do I get to this app —
+            // while the interval below is about the data once you are looking at
+            // it.
+            KeyboardShortcutSection()
+
             Section("Refresh") {
                 // The picker writes the setting and nothing else. There was an
                 // `.onChange` here calling `state.stop()` then `state.start()`,

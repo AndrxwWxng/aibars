@@ -34,7 +34,11 @@ settings:
     PRODUCT_NAME: aibars
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    OTHER_LDFLAGS: "-framework AppKit -framework SwiftUI"
+    # Carbon for `RegisterEventHotKey`, which is how the panel gets a global
+    # shortcut without an Accessibility prompt. Named here beside the other two
+    # rather than left to autolinking, because the frameworks this app links are
+    # a list somebody should be able to read.
+    OTHER_LDFLAGS: "-framework AppKit -framework SwiftUI -framework Carbon"
 
 targets:
   aibarsCore:

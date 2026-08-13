@@ -123,10 +123,10 @@ public final class LoginItem: ObservableObject {
 
     // MARK: - Internals
 
-    private nonisolated static let hostedInApp: Bool = {
-        let bundle = Bundle.main
-        return bundle.bundleURL.pathExtension == "app" && bundle.bundleIdentifier != nil
-    }()
+    /// One predicate, in `HostProcess`, because the hotkey needs the same
+    /// question answered and two copies of a guard is one copy that gets fixed.
+    /// The name stays for the tests that pin it and for the call sites above.
+    private nonisolated static let hostedInApp: Bool = HostProcess.isAppBundle
 
     private nonisolated static let noBundleReason =
         "aibars isn't running from an app bundle, so there is nothing for macOS to launch."
