@@ -24,9 +24,12 @@ public struct AlertsPane: View {
     @ObservedObject private var trend: UsageTrendStore
 
     /// Stored dependencies rather than `@EnvironmentObject`, like every other
-    /// pane in this window: the settings window is an `NSHostingView` built with
-    /// only `AppState` in its environment, and a missing environment object is a
-    /// crash on the way in rather than a fallback.
+    /// pane in this window: this pane is built directly, with an `AlertCenter`
+    /// and a `UsageTrendStore` handed to it and no environment at all, every
+    /// time it is tested — and a pane that reached into the environment for
+    /// either could only ever be tested against the two `shared` singletons,
+    /// which persist to `UserDefaults.standard` and are therefore whoever ran
+    /// the suite. An injectable dependency is what makes the pane measurable.
     ///
     /// Resolved in the init body rather than as a default argument, as
     /// `AppearancePane` does — a default argument is evaluated at the call site,

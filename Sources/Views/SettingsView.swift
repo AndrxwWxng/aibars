@@ -105,13 +105,23 @@ public struct SettingsView: View {
     /// line would put Chrome's answer under Firefox's name.
     @State private var sourceNotes: [String: String] = [:]
     @State private var scanNote: String?
+    /// Told which pane is on screen, every time that changes.
+    ///
+    /// `pane` is `State`, so nothing outside this view can read it and nothing
+    /// outside can be right about it for longer than one click. The window
+    /// controller is the one caller that has to be right about it — it decides
+    /// whether an already open window needs rebuilding — so the view says so
+    /// rather than the controller guessing. Defaulted to nothing, because a
+    /// preview or a snapshot has no controller to tell.
+    private var onPaneChange: (Pane) -> Void = { _ in }
 
     public init() {}
 
-    /// Opens on a specific pane, for previews and snapshots — which otherwise
-    /// can only ever see the default one.
-    init(initialPane: Pane) {
+    /// Opens on a specific pane, for the window controller — and for previews
+    /// and snapshots, which otherwise can only ever see the default one.
+    init(initialPane: Pane, onPaneChange: @escaping (Pane) -> Void = { _ in }) {
         _pane = State(initialValue: initialPane)
+        self.onPaneChange = onPaneChange
     }
 
     /// The floor for the window, decided in one place.
@@ -187,6 +197,16 @@ public struct SettingsView: View {
                 // either: this window has three planes and each is a ground.
                 .background(Tokens.Surface.base)
         }
+        // On the whole window rather than in the sidebar's action, so it catches
+        // every writer of `pane` there will ever be — a future keyboard shortcut,
+        // a deep link — and not just the one row that writes it today.
+        .onChange(of: pane) { onPaneChange($0) }
+        // And once on the way in, so a view built by any path says where it
+        // opened rather than leaving whoever built it to remember. Redundant
+        // with the controller's own write today and deliberately so: the record
+        // is the view's to state, and it is worth nothing if it is only ever
+        // right when someone else keeps it.
+        .onAppear { onPaneChange(pane) }
         // No ideal size: the window controller opens at a size of its own, and
         // an ideal three points above the minimum only ever described the same
         // window twice.
@@ -259,15 +279,29 @@ public struct SettingsView: View {
             LaunchAtLoginSection()
 
             Section("Refresh") {
+                // The picker writes the setting and nothing else. There was an
+                // `.onChange` here calling `state.stop()` then `state.start()`,
+                // on the theory that a timer has to be re-armed to change its
+                // interval. `AppState.start()` is not a timer: it re-registers
+                // the wake observer, runs `adoptBrowserSessions()` — which
+                // copies every installed browser's cookie database and kicks off
+                // a second census copy behind it — and then fetches every
+                // service, on top of the sweep `stop()` had just cancelled and
+                // could not interrupt, since cancelling the loop's task does not
+                // recall the requests already in flight. Choosing "5 minutes"
+                // cost a full cookie sweep and two overlapping refreshes.
+                //
+                // Nothing needs re-arming: the loop in `AppState.start()` reads
+                // `refreshIntervalSeconds` afresh on every iteration, so the new
+                // interval is in force from the next tick. The whole cost of the
+                // deletion is that one already-sleeping tick keeps the old
+                // length — at most 30 minutes of the previous setting, once.
                 Picker("Interval", selection: $state.refreshIntervalSeconds) {
                     Text("30 seconds").tag(30)
                     Text("1 minute").tag(60)
                     Text("5 minutes").tag(300)
                     Text("15 minutes").tag(900)
                     Text("30 minutes").tag(1800)
-                }
-                .onChange(of: state.refreshIntervalSeconds) { _ in
-                    state.stop(); state.start()
                 }
             }
             // No signpost section to Appearance: it is two rows up in the
