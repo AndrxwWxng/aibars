@@ -280,6 +280,13 @@ public final class AppState: ObservableObject {
               let provider = provider(for: providerID) else { return }
         UsageTrendStore.shared.record(data, for: providerID)
         UsageHistoryStore.shared?.record(data, for: providerID)
+        // The row's own twenty-four-hour trace, rebuilt at most once every five
+        // minutes per row and always off the main actor. It goes here and not in
+        // the view for the reason everything else in this method is here: a
+        // single-row refresh has to feed it exactly as a sweep does, or a user
+        // watching one service by hand would draw a trace that stopped the day
+        // they started watching.
+        RowSparklineStore.shared.note(data, for: providerID)
         await alertCenter.consider(
             data, providerID: providerID, displayName: provider.displayName
         )
@@ -319,11 +326,15 @@ public final class AppState: ObservableObject {
     /// The stored history is dropped for the same reason and it is the worst of
     /// the three to get wrong: a chart is read as one person's record, so ninety
     /// days of somebody else's usage under a new account's name is not a stale
-    /// number, it is a fabricated one.
+    /// number, it is a fabricated one. And the trace under the row goes with it,
+    /// which is the same fabrication at a smaller scale — twenty-four hours of
+    /// somebody else's day drawn under a new account's name, in the one place the
+    /// user is looking rather than in a settings window they may never open.
     @MainActor
     public static func forgetHistory(_ providerID: String) {
         UsageTrendStore.shared.forget(providerID)
         UsageHistoryStore.shared?.forget(providerID)
+        RowSparklineStore.shared.forget(providerID)
         AlertCenter.shared.forget(providerID)
     }
 
