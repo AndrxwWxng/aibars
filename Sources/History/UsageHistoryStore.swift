@@ -121,8 +121,12 @@ public enum HistoryError: LocalizedError {
 ///    at a reset would throw away precisely what a history view exists to show.
 ///
 /// One connection, on one serial queue, in WAL so a read is never blocked
-/// behind the writer. Writes are dispatched and reads are `sync`, which also
-/// means a read issued after a write sees it: the queue is FIFO.
+/// behind the writer. Writes are dispatched; the isolated reads are `sync`,
+/// which also means a read issued after a write sees it, because the queue is
+/// FIFO. The `nonisolated` members below use that same queue and are ordered
+/// against the writer in the same way; what they add is that the caller need not
+/// be the main actor, and that the three `async` ones suspend where the isolated
+/// ones block.
 @MainActor
 public final class UsageHistoryStore: ObservableObject {
     /// The app's single instance. Optional because opening the file can fail —
@@ -166,7 +170,7 @@ public final class UsageHistoryStore: ObservableObject {
     ) throws {
         let folder = try directory ?? Self.defaultDirectory()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        self.database = try HistoryDatabase(url: folder.appendingPathComponent("history.sqlite"))
+        self.database = try HistoryDatabase(url: folder.appendingPathComponent(Self.databaseFileName))
         self.defaults = defaults
         self.calendar = Calendar.current
         self.now = now
@@ -178,11 +182,46 @@ public final class UsageHistoryStore: ObservableObject {
 
     /// `~/Library/Application Support/aibars`. Created by the initialiser; the
     /// database and its WAL sidecars are the only things in it.
-    private static func defaultDirectory() throws -> URL {
+    ///
+    /// Not private: `createdPaths(in:)` is built from it, and the test behind
+    /// that one asserts this answer against the path `install.sh` prints.
+    static func defaultDirectory() throws -> URL {
         try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("aibars", isDirectory: true)
     }
+
+    /// The database, the two sidecars WAL leaves beside it, and the folder that
+    /// holds all three — deepest first, which is the order they would be removed
+    /// in.
+    ///
+    /// Published rather than left implicit because it is one half of a pair, and
+    /// the other half is not Swift: `install.sh` prints uninstall instructions,
+    /// and a `rm -rf` in a shell script is a copy of this list that no compiler
+    /// checks. The database is not covered by `defaults delete` or by
+    /// `security delete-generic-password`, so if it ever moves out from under the
+    /// path that script names, four hundred days of rollups are orphaned on the
+    /// disk of somebody who believed they had uninstalled the app. The guard is
+    /// `UsageHistoryStoreTests.testTheUninstallListCoversEveryPathThisStoreCreates`,
+    /// which fails on the day this answer stops matching the script's.
+    ///
+    /// `directory` is here for that test: it asks a store that was opened over a
+    /// scratch folder to list what it can leave there, then checks the folder
+    /// afterwards and finds nothing else.
+    static func createdPaths(in directory: URL? = nil) throws -> [URL] {
+        let folder = try directory ?? defaultDirectory()
+        return fileNames.map { folder.appendingPathComponent($0) } + [folder]
+    }
+
+    /// The one file the readings live in, named once so that the initialiser and
+    /// the list above cannot come to disagree about where it is.
+    static let databaseFileName = "history.sqlite"
+
+    /// The database, and the two files WAL opens beside it. The sidecars are
+    /// transient — a clean close folds them back in — but a machine that lost
+    /// power keeps them, so an uninstall has to account for them. The suffixes
+    /// are SQLite's, not ours: it derives both from the database's own path.
+    static let fileNames = [databaseFileName, databaseFileName + "-wal", databaseFileName + "-shm"]
 
     // MARK: - Recording
 
@@ -273,6 +312,87 @@ public final class UsageHistoryStore: ObservableObject {
         queue.sync { database.series() }
     }
 
+    // MARK: - Reading without the main actor
+    //
+    // The three above are `queue.sync` on the main actor, which is affordable for
+    // a settings pane somebody opened by hand and is not affordable for anything
+    // the panel draws: eleven rows each asking for their own samples inside one
+    // `body` pass is eleven synchronous SQLite queries on the thread doing the
+    // drawing, some of them queued behind the insert transaction of the very
+    // sweep that opened the panel.
+    //
+    // These three answer the same questions from the database's own queue and
+    // hand the result back through a continuation, so the caller suspends instead
+    // of blocking. They are `nonisolated`, so calling one does not hop to the
+    // main actor first — that hop is the whole cost being avoided, and a method
+    // that merely awaited an isolated one would reintroduce it in silence.
+    //
+    // What they may touch is decided by that: `database` and `queue` are
+    // immutable and `Sendable`, so a nonisolated method may reach both. `calendar`
+    // and `now` are the store's opinions about the machine's clock, and a caller
+    // that wants a day boundary already had to make that decision to draw the
+    // axis — so the dates come in as arguments rather than being computed here.
+
+    /// The same samples as `samples(for:since:)`, already reduced to `count` even
+    /// buckets, without ever occupying the main actor.
+    ///
+    /// Exactly what `HistoryQuery.buckets(samples(for:since:from), from:, to:,
+    /// count:)` answers, refusals included: nothing to divide comes back as `[]`
+    /// rather than as a row of nils.
+    ///
+    /// The bucketing runs on the database queue too. Handing back twenty thousand
+    /// `HistorySample`s so that the main actor could reduce them to twenty-four
+    /// doubles would move the allocation onto the thread this exists to keep free.
+    public nonisolated func peaks(
+        for series: HistorySeriesID,
+        from: Date,
+        to: Date,
+        count: Int
+    ) async -> [Double?] {
+        guard count > 0, to > from else { return [] }
+        let floor = Self.seconds(from)
+        let database = self.database
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                let rows = database.samples(
+                    provider: series.providerID, windowKey: series.windowKey, since: floor
+                )
+                continuation.resume(
+                    returning: HistoryQuery.buckets(rows, from: from, to: to, count: count)
+                )
+            }
+        }
+    }
+
+    /// One row per day of one series, off the main actor.
+    ///
+    /// The floor is a day rather than an instant, and the caller does the
+    /// flooring: `days(for:since:)` uses this object's `calendar`, and a heatmap
+    /// has already had to pick one to lay its columns out with.
+    public nonisolated func days(
+        for series: HistorySeriesID,
+        sinceDayStarting day: Date
+    ) async -> [HistoryDay] {
+        let floor = Self.seconds(day)
+        let database = self.database
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: database.days(
+                    provider: series.providerID, windowKey: series.windowKey, since: floor
+                ))
+            }
+        }
+    }
+
+    /// Every series with anything stored, off the main actor. The same answer
+    /// `series()` gives, from a thread that is not drawing anything.
+    public nonisolated func allSeries() async -> [HistorySeriesID] {
+        let database = self.database
+        return await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: database.series()) }
+        }
+    }
+
     // MARK: - Maintenance
 
     /// Prunes what has aged out, and reclaims the space if enough of it went.
@@ -292,8 +412,8 @@ public final class UsageHistoryStore: ObservableObject {
 
     // MARK: - Export
 
-    /// The whole history since `date` as CSV, at the finest grain that survives
-    /// for each part of the range.
+    /// The history between `date` and `until` as CSV, at the finest grain that
+    /// survives for each part of the range.
     ///
     /// Raw readings are kept for two weeks and day rollups for over a year, so
     /// an export of the last ninety days is mostly day rows with the recent end
@@ -302,8 +422,23 @@ public final class UsageHistoryStore: ObservableObject {
     /// day's peak. The two never overlap — the switch is the day the oldest
     /// surviving reading falls in — so a consumer can plot the file as it comes
     /// without double-counting a day.
-    public func exportCSV(since date: Date) -> String {
+    ///
+    /// `until` is inclusive at both grains and defaults to the end of time, so
+    /// the one-argument call still means everything since `date`. Passing one
+    /// makes the file the range the caller was looking at rather than the range
+    /// that existed by the time the formatting finished — which is what lets this
+    /// be handed to a task while a sweep carries on writing underneath it.
+    ///
+    /// `nonisolated`, and that is the point of the pair. This is a `queue.sync`
+    /// over the whole range plus an ISO stamp and three `String(format:)` calls
+    /// per row, and none of that belongs on the thread drawing the window whose
+    /// button started it. Like the three accessors above it reaches `database`
+    /// and `queue`; unlike them it also reads `calendar`, which is safe for the
+    /// same reason — it is an immutable `let` of a `Sendable` type — and is
+    /// needed because where the two grains meet is a day boundary.
+    public nonisolated func exportCSV(since date: Date, until: Date = .distantFuture) -> String {
         let from = Self.seconds(date)
+        let to = Self.seconds(until)
         // Lifted out so the closure below reaches nothing on the main actor.
         let calendar = self.calendar
         let rows: [HistoryDatabase.ExportRow] = queue.sync {
@@ -316,7 +451,7 @@ public final class UsageHistoryStore: ObservableObject {
             let boundary = database.oldestSample().map { oldest in
                 Self.seconds(calendar.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(oldest))))
             }
-            return database.export(since: from, samplesFrom: boundary)
+            return database.export(since: from, until: to, samplesFrom: boundary)
         }
 
         var csv = "grain,provider,window,label,unit,at,used,limit,percent,resets\n"
@@ -359,8 +494,15 @@ public final class UsageHistoryStore: ObservableObject {
 
     /// Seconds since 1970, as SQLite stores them. Clamped rather than converted
     /// straight through: `Int64(_:)` traps on a value out of range, and these
-    /// dates are parsed out of a provider's JSON.
-    private static func seconds(_ date: Date) -> Int64 {
+    /// dates are parsed out of a provider's JSON. The clamp is also what makes
+    /// `Date.distantFuture` a usable ceiling — it lands at the year 3237 rather
+    /// than overflowing.
+    ///
+    /// `nonisolated` because the accessors above are: it is arithmetic on its
+    /// argument and reaches nothing on this object, and leaving it isolated would
+    /// have made a date conversion the one thing that dragged them back onto the
+    /// main actor.
+    nonisolated private static func seconds(_ date: Date) -> Int64 {
         let value = date.timeIntervalSince1970.rounded()
         guard value.isFinite else { return 0 }
         return Int64(min(max(value, -4e10), 4e10))
@@ -757,19 +899,24 @@ private final class HistoryDatabase: @unchecked Sendable {
         return oldest
     }
 
-    /// Day rows below `samplesFrom`, raw rows at or above it, in time order.
-    /// A nil boundary means there are no raw readings at all and the whole
-    /// range is day rows.
-    func export(since: Int64, samplesFrom boundary: Int64?) -> [ExportRow] {
+    /// Day rows below `samplesFrom`, raw rows at or above it, in time order,
+    /// none of either past `until`. A nil boundary means there are no raw
+    /// readings at all and the whole range is day rows.
+    ///
+    /// Two ceilings on the day query and they are different questions: `until` is
+    /// the caller's range and is inclusive, `samplesFrom` is where the grain
+    /// switches and is exclusive, because the day it names goes out as readings
+    /// instead.
+    func export(since: Int64, until: Int64, samplesFrom boundary: Int64?) -> [ExportRow] {
         var rows: [ExportRow] = []
         let dayCeiling = boundary ?? Int64.max
         try? query("""
             SELECT series.provider, series.window_key, series.label, series.unit,
                    day.day, day.peak_used, day.cap, day.peak, day.resets
             FROM day JOIN series ON series.id = day.series
-            WHERE day.day >= ? AND day.day < ?
+            WHERE day.day >= ? AND day.day < ? AND day.day <= ?
             ORDER BY day.day, series.provider, series.window_key
-            """, [.integer(since), .integer(dayCeiling)]) { statement in
+            """, [.integer(since), .integer(dayCeiling), .integer(until)]) { statement in
             guard let provider = Self.text(statement, 0), let key = Self.text(statement, 1) else { return }
             rows.append(ExportRow(
                 grain: "day",
@@ -790,9 +937,9 @@ private final class HistoryDatabase: @unchecked Sendable {
             SELECT series.provider, series.window_key, series.label, series.unit,
                    sample.ts, sample.used, sample.cap, sample.boundary
             FROM sample JOIN series ON series.id = sample.series
-            WHERE sample.ts >= ?
+            WHERE sample.ts >= ? AND sample.ts <= ?
             ORDER BY sample.ts, series.provider, series.window_key
-            """, [.integer(max(since, boundary))]) { statement in
+            """, [.integer(max(since, boundary)), .integer(until)]) { statement in
             guard let provider = Self.text(statement, 0), let key = Self.text(statement, 1) else { return }
             let used = sqlite3_column_double(statement, 5)
             let cap = sqlite3_column_double(statement, 6)

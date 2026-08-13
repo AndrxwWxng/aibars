@@ -24,9 +24,17 @@ final class HistoryQueryTests: XCTestCase {
         HistorySample(at: start.addingTimeInterval(offset), percent: percent)
     }
 
-    private func calendar(_ zone: String) throws -> Calendar {
+    /// `firstWeekday` is written down rather than left to the identifier's own
+    /// default, because every row and column the heatmap answers is a function of
+    /// it and the default is invisible: `Calendar(identifier:)` carries no locale
+    /// and quietly opens its weeks on Sunday, so a grid asserted against Monday
+    /// rows would be asserting a value nothing in the test names. The roll-up
+    /// tests below only ever ask this calendar for a day boundary, so it is inert
+    /// for them.
+    private func calendar(_ zone: String, firstWeekday: Int = 2) throws -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: zone), "\(zone) is not a zone this machine knows")
+        calendar.firstWeekday = firstWeekday
         return calendar
     }
 
@@ -344,6 +352,30 @@ final class HistoryQueryTests: XCTestCase {
         )
     }
 
+    /// The threshold is one named number rather than a literal in each drawing
+    /// that cuts on it, so a trace under a row and a line in the settings window
+    /// cannot end up holding two opinions about when a window began.
+    ///
+    /// The two boundary figures are exactly representable in binary — 0.5 to
+    /// 0.1875 is a fall of 0.3125, 0.5 to 0.25 is 0.25 — so what is being pinned
+    /// is that the default lies between them and not how a subtraction rounds.
+    func testTheResetDropIsOneNamedNumberAndItIsWhatSegmentsCutsOn() {
+        XCTAssertEqual(HistoryQuery.resetDrop, 0.30)
+        XCTAssertGreaterThan(
+            HistoryQuery.resetDrop, UsageForecast.resetDrop,
+            "history is sampled at whatever spacing the mac was awake for, and the fit is not"
+        )
+
+        let over = [sample(0.5, at: 0), sample(0.1875, at: 300)]
+        let under = [sample(0.5, at: 0), sample(0.25, at: 300)]
+        XCTAssertEqual(HistoryQuery.segments(over).count, 2)
+        XCTAssertEqual(HistoryQuery.segments(under).count, 1)
+        XCTAssertEqual(
+            HistoryQuery.segments(over), HistoryQuery.segments(over, resetDrop: HistoryQuery.resetDrop),
+            "the default has to be the constant, or a caller spelling it out draws a different chart"
+        )
+    }
+
     // MARK: - The daily roll-up
 
     func testAnEmptySeriesRollsUpToNoDays() throws {
@@ -519,6 +551,179 @@ final class HistoryQueryTests: XCTestCase {
         // a different answer, and the point of passing the calendar in.
         let utc = HistoryQuery.rollUp(samples, calendar: try calendar("UTC"))
         XCTAssertEqual(utc.map(\.samples), [3, 1])
+    }
+
+    // MARK: - The heatmap grid
+    //
+    // Everything here is laid out in a calendar the test pins entirely — zone,
+    // identifier and first weekday — and against a fixed anchor date, because
+    // every coordinate the grid produces is a function of all four and none of
+    // them may be the machine's.
+    //
+    // The window used throughout is the ninety days ending 30 April 2021 in
+    // London, which is 31 January to 30 April inclusive and contains the
+    // spring-forward Sunday. That is the case a day-bucketing loop written in
+    // seconds gets wrong.
+
+    func testTheGridIsNinetyCellsEndingOnTheDayItWasGiven() throws {
+        let london = try calendar("Europe/London")
+        let end = try date(2021, 4, 30, 14, 20, in: london)
+
+        let cells = HistoryQuery.heatmap([], endingOn: end, calendar: london)
+
+        XCTAssertEqual(cells.count, 90)
+        XCTAssertEqual(cells.last?.day, london.startOfDay(for: end))
+        XCTAssertEqual(cells.first?.day, try date(2021, 1, 31, 0, 0, in: london), "eighty-nine days before the last")
+        XCTAssertEqual(Set(cells.map(\.day)).count, 90, "a day twice is a square drawn on top of a square")
+        XCTAssertTrue(cells.allSatisfy { $0.day == london.startOfDay(for: $0.day) }, "every cell is a midnight")
+        XCTAssertTrue(cells.allSatisfy { (0...6).contains($0.row) })
+        XCTAssertEqual(
+            Set(cells.map { $0.column * 7 + $0.row }).count, 90,
+            "two days sharing one square is the grid losing a day"
+        )
+        XCTAssertEqual(cells.map(\.column), cells.map(\.column).sorted(), "the weeks run left to right")
+        XCTAssertTrue(
+            cells.allSatisfy { $0.peak == nil && $0.capHits == 0 && $0.samples == 0 },
+            "nothing was handed in, so no day has readings"
+        )
+        // The grid reserves fourteen columns whichever weekday the window opens
+        // on (`Tokens.Heat.columns`), and this window is the wide case: 31 January
+        // 2021 was a Sunday, so a week that opens on Monday spends six days of the
+        // first column on days outside the window and needs all fourteen.
+        XCTAssertEqual(cells.last?.column, Tokens.Heat.columns - 1)
+    }
+
+    /// Ninety days is ninety *calendar* days, and a spring-forward day is
+    /// twenty-three hours long. London went from GMT to BST at 01:00 on 28 March
+    /// 2021, inside this window — which is why the first assertion, a walk in
+    /// fixed seconds, lands an hour past the last day's midnight.
+    func testTheGridIsStillNinetyDaysAcrossTheSpringForwardSunday() throws {
+        let london = try calendar("Europe/London")
+        let end = try date(2021, 4, 30, 14, 20, in: london)
+        let first = try date(2021, 1, 31, 0, 0, in: london)
+        let springForward = try date(2021, 3, 28, 0, 0, in: london)
+
+        XCTAssertEqual(
+            first.addingTimeInterval(89 * 86_400).timeIntervalSince(london.startOfDay(for: end)), 3600,
+            "the premise: eighty-nine times 86 400 seconds does not reach the last midnight of this window"
+        )
+
+        let cells = HistoryQuery.heatmap([], endingOn: end, calendar: london)
+
+        XCTAssertEqual(cells.count, 90)
+        for (earlier, later) in zip(cells, cells.dropFirst()) {
+            XCTAssertEqual(
+                london.dateComponents([.day], from: earlier.day, to: later.day).day, 1,
+                "\(earlier.day) to \(later.day) is not one calendar day"
+            )
+        }
+        XCTAssertEqual(
+            cells.filter { $0.day == springForward }.count, 1,
+            "a twenty-three-hour day is one square like every other"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(cells.first { $0.day == springForward }).row, 6,
+            "28 March 2021 was a Sunday, which is the last row of a week that opens on Monday"
+        )
+    }
+
+    /// Where the week starts moves the rows and nothing else: the same ninety
+    /// days, one row further down, in a grid one column narrower.
+    func testTheFirstWeekdayMovesEveryRowAndNoDay() throws {
+        let mondays = try calendar("Europe/London", firstWeekday: 2)
+        let sundays = try calendar("Europe/London", firstWeekday: 1)
+        let end = try date(2021, 4, 30, 14, 20, in: mondays)
+
+        let mondayGrid = HistoryQuery.heatmap([], endingOn: end, calendar: mondays)
+        let sundayGrid = HistoryQuery.heatmap([], endingOn: end, calendar: sundays)
+
+        XCTAssertEqual(sundayGrid.count, 90)
+        XCTAssertEqual(
+            sundayGrid.map(\.day), mondayGrid.map(\.day),
+            "which day a square stands for cannot depend on where the week starts"
+        )
+        XCTAssertEqual(sundayGrid.map(\.row), mondayGrid.map { ($0.row + 1) % 7 })
+        // 31 January 2021 was a Sunday, so a week that opens on Sunday spends no
+        // days of its first column outside the window and fits in thirteen.
+        XCTAssertEqual(sundayGrid.last?.column, 12)
+        XCTAssertLessThanOrEqual(
+            try XCTUnwrap(sundayGrid.last?.column), Tokens.Heat.columns - 1,
+            "no first weekday may ask for a column the grid does not reserve"
+        )
+    }
+
+    func testADayWithASummaryCarriesItAndEveryOtherDayIsEmptyRatherThanZero() throws {
+        let london = try calendar("Europe/London")
+        let end = try date(2021, 4, 30, 14, 20, in: london)
+        let busy = try date(2021, 4, 12, 0, 0, in: london)
+        let untouchedQuota = try date(2021, 2, 3, 0, 0, in: london)
+        let days = [
+            // Stamped at eleven in the morning, not at midnight: the store hands
+            // back whatever the roll-up wrote, and matching it to a square is this
+            // function's job.
+            HistoryDay(day: busy.addingTimeInterval(11 * 3600), peak: 0.82, mean: 0.41, capHits: 2, samples: 288),
+            HistoryDay(day: untouchedQuota, peak: 0, mean: 0, capHits: 0, samples: 6),
+            // Two years before the window opens.
+            HistoryDay(day: try date(2019, 6, 1, 0, 0, in: london), peak: 1, mean: 1, capHits: 9, samples: 99)
+        ]
+
+        let cells = HistoryQuery.heatmap(days, endingOn: end, calendar: london)
+
+        XCTAssertEqual(cells.count, 90, "a summary from outside the window is not a ninety-first cell")
+        let filled = try XCTUnwrap(cells.first { $0.day == busy })
+        XCTAssertEqual(filled.peak, 0.82)
+        XCTAssertEqual(filled.capHits, 2)
+        XCTAssertEqual(filled.samples, 288)
+
+        let zeroed = try XCTUnwrap(cells.first { $0.day == untouchedQuota })
+        XCTAssertEqual(zeroed.peak, 0, "a day observed at zero is a day with readings")
+        XCTAssertEqual(zeroed.samples, 6)
+
+        let untouched = cells.filter { $0.day != busy && $0.day != untouchedQuota }
+        XCTAssertEqual(untouched.count, 88)
+        XCTAssertTrue(
+            untouched.allSatisfy { $0.peak == nil },
+            "a mac that was switched off did not have a quiet day"
+        )
+        XCTAssertTrue(untouched.allSatisfy { $0.capHits == 0 && $0.samples == 0 })
+    }
+
+    /// A grid has one square a day whatever it is handed. Which of two rows for
+    /// one day wins is stated rather than left open: they arrive in day order, so
+    /// it is the last, and an unspecified answer is one somebody changes by
+    /// accident.
+    func testTwoSummariesForOneDayResolveToOneCell() throws {
+        let london = try calendar("Europe/London")
+        let end = try date(2021, 4, 30, 14, 20, in: london)
+        let day = try date(2021, 4, 12, 0, 0, in: london)
+        let days = [
+            HistoryDay(day: day, peak: 0.2, mean: 0.1, capHits: 0, samples: 3),
+            HistoryDay(day: day.addingTimeInterval(9 * 3600), peak: 0.9, mean: 0.5, capHits: 1, samples: 40)
+        ]
+
+        let cells = HistoryQuery.heatmap(days, endingOn: end, calendar: london)
+
+        XCTAssertEqual(cells.count, 90)
+        XCTAssertEqual(cells.filter { $0.day == day }.count, 1)
+        let only = try XCTUnwrap(cells.first { $0.day == day })
+        XCTAssertEqual(only.peak, 0.9)
+        XCTAssertEqual(only.samples, 40)
+        XCTAssertEqual(only.capHits, 1)
+    }
+
+    func testAGridOfNoDaysIsRefusedAndAShortOneIsExactlyAsLongAsAsked() throws {
+        let london = try calendar("Europe/London")
+        let end = try date(2021, 4, 30, 14, 20, in: london)
+
+        XCTAssertEqual(HistoryQuery.heatmap([], endingOn: end, dayCount: 0, calendar: london), [])
+        XCTAssertEqual(HistoryQuery.heatmap([], endingOn: end, dayCount: -5, calendar: london), [])
+        XCTAssertEqual(HistoryQuery.heatmap([], endingOn: end, dayCount: 7, calendar: london).count, 7)
+
+        let one = HistoryQuery.heatmap([], endingOn: end, dayCount: 1, calendar: london)
+        XCTAssertEqual(one.count, 1)
+        XCTAssertEqual(one.first?.day, london.startOfDay(for: end))
+        XCTAssertEqual(one.first?.column, 0, "the grid opens on the week its own first day is in")
+        XCTAssertEqual(one.first?.row, 4, "30 April 2021 was a Friday")
     }
 
     // MARK: - Series identity

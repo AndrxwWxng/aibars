@@ -69,6 +69,37 @@ public struct HistoryDay: Equatable, Codable, Sendable {
     }
 }
 
+/// One square on a heatmap: a day, what it came to, and where it sits.
+///
+/// Where it sits is carried rather than left to the drawing, because the grid's
+/// two coordinates are the same calendar decision the day boundary is — a week
+/// that opens on Saturday is one `firstWeekday` away — and a view that worked
+/// them out again would be a second copy of it.
+public struct HistoryHeatmapCell: Equatable, Sendable, Identifiable {
+    /// Midnight, in the calendar the grid was laid out in.
+    public let day: Date
+    /// The day's highest reading, or nil for a day with no readings at all. Nil
+    /// and not zero, for the reason it is nil everywhere else in this file.
+    public let peak: Double?
+    public let capHits: Int
+    public let samples: Int
+    /// Which week column, counting from the grid's own first week.
+    public let column: Int
+    /// Which weekday row, 0 at the calendar's own `firstWeekday`.
+    public let row: Int
+
+    public init(day: Date, peak: Double?, capHits: Int, samples: Int, column: Int, row: Int) {
+        self.day = day
+        self.peak = peak
+        self.capHits = capHits
+        self.samples = samples
+        self.column = column
+        self.row = row
+    }
+
+    public var id: Date { day }
+}
+
 /// Which series a sample belongs to: one account's one window.
 ///
 /// Two keys, not one, because a service's windows run at their own rates —
@@ -189,6 +220,23 @@ public enum HistoryQuery {
         return peaks
     }
 
+    /// Where history reads a fall as a window rolling over rather than as usage
+    /// going down.
+    ///
+    /// 0.30 where `UsageForecast.resetDrop` is 0.20, because the two look at
+    /// different spans. The fit sees half an hour, where a twenty-point fall is
+    /// already implausible; history sees days at whatever spacing the app was
+    /// running at, where a rolling window can genuinely shed more than that
+    /// between two readings, and cutting there would shatter one window into
+    /// several.
+    ///
+    /// A named constant rather than a default argument on `segments`, because it
+    /// is not a fact about cutting a chart line: it is where the whole of history
+    /// decides a window began. Anything else that cuts the same readings — a
+    /// trace under a row, an export — has to cut here too, and a second literal
+    /// 0.30 somewhere else is the app holding two opinions about the same event.
+    public static let resetDrop = 0.30
+
     /// The samples in time order, cut wherever the window rolled over.
     ///
     /// A chart that joins the last reading of one window to the first of the
@@ -196,15 +244,11 @@ public enum HistoryQuery {
     /// happened. Each returned segment is one window's life and is drawn as its
     /// own line; every segment is non-empty and they are in order.
     ///
-    /// `resetDrop` is 0.30 where the forecast's is 0.20, because the two look at
-    /// different spans. The fit sees half an hour, where a twenty-point fall is
-    /// already implausible; history sees days at whatever spacing the app was
-    /// running at, where a rolling window can genuinely shed more than that
-    /// between two readings, and cutting there would shatter one window into
-    /// several.
+    /// The cut is at `HistoryQuery.resetDrop`; the argument is here so a test can
+    /// walk the boundary, not so a caller can hold its own view of it.
     public static func segments(
         _ samples: [HistorySample],
-        resetDrop: Double = 0.30
+        resetDrop: Double = HistoryQuery.resetDrop
     ) -> [[HistorySample]] {
         let ordered = samples.sorted { $0.at < $1.at }
         guard let first = ordered.first else { return [] }
@@ -257,6 +301,82 @@ public enum HistoryQuery {
         return accumulators
             .map { $0.value.day(startingAt: $0.key) }
             .sorted { $0.day < $1.day }
+    }
+
+    /// `dayCount` days laid out as weeks, oldest first, ending on the day `end`
+    /// falls in.
+    ///
+    /// One cell a day and not one more: the leading and trailing stubs of the
+    /// first and last weeks are absent rather than handed over empty, because an
+    /// empty cell means "no readings that day" and a day before the window began
+    /// is not a day with no readings — it is not in the picture at all. A grid
+    /// that wants a rectangle leaves the stubs as holes, which it can see from
+    /// `column` and `row`, and that is a drawing decision that stays in the
+    /// drawing.
+    ///
+    /// A day the caller has no `HistoryDay` for is a cell with a nil peak.
+    /// Zero-filling here would be this function deciding that a mac that was
+    /// switched off had a quiet day, which is the caller's judgement and, as it
+    /// happens, wrong. Two rows for one day — a store edited by hand, a roll-up
+    /// computed in a second time zone — collapse to one cell, since a grid has
+    /// one square per day whatever the input says.
+    ///
+    /// The calendar is passed in for the reason `rollUp` takes one: a day
+    /// boundary and a first weekday are display decisions, and a test has to be
+    /// able to pin both.
+    public static func heatmap(
+        _ days: [HistoryDay],
+        endingOn end: Date,
+        dayCount: Int = 90,
+        calendar: Calendar
+    ) -> [HistoryHeatmapCell] {
+        guard dayCount > 0 else { return [] }
+        let last = calendar.startOfDay(for: end)
+        guard let first = calendar.date(byAdding: .day, value: -(dayCount - 1), to: last) else {
+            return []
+        }
+        // The Monday — or Sunday, or Saturday — the grid's first column opens on.
+        // Derived from the calendar's own `firstWeekday`, so a grid in a locale
+        // whose week starts on Saturday is not one that starts on Monday with the
+        // rows shuffled.
+        let offsetOfFirst = (calendar.component(.weekday, from: first) - calendar.firstWeekday + 7) % 7
+        guard let gridStart = calendar.date(byAdding: .day, value: -offsetOfFirst, to: first) else {
+            return []
+        }
+
+        var summaries: [Date: HistoryDay] = [:]
+        for day in days { summaries[calendar.startOfDay(for: day.day)] = day }
+
+        var cells: [HistoryHeatmapCell] = []
+        cells.reserveCapacity(dayCount)
+        for offset in 0..<dayCount {
+            // Added a day at a time through the calendar rather than by
+            // multiplying 86 400: a spring-forward day is twenty-three hours
+            // long, so ninety days of arithmetic on a fixed second count walks an
+            // hour off the boundary and eventually a whole cell off the grid.
+            //
+            // A calendar that cannot add a day to a date it produced itself is
+            // not a calendar, but the cell is dropped rather than guessed if it
+            // happens: a guessed date is a square under the wrong weekday, and a
+            // grid with 89 squares is at least visibly a grid with 89 squares.
+            guard let stepped = calendar.date(byAdding: .day, value: offset, to: first) else { continue }
+            // And floored again, because a zone whose clocks move at midnight has
+            // days where 00:00 itself does not exist.
+            let day = calendar.startOfDay(for: stepped)
+            let span = calendar.dateComponents([.day], from: gridStart, to: day).day ?? 0
+            let summary = summaries[day]
+            cells.append(HistoryHeatmapCell(
+                day: day,
+                // A stored row always rests on at least one reading, so a row
+                // that exists is never a nil peak.
+                peak: summary?.peak,
+                capHits: summary?.capHits ?? 0,
+                samples: summary?.samples ?? 0,
+                column: span / 7,
+                row: (calendar.component(.weekday, from: day) - calendar.firstWeekday + 7) % 7
+            ))
+        }
+        return cells
     }
 
     /// Running totals for one day. A struct rather than four parallel

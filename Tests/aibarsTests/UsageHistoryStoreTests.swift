@@ -524,6 +524,195 @@ final class UsageHistoryStoreTests: XCTestCase {
         XCTAssertEqual(later.first?.peak ?? 0, 0.9, accuracy: 1e-9)
     }
 
+    // MARK: - Reading without the main actor
+
+    /// The equality `peaks` promises: the answer `buckets` gives over `samples`,
+    /// exactly, so that a drawing taking the off-actor route and one taking the
+    /// isolated route can never become two pictures of one day.
+    @MainActor
+    func testPeaksAreExactlyTheBucketsTheChartWouldHaveBuilt() async throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+
+        // Eight readings half an hour apart, so at 24 buckets over the five hours
+        // below each one lands in a bucket of its own and a wrong division shows
+        // up as a moved reading rather than as a rounding difference.
+        for step in 0..<8 {
+            store.record(usage(Double(step) * 10, at: clock.now), for: "claude")
+            clock.advance(1800)
+        }
+
+        let from = start.addingTimeInterval(-3600)
+        let to = start.addingTimeInterval(4 * 3600)
+        let expected = HistoryQuery.buckets(
+            store.samples(for: series(), since: from), from: from, to: to, count: 24
+        )
+        let peaks = await store.peaks(for: series(), from: from, to: to, count: 24)
+
+        XCTAssertEqual(peaks, expected)
+        XCTAssertEqual(peaks.count, 24)
+        XCTAssertEqual(peaks.compactMap { $0 }, [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
+    }
+
+    /// A series nobody has stored anything for is a row of nils, and a request
+    /// that cannot be divided is nothing at all — the same two answers `buckets`
+    /// gives, because the caller has to be able to tell "no history" from "you
+    /// asked for no buckets".
+    @MainActor
+    func testPeaksRefuseARangeTheyCannotDivideAndAnswerNilsForASeriesWithNothingInIt() async throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+        store.record(usage(42, at: clock.now), for: "claude")
+        let hour = start.addingTimeInterval(3600)
+
+        var empty = await store.peaks(for: series("grok", "monthly"), from: start, to: hour, count: 24)
+        XCTAssertEqual(empty.count, 24)
+        XCTAssertTrue(empty.allSatisfy { $0 == nil })
+
+        empty = await store.peaks(for: series(), from: start, to: hour, count: 0)
+        XCTAssertEqual(empty, [])
+        empty = await store.peaks(for: series(), from: start, to: hour, count: -4)
+        XCTAssertEqual(empty, [])
+        empty = await store.peaks(for: series(), from: hour, to: start, count: 24)
+        XCTAssertEqual(empty, [], "a backwards range")
+        empty = await store.peaks(for: series(), from: start, to: start, count: 24)
+        XCTAssertEqual(empty, [], "an empty span")
+    }
+
+    /// The one property of `peaks` that its signature cannot show, and the whole
+    /// reason it exists: the answer arrives without the main actor.
+    ///
+    /// Proved by holding the main thread for 300ms and showing the read landed
+    /// before it was let go. A main-actor-isolated read could not have — it would
+    /// still be queued behind this sleep, exactly as it queues behind a panel
+    /// laying out nine rows. The margin is four orders of magnitude wider than
+    /// the query underneath it, which is a handful of rows out of a scratch file,
+    /// so the only way this fails is the way it is meant to.
+    ///
+    /// Synchronous, unlike its neighbours, because blocking the thread is the
+    /// experiment: `Thread.sleep` is unavailable from an async context precisely
+    /// to stop somebody doing this by accident, and an expectation is how XCTest
+    /// waits for the other side without giving the main thread back first.
+    @MainActor
+    func testPeaksAreAnsweredWhileTheMainActorIsBlocked() throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+        store.record(usage(42, at: clock.now), for: "claude")
+        // Read it back first: the write is dispatched, and this is the FIFO read
+        // that guarantees it has landed before the clock below starts.
+        XCTAssertEqual(store.samples(for: series(), since: epoch).count, 1)
+
+        let wanted = series()
+        let from = start.addingTimeInterval(-3600)
+        let to = start.addingTimeInterval(3600)
+        let answered = Lock<(at: Date, peaks: [Double?])?>(nil)
+        let landed = expectation(description: "the buckets came back")
+        Task.detached {
+            let peaks = await store.peaks(for: wanted, from: from, to: to, count: 24)
+            answered.withLock { $0 = (Date(), peaks) }
+            landed.fulfill()
+        }
+
+        let released = Date().addingTimeInterval(0.3)
+        Thread.sleep(until: released)
+        wait(for: [landed], timeout: 2)
+
+        let read = try XCTUnwrap(answered.withLock { $0 }, "the read never finished at all")
+        XCTAssertEqual(read.peaks.compactMap { $0 }, [0.42])
+        XCTAssertLessThan(read.at, released, "a read that waits for the main actor is a read the panel waits for")
+    }
+
+    /// The other two are the same accessor with a different question, and the one
+    /// difference between each pair is deliberate: the isolated `days(for:since:)`
+    /// floors the date with the store's own calendar, and this one does not,
+    /// because a caller laying out a grid has already had to choose a calendar.
+    @MainActor
+    func testTheOtherTwoReadsOffTheMainActorAgreeWithTheirIsolatedTwins() async throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+
+        store.record(usage(10, at: clock.now), for: "claude")
+        store.record(usage(30, at: clock.now, providerID: "grok"), for: "grok")
+        clock.advance(24 * 3600)
+        let secondDay = clock.now
+        store.record(usage(90, at: clock.now), for: "claude")
+
+        let midnight = Calendar.current.startOfDay(for: secondDay)
+        let isolated = store.days(for: series(), since: secondDay)
+        let detached = await store.days(for: series(), sinceDayStarting: midnight)
+        XCTAssertEqual(detached, isolated)
+        XCTAssertEqual(detached.count, 1)
+
+        let unfloored = await store.days(for: series(), sinceDayStarting: secondDay)
+        XCTAssertTrue(
+            unfloored.isEmpty,
+            "handed an instant rather than a midnight, it asks for the days after that instant"
+        )
+
+        let allSeries = await store.allSeries()
+        XCTAssertEqual(allSeries, store.series())
+        XCTAssertEqual(allSeries, [series("claude"), series("grok")])
+    }
+
+    // MARK: - Where the file lives
+
+    /// Two things at once, and the second is why the first is asserted at all:
+    /// the directory is `aibars` under Application Support, and that is the exact
+    /// path the uninstall instructions in `install.sh` tell a user to remove.
+    /// Neither `defaults delete` nor `security delete-generic-password` reaches
+    /// this file, so if it ever moves, four hundred days of rollups are left on
+    /// the disk of somebody who believed they had uninstalled the app.
+    @MainActor
+    func testTheDatabaseLivesUnderApplicationSupportInTheAppsOwnFolder() throws {
+        let folder = try UsageHistoryStore.defaultDirectory()
+        XCTAssertEqual(folder.lastPathComponent, "aibars")
+
+        let support = try FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false
+        )
+        XCTAssertEqual(
+            folder.deletingLastPathComponent().standardizedFileURL, support.standardizedFileURL,
+            "the app is unsandboxed, so this resolves to ~/Library/Application Support and not to a container"
+        )
+    }
+
+    /// The durable half of the uninstall: the script prints one `rm -rf` and this
+    /// is what makes it true.
+    ///
+    /// Two assertions, and both are needed. The first pins the store's own answer
+    /// to the literal path `install.sh` prints, so moving the database fails here
+    /// rather than silently orphaning it. The second checks the list is the whole
+    /// truth by opening a store over a scratch folder, writing to it, and finding
+    /// nothing in the folder afterwards that the list did not name — WAL's two
+    /// sidecars included, since a machine that lost power keeps them.
+    @MainActor
+    func testTheUninstallListCoversEveryPathThisStoreCreates() throws {
+        // Written the way the script writes it — "$HOME/Library/Application
+        // Support/aibars" — because that is the copy this exists to hold in step.
+        let removed = "\(NSHomeDirectory())/Library/Application Support/aibars"
+        XCTAssertEqual(try UsageHistoryStore.defaultDirectory().path, removed)
+
+        for path in try UsageHistoryStore.createdPaths() {
+            XCTAssertTrue(
+                path.path == removed || path.path.hasPrefix(removed + "/"),
+                "\(path.path) is outside the one path the uninstall instructions remove"
+            )
+        }
+
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+        store.record(usage(42, at: clock.now), for: "claude")
+        XCTAssertEqual(store.samples(for: series(), since: epoch).count, 1)
+
+        let named = Set(try UsageHistoryStore.createdPaths(in: directory).map(\.lastPathComponent))
+        let found = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertFalse(found.isEmpty, "a store that wrote a reading should have left a file behind")
+        for file in found {
+            XCTAssertTrue(named.contains(file), "\(file) is in the store's folder and in nobody's uninstall list")
+        }
+        XCTAssertTrue(found.contains(UsageHistoryStore.databaseFileName))
+    }
+
     // MARK: - Pruning
 
     /// The boundary is `ts < floor`, so a sample exactly at the retention edge
@@ -782,6 +971,79 @@ final class UsageHistoryStoreTests: XCTestCase {
         XCTAssertEqual(recent[0][8], "60.00")
     }
 
+    /// The ceiling is inclusive at both grains, and it is a ceiling on each
+    /// grain's own stamp: a day row is stamped at its midnight and a reading at
+    /// the second it was taken.
+    @MainActor
+    func testTheExportsCeilingClipsBothGrainsAndIsInclusive() throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+
+        // The same arrangement as the grain-switch test above: one day row whose
+        // readings have aged out, and one reading a fortnight later.
+        store.record(usage(40, at: clock.now), for: "claude")
+        clock.advance(HistoryRetention.sample + 24 * 3600)
+        let reading = clock.now
+        store.record(usage(60, at: clock.now), for: "claude")
+        store.maintain()
+
+        let midnight = Calendar.current.startOfDay(for: start)
+        XCTAssertEqual(exportedFields(store).map { $0[0] }, ["day", "sample"], "the whole range, as before")
+        XCTAssertEqual(
+            exportedFields(store, until: reading).map { $0[0] }, ["day", "sample"],
+            "a ceiling on the last reading's own second keeps it"
+        )
+        XCTAssertEqual(exportedFields(store, until: reading.addingTimeInterval(-1)).map { $0[0] }, ["day"])
+        XCTAssertEqual(exportedFields(store, until: midnight).map { $0[0] }, ["day"], "the day's own stamp is in")
+        XCTAssertEqual(
+            exportedFields(store, until: midnight.addingTimeInterval(-1)), [],
+            "a ceiling below everything stored is a file with nothing but its header"
+        )
+    }
+
+    /// The old one-argument call is the new one with the ceiling at the end of
+    /// time, so the call site that has not moved yet exports the same bytes it
+    /// exported before the parameter existed.
+    @MainActor
+    func testAnExportWithNoCeilingIsTheSameFileAsBefore() throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+
+        for used in [10.0, 20.0, 30.0] {
+            store.record(usage(used, at: clock.now), for: "claude")
+            clock.advance(60)
+        }
+
+        XCTAssertEqual(store.exportCSV(since: epoch), store.exportCSV(since: epoch, until: .distantFuture))
+    }
+
+    /// Formatting the whole range is a `queue.sync` plus an ISO stamp and three
+    /// `String(format:)` calls a row, and none of it belongs on the thread
+    /// drawing the window whose button started it. The file has to come out
+    /// identical from either thread, or moving the work would change what the
+    /// user gets.
+    @MainActor
+    func testAnExportRunOffTheMainActorIsByteIdentical() async throws {
+        let clock = HistoryClock(start)
+        let store = try makeStore(clock)
+
+        for used in [10.0, 20.0, 30.0] {
+            store.record(usage(used, at: clock.now, label: "Weekly, all models"), for: "claude")
+            clock.advance(60)
+        }
+        let ceiling = clock.now
+        // `epoch` is a property of the test case and a test case is not
+        // `Sendable`, so it is read here rather than inside the task below. What
+        // that closure captures is two dates and the store, which is `Sendable`
+        // for being main-actor isolated.
+        let floor = epoch
+
+        let onTheMainActor = store.exportCSV(since: floor, until: ceiling)
+        let detached = await Task.detached { store.exportCSV(since: floor, until: ceiling) }.value
+        XCTAssertEqual(detached, onTheMainActor)
+        XCTAssertEqual(detached.split(separator: "\n").count, 4)
+    }
+
     // MARK: - Files the store did not write
 
     @MainActor
@@ -937,8 +1199,8 @@ final class UsageHistoryStoreTests: XCTestCase {
     /// asserts against the raw line instead, and every other case here uses
     /// labels with no commas in them.
     @MainActor
-    private func exportedFields(_ store: UsageHistoryStore, since: Date? = nil) -> [[String]] {
-        store.exportCSV(since: since ?? epoch)
+    private func exportedFields(_ store: UsageHistoryStore, since: Date? = nil, until: Date? = nil) -> [[String]] {
+        store.exportCSV(since: since ?? epoch, until: until ?? .distantFuture)
             .split(separator: "\n")
             .dropFirst()
             .map { $0.components(separatedBy: ",") }
