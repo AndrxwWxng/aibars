@@ -570,7 +570,14 @@ final class AppearancePaneTests: XCTestCase {
             // Two rows of different shapes: the preview's, drawing everything, and
             // a row still waiting on its first fetch. The rail is the panel's
             // column and not the row's, so the two are the same number.
-            let full = geometry(appearance, lines: [.meter, .window, .forecast])
+            //
+            // "Everything" was `[.meter, .window, .forecast]` and is now
+            // `[.meter, .window, .sparkline]`: the pace stopped being a line of its
+            // own — it is a run on the caption line, which this row already has —
+            // and the trace is the third block a row can draw. The case is about
+            // the rail and the rail is not a function of the lines at all, so what
+            // changed here is only what "drawing everything" names.
+            let full = geometry(appearance, lines: [.meter, .window, .sparkline])
             let loading = geometry(appearance, lines: .window)
             XCTAssertEqual(
                 full.headlineRail, loading.headlineRail,

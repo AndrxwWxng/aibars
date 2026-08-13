@@ -392,11 +392,20 @@ final class BrandMarkTests: XCTestCase {
     ///
     /// The second bound is the one that carries the meaning, and it is stated
     /// against the live token rather than a number: `Ink.attention` measures
-    /// C 0.0965 light and 0.1506 dark, `Ink.alarm` 0.1414 and 0.1069, so the
+    /// C 0.1131 light and 0.1408 dark, `Ink.alarm` 0.1595 and 0.1600, so the
     /// binding case is the light amber — the quietest thing in the app that
-    /// means "act" — and the ceiling is 0.725× it. Asserting it against
-    /// `Tokens.Ink.attention` rather than against 0.0965 is deliberate: if the
+    /// means "act" — and the ceiling is 0.619× it. Asserting it against
+    /// `Tokens.Ink.attention` rather than against 0.1131 is deliberate: if the
     /// amber is ever re-cut quieter, this is the test that has to fail.
+    ///
+    /// All four figures moved when the ramp was re-cut to rank in chroma, and
+    /// three of the four went up: light amber 0.0965 → 0.1131, light red 0.1414 →
+    /// 0.1595, dark red 0.1069 → 0.1600. Only the dark amber came down, 0.1506 →
+    /// 0.1408, which is the point of that re-cut — the caution stop used to be the
+    /// most saturated thing in the panel and now nothing outranks the alarm. The
+    /// ceiling did not move and did not need to: it is quoted against the
+    /// *quietest* alarm and the quietest alarm got louder, so its margin widened
+    /// from 0.725× to 0.619× on its own.
     ///
     /// Perplexity's light half is the one entry under the ceiling and not by
     /// choice: the sRGB gamut at L 0.3496 and h 209.8 runs out at C 0.0606.
@@ -406,8 +415,8 @@ final class BrandMarkTests: XCTestCase {
         // `DesignSystem.swift` state, so reproducing them is the proof that this
         // OKLab is the one those bands were cut in.
         for (name, colour, expected) in [
-            ("attention", Tokens.Ink.attention, (light: 0.0965, dark: 0.1506)),
-            ("alarm", Tokens.Ink.alarm, (light: 0.1414, dark: 0.1069))
+            ("attention", Tokens.Ink.attention, (light: 0.1131, dark: 0.1408)),
+            ("alarm", Tokens.Ink.alarm, (light: 0.1595, dark: 0.1600))
         ] as [(String, Color, (light: Double, dark: Double))] {
             let light = chroma(try XCTUnwrap(resolve(colour, dark: false)))
             let dark = chroma(try XCTUnwrap(resolve(colour, dark: true)))

@@ -316,9 +316,14 @@ final class HistoryHeatmapTests: XCTestCase {
     ///
     /// The palette's neutrals are cool rather than dead grey, so they are not
     /// zero — the widest is dark `Ink.muted` at 0xA0…0xAE, which is 14 of 255 or
-    /// 0.055. Both alarm hues are an order out from there: dark amber 0xE08D1C is
-    /// 196 of 255, and the palest of the four, dark red 0xFFA5A7, is still 90 of
-    /// 255 or 0.353. The two bounds below sit either side of that gap.
+    /// 0.055. Both alarm hues are an order out from there: dark amber 0xF1B347 is
+    /// 170 of 255, and the palest of the four, light red 0x890313, is still 134 of
+    /// 255 or 0.525. The two bounds below sit either side of that gap.
+    ///
+    /// The palest used to be dark red `0xFFA5A7` at 90 of 255, or 0.353 — a salmon,
+    /// and the reason the ramp was re-cut. Every one of the four is louder now and
+    /// the quietest of them has gained 49%, so the gap this measure straddles is
+    /// wider than it was and neither bound had to move.
     private func chroma(_ color: NSColor) -> CGFloat {
         let channels = [color.redComponent, color.greenComponent, color.blueComponent]
         return (channels.max() ?? 0) - (channels.min() ?? 0)

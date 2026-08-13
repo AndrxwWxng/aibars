@@ -23,10 +23,28 @@ public struct RowGeometry: Equatable {
 
     /// Which optional lines this row draws. Presence only — never what they say.
     ///
-    /// Four, because four is what changes a row's height. The plan, the account
-    /// label and the action buttons all live on the title line, which is one box
-    /// whatever is in it, and the error and loading lines are the window line's
-    /// own box with different words in it.
+    /// Three, because three is what changes a row's height by being there at all.
+    /// The plan, the account label and the action buttons all live on the title
+    /// line, which is one box whatever is in it, and the error and loading lines
+    /// are the window line's own box with different words in it. The further
+    /// windows are the fourth thing that costs height and they are a *count*
+    /// rather than a bit, so they are `secondaryLines` below rather than a member
+    /// here.
+    ///
+    /// `Lines.forecast` was here and is deleted. It named the pace caption —
+    /// "on pace to cap in 40m" — and it was reserved by this type, named at
+    /// fifteen assertion sites across `RowGeometryTests` and `AppearancePaneTests`
+    /// (counted while rewriting them), and **inserted by nothing in
+    /// `Sources/`**: `ProviderRow` drew `ForecastLine` as a fourth block without
+    /// ever declaring it, so the first time a projection qualified for a row that
+    /// row grew `contentSpacing + lineBox(captionSize)` — 19pt at cozy/100%, and
+    /// about 171pt down a full panel — under the pointer. A correct reservation
+    /// nothing calls is worse than no reservation at all: it reads as coverage.
+    /// The pace is now a run on the caption line the row already reserves (see
+    /// `ForecastLine`), so there is nothing left to reserve and nothing left to
+    /// mistakenly insert. Bit 2 is retired rather than reused, so a stray
+    /// `Lines(rawValue: 4)` from an old call site means nothing instead of
+    /// meaning the trace.
     public struct Lines: OptionSet, Equatable {
         public let rawValue: Int
 
@@ -55,10 +73,6 @@ public struct RowGeometry: Equatable {
         /// The line under the meter: "5h · resets 1h 20m", "Not connected",
         /// "Loading…", an error.
         public static let window = Lines(rawValue: 1 << 1)
-        /// The pace caption: "on pace to cap in 40m". The one line the row draws
-        /// only when there is something honest to say, which is why it is asked
-        /// about rather than assumed.
-        public static let forecast = Lines(rawValue: 1 << 2)
         /// The twenty-four-hour trace under the meter block.
         ///
         /// Presence here is a *setting* and the same one bit the meter slot turns
@@ -69,6 +83,40 @@ public struct RowGeometry: Equatable {
         /// this type exists to make impossible. An empty slot beside a full one is
         /// the price, and it is the same price the meter slot has always paid.
         public static let sparkline = Lines(rawValue: 1 << 3)
+        /// The budget block under every window the service reports: a
+        /// secondary-thickness track and the "Budget · $30.00 left" line under
+        /// it.
+        ///
+        /// **A setting — "has the user set a budget for this service" — and
+        /// never `data.spend != nil`.** It is the third drawing this panel has
+        /// shipped that nothing reserved, and it was the largest of them.
+        /// `ProviderRow.detailContent` drew `BudgetMeter` as a fourth child of
+        /// the row's stack whenever `BudgetPolicy` could compare a spend against
+        /// a budget, and a spend is a fetch result: measured on a hosted row at
+        /// the shipped 356pt panel, a Claude row with a budget set grew
+        /// **22 / 26 / 30pt at compact / cozy / comfortable** the moment its
+        /// first reading landed with a spend in it — `contentSpacing +
+        /// secondaryBarHeight + captionGap + lineBox(detailSize)`, which is
+        /// 6 + 3 + 3 + 14 at cozy/100%. `MenuBarExtra` sizes its window to its
+        /// content, so that is the panel resizing under the pointer, and it is
+        /// half again the 19pt the pace block cost before it was folded away.
+        ///
+        /// Folding was the answer for the pace and cannot be the answer here: a
+        /// track and a figure are not a run of prose and there is no line in the
+        /// row for them to ride. So this reserves, exactly as the meter slot, the
+        /// trace and the further-window ladder do, and the row draws an empty
+        /// block in the states where there is no comparison to make. The price is
+        /// bounded by the pane that sets the number: `BudgetPane` only offers a
+        /// budget row for a service that has *already* reported a spend, so a
+        /// budget existing means that service reported one — the empty block is
+        /// the loading state, the failed state, and a service that has since
+        /// stopped reporting, which are the same three states every other
+        /// reserved slot in the row is already held open through.
+        ///
+        /// Bit 4 and not bit 2: bit 2 named the pace and stays retired, so an old
+        /// `Lines(rawValue: 4)` still means nothing rather than quietly meaning
+        /// the budget.
+        public static let budget = Lines(rawValue: 1 << 4)
     }
 
     /// The logo-and-dial column, the gap to the text included. Zero when there
@@ -109,6 +157,28 @@ public struct RowGeometry: Equatable {
         min(Tokens.Radius.row, height / 3)
     }
 
+    /// The most further-window lines this type will reserve, whatever it is
+    /// handed.
+    ///
+    /// It is the stepper's own ceiling — `secondaryWindowLimit` is clamped to
+    /// `1...6` on write and again by `normalize()` at the end of
+    /// `AppearanceSettings.init`, so a hand-edited defaults file carrying `10000`
+    /// is already a 6 by the time any row reads it. This is the second line of
+    /// defence and not the only one, and it is the line that covers what the
+    /// settings cannot: `secondaryLines` is a bare `Int` on a public initialiser
+    /// with three callers, and the day one of them works its count out from a
+    /// payload rather than from the stepper — which is exactly the mistake this
+    /// parameter exists to prevent — the row would take whatever the payload had
+    /// in it. Twenty lines of arithmetic is a 400pt row and `Int.max` is a frame
+    /// no layout survives, which is the same class of untrusted input
+    /// `positive(_:)` guards a NaN against and deserves the same treatment rather
+    /// than a comment saying it cannot happen.
+    public static let secondaryLineCeiling = 6
+
+    /// - Parameter secondaryLines: How many further-window lines the row holds
+    ///   open. A *setting* — `secondaryWindowLimit` under
+    ///   `secondaryWindows == .expanded`, zero under every other style — and
+    ///   never `data.secondary.count`. See the block that spends it below.
     public init(
         metrics: AppearanceSettings.Metrics,
         showsPercentage: Bool,
@@ -117,6 +187,10 @@ public struct RowGeometry: Equatable {
         logoSize: CGFloat,
         panelWidth: CGFloat,
         rowActions: AppearanceSettings.RowActionVisibility = .onHover,
+        // Ahead of `lines` rather than after it, and defaulted, so no existing
+        // call site has to be touched to gain it — the same courtesy
+        // `ProviderRow.init` extends its three stores.
+        secondaryLines: Int = 0,
         lines: Lines
     ) {
         // The two settings that arrive as `Double` and are clamped on write, but
@@ -181,12 +255,37 @@ public struct RowGeometry: Equatable {
         let joint = (meterHeight > 0 && windowHeight > 0) ? metrics.captionGap : 0
         let meterBlock = meterHeight + joint + windowHeight
 
-        // The pace line is a sibling of that block rather than part of it: it is
-        // a claim about the whole row, not a reading of the meter, and it sits
-        // at the full pitch from it.
-        let forecastHeight = lines.contains(.forecast) ? Tokens.lineBox(metrics.captionSize) : 0
+        // The further windows, one line each, at the full pitch from the meter
+        // block and from each other. The count is the *setting* and never
+        // `data.secondary.count`, and that distinction is the whole of why this
+        // parameter exists: under `.expanded` the row used to draw one line per
+        // window the fetch happened to return, so a service that answered with
+        // three of them grew its row about 60pt the moment the answer landed —
+        // and the panel, which `MenuBarExtra` sizes to its content, moved under
+        // the pointer. The Dashboard preset ships `.expanded` with a limit of
+        // six, so this was default-on for anyone who chose that preset.
+        //
+        // Reserving the ceiling rather than the count is the trade, and it is
+        // the same one the meter slot and the trace already make: a service that
+        // reports one window under a limit of six holds five empty lines. That
+        // is the price of a height that cannot move, and there are two things to
+        // say for it beyond "the alternative is the bug". The first is that the
+        // stepper is the remedy and it is the control the user already has —
+        // under `.expanded` it now means exactly "how many further-window lines
+        // every row makes room for", which is a rule that can be stated. The
+        // second is that it finishes an argument the drawing was already making:
+        // `ProviderRow.secondaryWindows` puts these on the enclosing stack's own
+        // pitch precisely so "the third window of one service sits on the same
+        // line as the third of the next", and a ladder of the same depth on every
+        // row is what makes that true of rows with different numbers of windows.
+        let secondaryLineCount = min(max(0, secondaryLines), Self.secondaryLineCeiling)
+        // `detailSize` and not `captionSize`: every one of these lines is a
+        // `MetricCaption(isSecondary: true)` or a `SecondaryValue`, and both hold
+        // themselves at `lineBox(detailSize)`.
+        let secondaryHeight = CGFloat(secondaryLineCount)
+            * (metrics.contentSpacing + Tokens.lineBox(metrics.detailSize))
 
-        // A sibling of the meter block and of the pace line, at the full pitch
+        // A sibling of the meter block and of the further windows, at the full pitch
         // from both: the trace is a reading of the same window the meter reads,
         // taken over a day instead of at an instant, and a block of its own is
         // what says so. Reserved at `Metrics.sparklineHeight` exactly — not a
@@ -197,14 +296,35 @@ public struct RowGeometry: Equatable {
         // row.
         let sparklineHeight = lines.contains(.sparkline) ? Self.positive(metrics.sparklineHeight) : 0
 
+        // The budget block, last of the four because it is drawn last: the user's
+        // own number goes under every window the service itself reports. Its two
+        // parts sit at `captionGap` rather than at `contentSpacing` for the same
+        // reason the meter and its caption do — the line names the track above it,
+        // so the two are one block — and `BudgetMeter` sets its own stack at
+        // exactly that. `secondaryBarHeight` and not `barHeight`: a budget is
+        // drawn at the thinner weight so it cannot outrank the quota above it.
+        //
+        // Reserved from `Lines.budget`, which is a setting. The argument for that
+        // is written out on the flag; the arithmetic is 3 + 3 + 14 = 20pt at
+        // cozy/100%, and it measures to the point against a hosted row.
+        let budgetHeight = lines.contains(.budget)
+            ? Self.positive(metrics.secondaryBarHeight)
+                + metrics.captionGap
+                + Tokens.lineBox(metrics.detailSize)
+            : 0
+
         var textHeight = titleHeight
         if meterBlock > 0 { textHeight += metrics.contentSpacing + meterBlock }
-        // Between the meter block and the pace line because that is the order the
-        // row draws them. Addition commutes, so the sum does not care; a
-        // reservation that reads in a different order from the drawing is how the
-        // two come apart when somebody next edits one of them.
+        // Between the meter block and the further windows because that is the
+        // order the row draws them. Addition commutes, so the sum does not care;
+        // a reservation that reads in a different order from the drawing is how
+        // the two come apart when somebody next edits one of them.
         if sparklineHeight > 0 { textHeight += metrics.contentSpacing + sparklineHeight }
-        if forecastHeight > 0 { textHeight += metrics.contentSpacing + forecastHeight }
+        // Its own pitch is already inside the term — one `contentSpacing` per
+        // line, which is what a stack of `n` children inside a stack costs.
+        textHeight += secondaryHeight
+        // Last, under the ladder, because that is the order the row draws them.
+        if budgetHeight > 0 { textHeight += metrics.contentSpacing + budgetHeight }
 
         height = max(leadingHeight, textHeight) + 2 * metrics.rowVerticalPadding
     }

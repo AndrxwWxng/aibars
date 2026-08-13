@@ -154,6 +154,115 @@ final class PanelWidthContractTests: XCTestCase {
         )
     }
 
+    // MARK: - The other half of the same contract: the row reads as one object
+
+    /// **Every metered row's caption line reaches the row's trailing edge.**
+    ///
+    /// The contract above says nothing may draw *outside* the panel. This is its
+    /// mirror, and the panel needed it: at 520pt the widest interior void on a
+    /// metered row measured **274pt of 520 — 53% of the window** — so nothing had
+    /// escaped and the row had still come apart. A name 350pt from its own figure
+    /// is two columns with a canyon between them.
+    ///
+    /// The rule is stated as a structure rather than as a number of points, and
+    /// that is the whole of why it is worth asserting. A row on a wide panel will
+    /// always have air in it — measured on this fixture the ink on a 520pt
+    /// Perplexity row is about 300pt of a 468pt column, so 168 of it is surplus
+    /// whatever the arrangement — and a threshold on the gap would only ever be
+    /// the current high-water mark with a margin, which is a test that records
+    /// today rather than one that says what has to be true. What makes a row read
+    /// as one object is not the size of its hole; it is having a **trailing
+    /// column** that more than one of its lines reaches. The rows that already read
+    /// correctly at 520 were exactly the ones whose caption had a further window on
+    /// its trailing half — Claude's void was 20pt against Perplexity's 274 — and
+    /// the row's own reading is what the eye follows back to the figure above it.
+    ///
+    /// So: the caption's rightmost ink lands within one `Space.medium` of the
+    /// column's trailing edge, at four widths crossed with three text scales.
+    /// `MetricCaption.countdownRidesTheEdge` is what makes it true of a row with
+    /// nothing else to put there; reverting it fails this at every width, because
+    /// the caption's whole sentence is leading-aligned and the trailing half falls
+    /// back to a `Color.clear` reserve that draws nothing.
+    ///
+    /// Only the rows that draw a meter, and that exemption is real rather than
+    /// convenient: a service that reports no quota has one sentence and a state
+    /// dot, so there is no second fact to put at its trailing edge and nothing to
+    /// tie across. Inventing one would be furniture, which the panel does not have.
+    /// Those rows are held by `testNoRowDrawsOutsideItsPanelWidth` above and by
+    /// nothing here.
+    ///
+    /// What the change is worth in points, measured on the panel snapshot and
+    /// recorded here because it is the number the work was judged on rather than
+    /// the property it has to hold. Widest interior void on any metered row:
+    ///
+    ///     520pt   274 -> 219   (53% -> 42% of the window)
+    ///     356pt   110 ->  87
+    ///     300pt    62 ->  31
+    ///
+    /// Every one of the three after-figures is Codex, the one row in the fixture
+    /// whose trailing column is a narrow chip rather than a countdown — it never
+    /// had the defect and `countdownRidesTheEdge` deliberately leaves it alone, so
+    /// all it gained is the 31pt the longer track bought it at 520. On the rows the
+    /// fix is actually for — a service reporting one window and a reset date, which
+    /// is most of them — it is **274 → 182 at 520, 110 → 58 at 356, and 62 → 13 at
+    /// 300**.
+    @MainActor
+    func testEveryMeteredRowsCaptionReachesItsTrailingEdge() throws {
+        let appearance = try isolatedSettings()
+        let state = Self.meteredState()
+        var failures: [String] = []
+        var measured = 0
+
+        for width in Self.widths {
+            for scale in Self.scales {
+                appearance.panelWidth = width
+                appearance.textScale = scale
+                // The caption is measured in the column the row would give it,
+                // read off the same `RowGeometry` the row builds rather than from
+                // the panel width: the leading column moves with the logo setting,
+                // and a caption measured in the wrong column is a measurement of a
+                // different row.
+                let column = RowGeometry(
+                    metrics: appearance.metrics,
+                    showsPercentage: appearance.showsPercentage,
+                    meterStyle: appearance.meterStyle,
+                    logoStyle: appearance.logoStyle,
+                    logoSize: appearance.logoSize,
+                    panelWidth: CGFloat(width),
+                    lines: [.meter, .window]
+                ).textColumnWidth
+
+                for provider in state.providers where provider.isAuthenticated {
+                    guard case .success(let data)? = state.snapshots[provider.id] else { continue }
+                    let caption = MetricCaption(
+                        metric: data.primary,
+                        appearance: appearance,
+                        chips: data.secondary,
+                        overflow: 0
+                    )
+                    .frame(width: column)
+
+                    measured += 1
+                    let reach = Self.rightmostInk(AnyView(caption), width: column)
+                    guard column - reach > Tokens.Space.medium else { continue }
+                    failures.append(String(
+                        format: "%.0fpt panel at %.0f%% type: %@'s caption stops %.0fpt short of "
+                            + "its %.0fpt column, so the row has no trailing column at all",
+                        width, scale * 100, provider.serviceID, column - reach, column
+                    ))
+                }
+            }
+        }
+
+        // The sweep ran. A fixture that stopped producing rows would otherwise
+        // report a clean pass having measured nothing.
+        XCTAssertEqual(measured, Self.widths.count * Self.scales.count * 3)
+        XCTAssertTrue(
+            failures.isEmpty,
+            "a row came apart into two columns:\n" + failures.joined(separator: "\n")
+        )
+    }
+
     // MARK: - The filter is new content on a width-locked panel
 
     /// A 32-character query is the widest run the header can be asked to hold, and
@@ -394,7 +503,97 @@ final class PanelWidthContractTests: XCTestCase {
         return state
     }
 
+    /// The three metered shapes a row can be, and none of them exotic.
+    ///
+    /// Deliberately *not* `pathologicalState()`. That fixture is built to overflow
+    /// a row — a sixty-character work address, three windows with long names, a
+    /// four-figure spend — and every one of those things is content arriving to
+    /// fill the line, which is the opposite of the defect here. The canyon is a
+    /// row with **little to say** on a wide panel: a name, a plan, a reading and a
+    /// countdown, and nothing at either end of the caption.
+    ///
+    /// Perplexity is that row exactly, and it is the one that measured 274pt.
+    /// Copilot is the same shape with a counted window rather than a percentage,
+    /// so its sentence is `411 / 300` rather than a word. Codex is the case where
+    /// the trailing half is already taken: it reports one further window, so its
+    /// countdown stays in the sentence and the chip is what has to reach the edge —
+    /// the branch `countdownRidesTheEdge` deliberately does not take.
+    @MainActor
+    static func meteredState() -> AppState {
+        let state = AppState()
+        let now = Date()
+
+        func connect(_ id: String, _ data: (String) -> UsageData) {
+            guard let provider = state.providers.first(where: { $0.serviceID == id }) else { return }
+            provider.isAuthenticated = true
+            state.snapshots[provider.id] = .success(data(provider.id))
+        }
+
+        connect("perplexity") { id in
+            UsageData(
+                providerID: id,
+                planName: "Pro",
+                primary: UsageMetric(
+                    label: "Daily", used: 100, limit: 100, unit: "%",
+                    resetDate: now.addingTimeInterval(11 * 3_600)
+                )
+            )
+        }
+        connect("copilot") { id in
+            UsageData(
+                providerID: id,
+                planName: "Business",
+                primary: UsageMetric(
+                    label: "Premium requests", used: 411, limit: 300, unit: nil,
+                    resetDate: now.addingTimeInterval(6 * 86_400)
+                )
+            )
+        }
+        connect("codex") { id in
+            UsageData(
+                providerID: id,
+                planName: "Free",
+                primary: UsageMetric(
+                    label: "30d window", used: 0, limit: 100, unit: "%",
+                    resetDate: now.addingTimeInterval(29 * 86_400 + 23 * 3_600)
+                ),
+                secondary: [UsageMetric(label: "Credits", used: 0, limit: 0, unit: nil)]
+            )
+        }
+
+        state.lastRefresh = now.addingTimeInterval(-12)
+        return state
+    }
+
     // MARK: - Measurement
+
+    /// How far along a laid-out view its rightmost ink reaches, in points.
+    ///
+    /// Ink is alpha, as in `inkOutside` — the view is drawn on transparency, so no
+    /// colour comparison is involved and a palette change cannot move the number.
+    /// A column counts as inked at the same 0.02 the escape measurement uses, which
+    /// also keeps a glyph's own antialiased tail from reading as reach it does not
+    /// have.
+    @MainActor
+    private static func rightmostInk(_ view: AnyView, width: CGFloat) -> CGFloat {
+        let host = NSHostingView(rootView: AnyView(view.environment(\.colorScheme, .dark)))
+        host.appearance = NSAppearance(named: .darkAqua)
+        let size = CGSize(width: width, height: max(host.fittingSize.height, 1))
+        host.frame = CGRect(origin: .zero, size: size)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(mode: .default, before: Date())
+
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 0 }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / max(size.width, 1)
+
+        for x in stride(from: rep.pixelsWide - 1, through: 0, by: -1) {
+            for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.02 {
+                return CGFloat(x + 1) / scale
+            }
+        }
+        return 0
+    }
 
     /// The panel drawn into a canvas `2 * margin` wider than itself, with the
     /// margins scanned for ink.

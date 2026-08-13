@@ -105,9 +105,10 @@ public enum MeterGeometry {
     /// is under 4%, so nothing that would round to a larger figure is inflated.
     public static let minimumFillThicknesses: CGFloat = 2
 
-    /// The longest track the row's meter may draw, in points.
+    /// The shortest track the row's meter may draw, and the length it draws at
+    /// every panel width up to and including the shipped one.
     ///
-    /// A ceiling and not a width: the slot still starts on the text column's own
+    /// A floor and not a width: the slot still starts on the text column's own
     /// left edge, so every bar in the panel shares the leading edge that makes
     /// the column comparable down the list, and a panel narrower than this draws
     /// whatever it has.
@@ -125,31 +126,89 @@ public enum MeterGeometry {
     ///   no way to take it for anything but a division.
     /// - **It was the colour budget.** Summed over OKLCh chroma, one amber bar on
     ///   one row of nine was 91.4% of all the chroma in the dark panel and 94.3%
-    ///   of it at 520pt. At 160 that area falls by 44% at the default width and
-    ///   61% at the top of the slider, with the hue untouched — the alarm is as
-    ///   saturated as it ever was and simply occupies less of the window.
+    ///   of it at 520pt. At 160 that area falls by 44% at the default width, with
+    ///   the hue untouched — the alarm is as saturated as it ever was and simply
+    ///   occupies less of the window. At the top of the slider it fell by 66%, and
+    ///   `trackWidth(in:)` now gives a fifth of that back: 200 of 468 is a **57%**
+    ///   fall rather than 66%, which is the whole price of the row reading as one
+    ///   object again.
     /// - **It out-resolved its own number.** `rowHelp` drops the tenth of a
     ///   percent on purpose, so the figure's resolution is one point. At 304pt the
     ///   track resolved 0.33% per point — three times finer than the reading it
     ///   illustrates, which is a bar visibly moving while the figure holds still.
-    ///   160pt is 0.625% per point, within a factor of two of the figure.
+    ///   160pt is 0.625% per point, within a factor of two of the figure — and
+    ///   that factor of two is now a bound with a name on it rather than an
+    ///   observation, `trackCeiling`, which is where the bar stops growing.
     ///
-    /// 160 rather than a fraction of the panel because a fraction is what made it
-    /// grow: this is the length at which a 5pt bar reads as a gauge (32:1) rather
-    /// than as a progress indicator, and it is a hair under the 168pt
-    /// `Tokens.Control.sliderWidth` that the Settings window already uses for
-    /// exactly the same shape.
-    public static let trackCap: CGFloat = 160
+    /// 160 rather than a fraction of the panel because an unbounded fraction is
+    /// what made it grow: this is the length at which a 5pt bar reads as a gauge
+    /// (32:1) rather than as a progress indicator, and it is a hair under the
+    /// 168pt `Tokens.Control.sliderWidth` that the Settings window already uses
+    /// for exactly the same shape.
+    ///
+    /// It was `trackCap`, a flat ceiling, and the rename is the change: see
+    /// `trackWidth(in:)`, which is what the two call sites ask now.
+    public static let trackFloor: CGFloat = 160
+
+    /// The longest track the row's meter may draw, whatever the panel is.
+    ///
+    /// Two hundred, and it is the third argument on `trackFloor` solved for a
+    /// length rather than asserted at one. The figure two columns away prints
+    /// whole percent, so the bar's own resolution has to stay "within a factor of
+    /// two of the figure" — at 160pt the bar moves 1.6pt per point of reading
+    /// (0.625% per point) and at 200 it moves 2pt (0.500%), which is the factor of
+    /// two exactly. Past it the bar starts visibly moving while the figure holds
+    /// still, which is the fault the 304pt bar had at 0.33% per point.
+    ///
+    /// So the row's meter can grow, and it can only grow this far. The other two
+    /// arguments on `trackFloor` are what make that the right trade rather than a
+    /// relaxation: 200pt of bar is 38% of a 520pt panel where 468 was 90%, and the
+    /// chroma it puts on the panel goes up by a quarter rather than by a factor of
+    /// two and a half.
+    public static let trackCeiling: CGFloat = 200
+
+    /// The track's length inside a text column of `column` points.
+    ///
+    /// **The bar grows with the panel again, and this time it is bounded at both
+    /// ends.** Capping it flat at 160 was right at the default width and wrong
+    /// above it: measured on the render, a 520pt panel left the widest interior
+    /// void on a metered row at 274pt — 53% of the window — because the bar stopped
+    /// 200pt short of the figure rail and nothing took over the job the full-width
+    /// bar had been doing, which was tying the row's left column to its right one.
+    /// A row read as two columns across a canyon, and a name 350pt from its own
+    /// figure is not associated with it.
+    ///
+    /// Half the column, and the half is the point: the meter and the caption's
+    /// trailing run stand in the same horizontal band, so a bar that took more than
+    /// half would be eating the column the row's own second reading sits in. Below
+    /// 320pt of column — every panel from 300 up to and past the shipped 356 — half
+    /// is under the floor and the bar is exactly the 160 it has always been, so
+    /// nothing about the default drawing moves. It reaches the ceiling at a 400pt
+    /// column, which is a 460pt panel at the shipped density.
+    ///
+    /// Measured: 300pt panel → 248pt column → **160**. 356 → 304 → **160**.
+    /// 420 → 368 → **184**. 520 → 468 → **200**.
+    ///
+    /// Never wider than the column itself, which is the case a 300pt panel at 130%
+    /// type with a 40pt logo and a dial can still reach: the floor is a floor for
+    /// the bar and not a claim about the row it is in.
+    public static func trackWidth(in column: CGFloat) -> CGFloat {
+        guard column.isFinite, column > 0 else { return 0 }
+        return min(column, min(trackCeiling, max(trackFloor, column / 2)))
+    }
 
     /// The largest share of the track the minimum-fill floor is allowed to be.
     ///
     /// The floor below is a multiple of the bar's *thickness*, and a thickness
     /// knows nothing about the track it sits on. That was safe while the track
     /// was 278pt — 10pt of it is 3.6%, which is what the floor's own doc quotes —
-    /// and it stops being safe the moment `trackCap` shortens the track: 10pt of
-    /// 160 is 6.25%, so every reading under 6% would be drawn as 6% while the
-    /// figure two columns away printed the truth. That is the one thing this type
-    /// exists to prevent.
+    /// and it stops being safe the moment `trackWidth(in:)` shortens the track:
+    /// 10pt of 160 is 6.25%, so every reading under 6% would be drawn as 6% while
+    /// the figure two columns away printed the truth. That is the one thing this
+    /// type exists to prevent. It is the *floor* of that range this is cut
+    /// against and not the ceiling, which is the safe direction: at the 200pt a
+    /// wide panel now reaches, 4% is 8pt and the thickness rule's own 10pt would
+    /// have been 5%.
     ///
     /// Four percent, and the number is chosen so that nothing already on screen
     /// moves: at the old 278pt track 4% is 11.12pt, above the 10pt floor, so

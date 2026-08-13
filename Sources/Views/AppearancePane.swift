@@ -995,8 +995,23 @@ struct SampleRow: View {
             logoSize: CGFloat(appearance.logoSize),
             panelWidth: CGFloat(appearance.panelWidth),
             rowActions: appearance.rowActions,
+            secondaryLines: secondaryLines,
             lines: lines
         )
+    }
+
+    /// How many further-window lines the sample holds open, off the same setting
+    /// the panel's row reads it off.
+    ///
+    /// The sample carries six windows and the stepper is clamped to six, so the
+    /// number this answers is the number the preview would have drawn anyway —
+    /// which is exactly why it is written as the setting rather than left as
+    /// `min(count, limit)`. The panel's row now holds the ladder open whatever
+    /// came back in the fetch, and a preview that agreed with it only because its
+    /// fixture happens to be full is a preview that stops agreeing the day the
+    /// fixture loses a window.
+    private var secondaryLines: Int {
+        appearance.secondaryWindows == .expanded ? appearance.secondaryWindowLimit : 0
     }
 
     /// Which optional lines this row draws, which is the one part of its geometry
@@ -1099,7 +1114,10 @@ struct SampleRow: View {
         // asks, so the alignment and the reserved height cannot answer it
         // differently.
         if reservesWindowLine { return true }
-        return appearance.secondaryWindows == .expanded && !service.secondary.isEmpty
+        // The further-window ladder, from the setting alone — the panel's row
+        // asks it the same way now that the slots are held open rather than drawn
+        // one per window returned.
+        return secondaryLines > 0
     }
 
     /// The mark, and the dial when the meter is one.
@@ -1507,17 +1525,28 @@ struct SampleRow: View {
     /// The further windows, when they are set to a line each. The chips are not
     /// here — they ride the caption line above, which is the whole of what makes
     /// them free.
+    ///
+    /// A ladder of `secondaryLines` slots, as in the panel, with a clear line
+    /// wherever the service reported no window for that rung. The sample fills
+    /// every rung it is offered, so the empty branch never draws here — it is
+    /// written because the row this previews draws it constantly, and a preview
+    /// that cannot reach a state is a preview that will not notice when that
+    /// state changes shape.
     @ViewBuilder
     private var secondaryWindows: some View {
-        if !service.secondary.isEmpty, appearance.secondaryWindows == .expanded {
+        if secondaryLines > 0 {
             // On the enclosing VStack's own spacing with nothing added on top,
             // as in the panel: the pitch from the meter block to the first
             // secondary line is then the pitch between two of them, so the third
             // window of one service sits on the same line as the third of the
             // next.
             VStack(alignment: .leading, spacing: metrics.contentSpacing) {
-                ForEach(numbered(appearance.secondaryWindowLimit), id: \.offset) { window in
-                    secondaryWindow(window.element)
+                ForEach(0..<secondaryLines, id: \.self) { index in
+                    if index < service.secondary.count {
+                        secondaryWindow(service.secondary[index])
+                    } else {
+                        ReservedTextLine(size: metrics.detailSize)
+                    }
                 }
             }
         }
@@ -1544,12 +1573,12 @@ struct SampleRow: View {
     // which is the only arrangement in which "the preview is the panel" is a fact
     // about the code.
 
-    /// Keyed on position rather than on the window's name: a service can report
-    /// two windows under one label, and a repeated `ForEach` id draws one of them
-    /// and silently drops the rest.
-    private func numbered(_ limit: Int) -> [(offset: Int, element: UsageMetric)] {
-        Array(service.secondary.prefix(limit).enumerated())
-    }
+    // `numbered(_:)` was here: the sample's windows paired with their positions,
+    // so a service reporting two windows under one label kept both. The ladder
+    // above is indexed by rung instead — it has more rungs than windows now, and
+    // a rung with no window on it has a position and nothing else to be keyed on
+    // — so the pairing had no caller left. The rule it existed for is unchanged
+    // and is restated at the `ForEach`.
 
     private func caption(for metric: UsageMetric, isSecondary: Bool) -> MetricCaption {
         MetricCaption(

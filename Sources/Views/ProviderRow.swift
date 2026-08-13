@@ -131,8 +131,47 @@ public struct ProviderRow: View {
             // detail: reserved height has to equal drawn height under every
             // setting, or the panel holds two points per row it never uses.
             rowActions: appearance.rowActions,
+            // The further-window ladder, from the settings. Handed in here and
+            // not only to `geometry`, because `rowGeometry(lines:)` is the one
+            // place a row is measured and a second route that skipped it would be
+            // a second answer about the row's height.
+            secondaryLines: secondaryLines,
             lines: lines
         )
+    }
+
+    /// How many further-window lines this row holds open, under the one style
+    /// that spends height on them.
+    ///
+    /// **The stepper, never `data.secondary.count`.** That is the whole of this
+    /// property and it is the second half of the fix `RowGeometry.secondaryLines`
+    /// exists for: under `.expanded` the row drew one line per window the fetch
+    /// happened to return, so a service answering with three of them grew its row
+    /// by 3 × (contentSpacing + lineBox(detailSize)) — 60pt at cozy/100% — the
+    /// moment the answer landed, and `MenuBarExtra`, which sizes its window to its
+    /// content, moved the panel under the pointer. The **Dashboard** preset ships
+    /// `.expanded` with a limit of six, so this was default-on for anyone who
+    /// chose it.
+    ///
+    /// Reserving the ceiling rather than the count is the trade, argued in full
+    /// at `RowGeometry.init`. What it costs is a service that reports one window
+    /// under a limit of six holding five empty lines, and what makes that
+    /// affordable is that the stepper is the remedy and it is the control the user
+    /// already has: under `.expanded` it now means exactly "how many
+    /// further-window lines every row makes room for". The panel's list is inside
+    /// a `ScrollView` capped at `maximumListHeight`, so a deep ladder lengthens a
+    /// scroll rather than a window — which is the one direction this is allowed
+    /// to be wrong in.
+    ///
+    /// The same opening bit as `lines`, and it has to be the same bit. A row
+    /// nobody has connected draws nothing at all under its title, so a ladder
+    /// reserved under it would be fifteen empty ladders on a first run — and the
+    /// bit flips at most once per row per launch, which is what keeps this a
+    /// reservation rather than a reading.
+    private var secondaryLines: Int {
+        guard provider.isAuthenticated || result != nil else { return 0 }
+        guard appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .expanded else { return 0 }
+        return appearance.secondaryWindowLimit
     }
 
     /// Which of the three optional lines this row draws. Presence only — never
@@ -179,7 +218,34 @@ public struct ProviderRow: View {
         // the row a day after the service was connected.
         var lines: RowGeometry.Lines = appearance.showsRowSparkline ? [.meter, .sparkline] : [.meter]
         if reservesWindowLine { lines.insert(.window) }
+        if reservesBudgetLine { lines.insert(.budget) }
         return lines
+    }
+
+    /// Whether this row holds a budget block open, asked of the budget the user
+    /// set and of nothing the network said.
+    ///
+    /// The same shape as `reservesWindowLine` one property down, and it exists
+    /// for the same reason: the reservation and the drawing must read one
+    /// predicate, or they differ by a block and the row resizes on a fetch with
+    /// the reservation then lying about it. That is not hypothetical here — it is
+    /// what shipped. `detailContent` drew `BudgetMeter` on `budgetLine(for:) !=
+    /// nil`, which asks `BudgetPolicy` to compare `data.spend` against the
+    /// budget, and `data.spend` is whatever the last fetch carried. So a budgeted
+    /// row grew 22 / 26 / 30pt at compact / cozy / comfortable when its first
+    /// reading landed. The full argument, and why folding is not available to
+    /// this block the way it was to the pace, is at `RowGeometry.Lines.budget`.
+    ///
+    /// A budget is a setting: it is written in a settings window that cannot be
+    /// open at the same time as the panel, which is the same reason `budgets` is
+    /// read plainly rather than observed. So this cannot flip while a row is on
+    /// screen, which is the whole contract.
+    ///
+    /// Keyed on `serviceID` and not on the row, exactly as `budgetLine` is: two
+    /// Claude accounts are one subscription to the person paying, so they reserve
+    /// alike and neither of them is measured against the other's spend.
+    private var reservesBudgetLine: Bool {
+        budgets.budget(for: provider.serviceID) != nil
     }
 
     /// Whether this row keeps a line under its meter, asked of the settings and
@@ -826,12 +892,24 @@ public struct ProviderRow: View {
         // Under the ring the dial is the meter and the leading column has paid
         // for it, so the text column can genuinely be empty. What is left there is
         // the window line, which is exactly what `reservesWindowLine` answers —
-        // and two content-dependent extras that can only add to it.
+        // the further-window ladder, which is a setting — and one
+        // content-dependent extra that can only add to them.
         if reservesWindowLine { return true }
-        guard case .success(let data) = result else { return false }
-        if budgetLine(for: data) != nil { return true }
-        return !data.secondary.isEmpty
-            && appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .expanded
+        // The ladder, asked of the settings and not of the payload. It read
+        // `!data.secondary.isEmpty` until this pass, which was the drawing's own
+        // half of the unreserved-ladder defect: the row centred its mark against
+        // a single title line and then drew three windows under it the moment a
+        // fetch came back with three. The slots are held open now, so the block
+        // exists from the settings alone and the alignment follows it.
+        if secondaryLines > 0 { return true }
+        // The budget block, likewise. This asked the *result* — `guard case
+        // .success(let data) = result else { return false }` and then
+        // `budgetLine(for: data) != nil` — which was the drawing's half of the
+        // unreserved-budget defect, in the same words as the ladder's: a budgeted
+        // ring row with amounts and countdowns off centred its mark against one
+        // title line and then grew a track and a figure under it when the spend
+        // landed. It is a setting now, so the alignment follows the reservation.
+        return reservesBudgetLine
     }
 
     @ViewBuilder
@@ -862,31 +940,22 @@ public struct ProviderRow: View {
                 // two lines would be a second opinion about that pitch. All
                 // three states reserve the slot, so all three fill it.
                 sparkline
-                // Under the headline meter and above the further windows,
-                // because it is a reading of the headline window and of nothing
-                // else. Draws nothing at all — no reserved height — until the
-                // samples support a claim, so a row without a forecast is the
-                // row it was before this line existed.
-                ForecastLine(
-                    providerID: provider.id,
-                    resetDate: data.primary.resetDate,
-                    appearance: appearance,
-                    trend: trend
-                )
+                // The pace claim used to be drawn here, as a fourth child of this
+                // stack between the meter and the further windows. It is gone
+                // from this position rather than moved within it: it now rides at
+                // the tail of the caption line `primaryMetric` already drew, and
+                // `ForecastLine`'s own comment records the full argument. The
+                // short version is that a block here was unreserved height —
+                // `RowGeometry.Lines` knew how to hold it and nothing ever asked
+                // — so the first projection to qualify grew the row 19pt while
+                // the panel was open, which `MenuBarExtra` answers by resizing its
+                // window under the pointer.
                 secondaryWindows(data.secondary)
                 // Last, under every window the service itself reports. A budget
                 // is the user's number and a quota is the service's, so it is
                 // never the headline and never interrupts the ladder of meters
                 // above it.
-                if let line = budgetLine(for: data) {
-                    BudgetMeter(
-                        status: line.status,
-                        budget: line.budget,
-                        spend: line.spend,
-                        accent: provider.accentColor,
-                        appearance: appearance
-                    )
-                }
+                budget(for: data)
             case .failure(let error):
                 // One sentence, on the same line every other row draws its
                 // caption on, and no glyph in front of it: the state is in the
@@ -896,6 +965,17 @@ public struct ProviderRow: View {
                 // whatever the server actually said is in the row's tooltip.
                 stated(error.errorDescription ?? "Not reporting")
                 sparkline
+                // The ladder, empty. Written at all three connected states for
+                // the reason the trace above is, and for one more of its own:
+                // these are the states the row is in *before* it knows how many
+                // windows the service has, and a ladder that appeared with the
+                // first answer would be the resize this reservation exists to
+                // close, seen from the other side.
+                secondaryWindows([])
+                // The budget block, empty. Same argument as the ladder's: a row
+                // that failed this refresh still holds the block its settings
+                // reserved, so the block does not arrive with the next answer.
+                budget(for: nil)
             }
         } else {
             // Loading, which is the state a real launch spends its first seconds
@@ -905,6 +985,16 @@ public struct ProviderRow: View {
             // the row does not grow when the answer lands.
             stated("Checking…")
             sparkline
+            secondaryWindows([])
+            // And the budget block, empty. This was the one connected state that
+            // did not draw it, and the omission was the reservation's own defect
+            // seen from the other side: `lines` inserts `.budget` off the store
+            // and never off the result, so a budgeted row reserved 20pt here at
+            // cozy/100% and drew nothing in it — then grew by exactly that when
+            // the first reading landed. A row that is still checking has to
+            // occupy the box it will occupy once it reports, which is what the
+            // paragraph above says about every other slot on this line.
+            budget(for: nil)
         }
     }
 
@@ -1019,7 +1109,8 @@ public struct ProviderRow: View {
                     spend: data.spend,
                     chips: run.chips,
                     overflow: run.overflow,
-                    reservesLine: reservesWindowLine
+                    reservesLine: reservesWindowLine,
+                    pace: paceText(for: data)
                 )
             case .ring:
                 // The dial in the leading column and the trailing percentage
@@ -1100,10 +1191,19 @@ public struct ProviderRow: View {
     /// weekly window is worth beside the window the row is actually about. A
     /// second full-width meter per window was 24pt each, nine times down the
     /// panel, and it is what painted every row amber.
+    ///
+    /// **A ladder of `secondaryLines` slots, not one child per window.** That is
+    /// the change this pass made and it is the only shape in which the drawing
+    /// can equal the reservation: the count came from the fetch, so the row that
+    /// drew it was a row whose height was a function of what the provider
+    /// happened to answer with. The slots past the answer are held open and left
+    /// empty, exactly as the meter slot and the trace slot already are — a row
+    /// with one window under a limit of six draws it and five clear lines, and it
+    /// draws them before its first answer, after a failure, and after an answer
+    /// with more windows in it than the last one had.
     @ViewBuilder
     private func secondaryWindows(_ windows: [UsageMetric]) -> some View {
-        if !windows.isEmpty,
-           appearance.secondaryWindowStyle(overriddenBy: showsAllWindows) == .expanded {
+        if secondaryLines > 0 {
             // One line per window, not one meter. A weekly cap you are 80%
             // through still deserves naming and a figure of its own; it does not
             // deserve a second bar the width of the row.
@@ -1111,10 +1211,84 @@ public struct ProviderRow: View {
             // On the enclosing VStack's own spacing, with nothing added on top:
             // the pitch from the primary meter to the first secondary one is then
             // the same as the pitch between two secondaries, so the third window
-            // of one service sits on the same line as the third of the next.
+            // of one service sits on the same line as the third of the next. A
+            // ladder of one depth on every row is what finally makes that claim
+            // true of two services that report different numbers of windows,
+            // which is the argument the pitch was already making.
             VStack(alignment: .leading, spacing: metrics.contentSpacing) {
-                ForEach(numbered(windows, limit: appearance.secondaryWindowLimit)) { window in
-                    secondaryWindow(window.metric)
+                // Keyed on position rather than on the window's name: a service
+                // can report two windows under one label, and a repeated `ForEach`
+                // id draws one of them and silently drops the rest. Position is
+                // also what an empty slot has instead of a metric.
+                //
+                // `numbered(_:limit:)` was here and is deleted with the last
+                // caller that could take fewer slots than the settings hold open.
+                ForEach(0..<secondaryLines, id: \.self) { index in
+                    if index < windows.count {
+                        secondaryWindow(windows[index])
+                    } else {
+                        // The same stand-in the caption line uses when it is
+                        // reserved and has nothing to say, at the same size these
+                        // lines are set in, so an empty slot and a filled one are
+                        // one `lineBox(detailSize)` apiece.
+                        ReservedTextLine(size: metrics.detailSize)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The user's own line, under every window the service itself reports.
+    ///
+    /// Reserved from `reservesBudgetLine`, which is a setting, and therefore
+    /// **drawn in every state the row can be in** — which is the whole reason
+    /// this is a function taking an optional rather than an `if let` at the one
+    /// call site that has a reading. `detailContent` built `BudgetMeter` inline on
+    /// `budgetLine(for: data) != nil`, and that predicate asks `BudgetPolicy` to
+    /// compare `data.spend` against the budget: a spend is whatever the last
+    /// fetch carried, so the block arrived with the answer. Measured on a hosted
+    /// row at the shipped 356pt, a budgeted Claude row grew **22 / 26 / 30pt at
+    /// compact / cozy / comfortable** the moment its first reading landed, and
+    /// `MenuBarExtra` sizes its window to its content. The full argument, and why
+    /// folding onto an existing line is not available to a track and a figure the
+    /// way it was to the pace claim, is at `RowGeometry.Lines.budget`.
+    ///
+    /// Nil is the loading state and the failed one; a non-nil reading with no
+    /// comparison in it is the third — no spend, a budget of zero, or two
+    /// currencies, which are the refusals `budgetLine` already owns. All three
+    /// draw the same empty block, so they are answered here in one branch rather
+    /// than asked of each caller in turn.
+    ///
+    /// The empty block is the same two parts at the same pitch with no ink in
+    /// them: `secondaryBarHeight` of track and one `lineBox(detailSize)` of line,
+    /// joined by `captionGap` — 3 + 3 + 14 = 20pt at cozy/100%, which is the
+    /// arithmetic `RowGeometry` reserves and the stack `BudgetMeter` sets.
+    @ViewBuilder
+    private func budget(for data: UsageData?) -> some View {
+        if reservesBudgetLine {
+            if let data, let line = budgetLine(for: data) {
+                BudgetMeter(
+                    status: line.status,
+                    budget: line.budget,
+                    spend: line.spend,
+                    accent: provider.accentColor,
+                    appearance: appearance
+                )
+            } else {
+                // Track first and line second, which is the one place this file
+                // does *not* follow `stated(_:)`'s reorder. That reorder puts the
+                // hole last so the reserved-but-undrawn air joins the seam between
+                // two rows instead of standing between a name and its own caption;
+                // this block is already the last child of the row's stack, so both
+                // orders put the air at the same place on the panel. What is left
+                // is that the empty block should read in the same order as the
+                // full one, so a reader comparing the two branches is comparing
+                // one arrangement rather than two.
+                VStack(alignment: .leading, spacing: metrics.captionGap) {
+                    Color.clear
+                        .frame(height: metrics.secondaryBarHeight)
+                        .accessibilityHidden(true)
+                    ReservedTextLine(size: metrics.detailSize)
                 }
             }
         }
@@ -1165,10 +1339,6 @@ public struct ProviderRow: View {
     private func yieldsToTheSentence(_ data: UsageData) -> Bool {
         guard appearance.showsCountdowns, data.primary.resetDate != nil else { return false }
         return data.primary.percent >= appearance.cautionThreshold
-    }
-
-    private func numbered(_ windows: [UsageMetric], limit: Int) -> [NumberedMetric] {
-        windows.prefix(limit).enumerated().map { NumberedMetric(id: $0.offset, metric: $0.element) }
     }
 
     /// How many chips the line holds, and the user's own ceiling on top of it.
@@ -1266,7 +1436,28 @@ public struct ProviderRow: View {
             appearance: appearance,
             spend: data.spend,
             chips: run.chips,
-            overflow: run.overflow
+            overflow: run.overflow,
+            pace: paceText(for: data)
+        )
+    }
+
+    /// The pace claim for this row's headline window, or nil when there is
+    /// nothing honest to say.
+    ///
+    /// Asked here and handed down as a string, never asked by the caption. The
+    /// caption reads the answer three times — for the separator in front of the
+    /// run, for `hasContent`, and for the run itself — and a view that asked the
+    /// trend store once per reading would be three fits per row per render, on
+    /// the main actor, for one sentence.
+    ///
+    /// Every refusal behind it belongs to `UsageForecast`: too few samples, a
+    /// flat or falling slope, an arrival past the horizon. This adds only the
+    /// setting, and `ForecastLine.text` is where those two meet.
+    private func paceText(for data: UsageData) -> String? {
+        ForecastLine.text(
+            projection: trend.projection(for: provider.id),
+            now: Date(),
+            showsPace: trend.showsPaceInPanel
         )
     }
 
@@ -1696,6 +1887,32 @@ public struct MeterTrack: View {
     // and at 1%, and read as a bullet rather than as a small quantity.
 }
 
+/// A meter held to `MeterGeometry.trackWidth(in:)` of the column it is offered,
+/// on that column's leading edge, with the rest of the line given back.
+///
+/// One modifier for the row's meter and the budget's, because "the budget line is
+/// never longer than the quota above it" has to be one arithmetic rather than two
+/// call sites that currently agree. It was two `.frame(maxWidth:)` calls each,
+/// written out at both sites, and that was safe only while the length was a
+/// constant — a growing track turns a duplicated ceiling into two meters that can
+/// disagree about how wide the row is.
+///
+/// The trailing frame is what hands the width back: without it the slot would
+/// shrink to the track and the caption's own trailing run would have a different
+/// idea of where the line ends. The reader is width-only and the height is fixed
+/// by the caller, so this cannot move a row vertically.
+private struct TrackWidth: ViewModifier {
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        GeometryReader { geo in
+            content.frame(width: MeterGeometry.trackWidth(in: geo.size.width), height: height)
+        }
+        .frame(height: height)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// The row's meter slot, and it has exactly two drawings: a track with a fill in
 /// it, or nothing.
 ///
@@ -1756,17 +1973,27 @@ public struct MeterSlot: View {
         // The slot, whether or not there is anything in it. Both cases are the
         // same height, which is what the row is squared against.
         .frame(height: height)
-        // The ceiling, and only the ceiling — `MeterGeometry.trackCap` carries the
-        // measurements. Leading, because the shared left edge is what lets one
-        // row's reading be compared with the next one's down the column, and it
-        // is the same x the name, the caption and the meter have always started
-        // on. Two frames rather than one: the first caps the drawing, the second
-        // hands the row back the full width so the slot still occupies its whole
-        // line and nothing after it shifts.
+        // The length, and only the length — `MeterGeometry.trackWidth(in:)`
+        // carries the measurements. Leading, because the shared left edge is what
+        // lets one row's reading be compared with the next one's down the column,
+        // and it is the same x the name, the caption and the meter have always
+        // started on.
         //
-        // Width is not an input to `RowGeometry`, so no row moves by a point.
-        .frame(maxWidth: MeterGeometry.trackCap, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Read off a `GeometryReader` rather than plumbed down from `RowGeometry`,
+        // and the reason is that the two would be the same number arrived at
+        // twice: the slot is the only child of the row's text column that asks for
+        // the whole of it, so the width proposed here *is* `textColumnWidth`, and
+        // a second copy computed from `panelWidth`, `logoStyle`, `logoSize` and
+        // `ringDiameter` is exactly the private-arithmetic drift `RowGeometry`
+        // exists to have deleted. It also keeps the two callers of this view — the
+        // panel row and the Appearance sample — agreeing without either of them
+        // being handed anything.
+        //
+        // A reader takes the proposal and does not change it, so this is width-only
+        // in both directions: nothing here can widen the row, and the height is
+        // still the `.frame(height:)` above. Width is not an input to
+        // `RowGeometry.height`, so no row moves by a point.
+        .modifier(TrackWidth(height: height))
         // A shape says nothing out loud. Whoever wraps this owns the reading:
         // `UsageBar` speaks its fill, the title line speaks the figure.
         .accessibilityHidden(true)
@@ -1806,6 +2033,14 @@ public struct UsageBar: View {
     /// does not say — the settings sample, whose whole job is to look like the
     /// panel's busiest row.
     public let reservesLine: Bool
+    /// The pace claim about this window, already resolved by the row.
+    ///
+    /// Passed through untouched, exactly as `spend` and `chips` are: the bar
+    /// draws no part of it and makes no decision about it, but the caption it
+    /// owns is the line the claim rides on, and a caption built without it would
+    /// silently drop the pace under every meter style but the ring. Defaulted so
+    /// the settings sample and the tests that predate the fold keep compiling.
+    public let pace: String?
 
     public init(
         metric: UsageMetric,
@@ -1815,7 +2050,8 @@ public struct UsageBar: View {
         spend: SpendReport? = nil,
         chips: [UsageMetric] = [],
         overflow: Int = 0,
-        reservesLine: Bool = true
+        reservesLine: Bool = true,
+        pace: String? = nil
     ) {
         self.metric = metric
         self.isSecondary = isSecondary
@@ -1824,6 +2060,7 @@ public struct UsageBar: View {
         self.chips = chips
         self.overflow = overflow
         self.reservesLine = reservesLine
+        self.pace = pace
         self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
     }
 
@@ -1842,7 +2079,8 @@ public struct UsageBar: View {
             appearance: appearance,
             spend: spend,
             chips: chips,
-            overflow: overflow
+            overflow: overflow,
+            pace: pace
         )
     }
 
@@ -1920,16 +2158,42 @@ public struct UsageBar: View {
 /// single-line detail in the panel is held at, so the empty box and the four
 /// things that can fill it are one height.
 ///
-/// One implementation and not a `Color.clear` written out at each of the three
-/// call sites, because three copies of a reservation is how a reservation comes
+/// One implementation and not a `Color.clear` written out at each of the four
+/// call sites, because four copies of a reservation is how a reservation comes
 /// to disagree with itself.
+///
+/// **An empty run and not an empty box**, which is a distinction worth 0.7pt a
+/// line and was worth nothing until the ladder made lines countable. This was
+/// `Color.clear.frame(height: Tokens.lineBox(size))` — the raw box, to the
+/// fraction. A `Text` is not: SwiftUI resolves a line of type to whole points, so
+/// at cozy/130% a real caption stands 18.0pt where `lineBox(14.3)` is 17.3, and at
+/// comfortable/130% 19.0 against 18.6. One line of that is the "point over the
+/// reservation" the row already accepts, and the empty box and the filled line
+/// differing by it was invisible while there was at most one of each per row.
+///
+/// The further-window ladder made it visible and made it a defect: six rungs at
+/// 0.7 is 4.2pt, and *which* rungs are filled is exactly what the fetch decides.
+/// So the stand-in is now a run of one space, set in the same face and size as the
+/// line it stands in for and held at the same floor — measured at all nine
+/// density × text-scale combinations, it is the same height as a
+/// `MetricCaption(isSecondary: true)` and a `SecondaryValue` to the point. A row
+/// that reports one window under a limit of six is the height of the same row
+/// reporting six.
 struct ReservedTextLine: View {
     /// `Metrics.detailSize` — the size of the text this stands in for.
     let size: CGFloat
 
     var body: some View {
-        Color.clear
-            .frame(height: Tokens.lineBox(size))
+        Text(verbatim: " ")
+            // `.regular` written out, as every run of prose in the panel is: this
+            // stands in for a caption, and a caption is regular.
+            .font(.system(size: size, weight: .regular))
+            // The same floor `MetricCaption` and `SecondaryValue` hold themselves
+            // at, so the empty line and the filled one are one measurement rather
+            // than two that happen to agree.
+            .frame(minHeight: Tokens.lineBox(size), alignment: .leading)
+            // A space is not something to read out. The line is a hole in the
+            // layout and holes have nothing to say.
             .accessibilityHidden(true)
     }
 }
@@ -2047,6 +2311,23 @@ public struct MetricCaption: View {
     /// the row knows how wide its text column is.
     public let chips: [UsageMetric]
     public let overflow: Int
+    /// The pace claim about *this* window — "on pace to cap in 40m" — resolved by
+    /// the row and drawn at the tail of the sentence.
+    ///
+    /// A string and never a store, for the reason `ForecastLine.phrase` gives:
+    /// the separator in front of it, `hasContent`, and the run itself are three
+    /// readings of one decision, and a caption that asked the trend store again
+    /// would be a second copy of it.
+    ///
+    /// Headline only, like the spend beside it: a further window is not the
+    /// window the samples were taken against. `isSecondary` drops it the same way
+    /// `shownSpend` drops money.
+    ///
+    /// It takes width and never height — the line is one `lineBox` whatever is on
+    /// it — so a projection arriving mid-refresh cannot resize the row. That is
+    /// the whole of why the pace lives here instead of in a block of its own; see
+    /// `ForecastLine`.
+    public let pace: String?
 
     public init(
         metric: UsageMetric,
@@ -2055,7 +2336,8 @@ public struct MetricCaption: View {
         appearance: AppearanceSettings? = nil,
         spend: SpendReport? = nil,
         chips: [UsageMetric] = [],
-        overflow: Int = 0
+        overflow: Int = 0,
+        pace: String? = nil
     ) {
         self.metric = metric
         self.isSecondary = isSecondary
@@ -2063,6 +2345,7 @@ public struct MetricCaption: View {
         self.spend = spend
         self.chips = chips
         self.overflow = overflow
+        self.pace = pace
         self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
     }
 
@@ -2080,6 +2363,12 @@ public struct MetricCaption: View {
         if isSecondary { return true }
         if shownSpend != nil { return true }
         if !chips.isEmpty || overflow > 0 { return true }
+        // A pace on its own is content: with amounts and countdowns both off but
+        // the chips style reserving this line, the claim is the only thing there
+        // is to put on it, and answering false here would draw a `ReservedTextLine`
+        // over the top of it. It cannot change the row's height either way — both
+        // are one `lineBox` — so this is about what is said, not what is measured.
+        if shownPace != nil { return true }
         return (appearance.showsAmounts && !amountText.isEmpty)
             || (appearance.showsCountdowns && resetText != nil)
     }
@@ -2135,11 +2424,34 @@ public struct MetricCaption: View {
                 // cheapest thing that can hold that edge, and it is the one part
                 // of the line the row cannot say twice: the rail repeats the
                 // figure, nothing repeats "5h session".
+                // The pace is the first thing dropped, and the ladder under it is
+                // the ladder that was there before this run existed, unchanged
+                // and in the same order. That is deliberate and it is the
+                // property worth holding: the fold adds one richer candidate at
+                // the top rather than rewriting the ranking, so a line too tight
+                // to carry the claim draws exactly what it drew without it —
+                // never less. Nothing the caption used to say can be lost to a
+                // projection arriving.
+                //
+                // Dropped before the countdown and not after, because the
+                // countdown is a fact the provider published and the pace is a
+                // claim fitted from half an hour of samples. Where the two
+                // compete for the last thirty points of a 300pt panel, the fact
+                // wins.
+                //
+                // `includesCountdown` is asked *and* gated on
+                // `countdownRidesTheEdge`, which collapses the first two rungs into
+                // one on a row whose countdown has gone to the trailing edge. Two
+                // identical candidates cost a measurement and change nothing —
+                // `ViewThatFits` takes the first that fits — and writing the ladder
+                // as a conditional instead would hand `ViewThatFits` a group where
+                // it needs a list of siblings.
                 ViewThatFits(in: .horizontal) {
-                    leadingRun(includesCountdown: true, reading: .amount)
-                    leadingRun(includesCountdown: false, reading: .amount)
-                    leadingRun(includesCountdown: false, reading: .name)
-                    leadingRun(includesCountdown: false, reading: .none)
+                    leadingRun(includesCountdown: true, includesPace: true, reading: .amount)
+                    leadingRun(includesCountdown: true, includesPace: false, reading: .amount)
+                    leadingRun(includesCountdown: false, includesPace: false, reading: .amount)
+                    leadingRun(includesCountdown: false, includesPace: false, reading: .name)
+                    leadingRun(includesCountdown: false, includesPace: false, reading: .none)
                 }
                 // The sentence takes the slack rather than the `Spacer` behind
                 // it, so it is offered the residual width rather than being
@@ -2177,7 +2489,11 @@ public struct MetricCaption: View {
     /// turn a part down — a run asked for without its countdown is the same run
     /// with the countdown absent, never a shorter spelling of it. Nothing here
     /// abbreviates, because abbreviating is what produced `3.2k / 5.…`.
-    private func leadingRun(includesCountdown: Bool, reading: Reading) -> some View {
+    private func leadingRun(
+        includesCountdown: Bool,
+        includesPace: Bool,
+        reading: Reading
+    ) -> some View {
         HStack(spacing: Tokens.Space.snug) {
             // Money leads the line when there is any. It is the one figure on the
             // row nothing else says, and the counts behind it are what should give
@@ -2203,7 +2519,7 @@ public struct MetricCaption: View {
                 amount(text)
             }
 
-            if includesCountdown, appearance.showsCountdowns, let reset = resetText {
+            if includesCountdown, !countdownRidesTheEdge, appearance.showsCountdowns, let reset = resetText {
                 // Two facts about one window, so they are separated the way the
                 // panel separates everything else — a middle dot, in the same ink.
                 // Without it "5h session resets in 1h 19m" reads as one sentence
@@ -2224,6 +2540,16 @@ public struct MetricCaption: View {
                     .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
             }
+
+            if includesPace, let pace = shownPace {
+                // Last on the line and separated like everything else on it. It
+                // is never the only thing here without a mark in front of it:
+                // `leadsPace` asks the same two questions the two runs above
+                // answer, so a caption whose amount and countdown were both
+                // switched off opens with the claim rather than with a dot.
+                if leadsPace(includesCountdown: includesCountdown, reading: reading) { separator }
+                ForecastLine(phrase: pace, appearance: appearance)
+            }
         }
         // No `fixedSize` here, deliberately: `ViewThatFits` compares each
         // candidate's *ideal* width — the whole string — against the width it is
@@ -2232,14 +2558,54 @@ public struct MetricCaption: View {
         // 300pt, where an unabbreviated count is worth an ellipsis.
     }
 
+    /// Whether the countdown rides the trailing edge of this line rather than the
+    /// tail of the sentence at the head of it.
+    ///
+    /// **The row's answer to a wide panel, and the job the full-width bar used to
+    /// do.** Measured on the shipped render at 520pt, the widest interior void on a
+    /// metered row was 274pt — 53% of the window — because the only thing reaching
+    /// the trailing edge was the figure on the title line, so a row read as two
+    /// columns with a canyon between them and a name sat 350pt from its own
+    /// reading. The rows that did *not* read that way were the ones with a further
+    /// window riding this line's trailing half: Claude's void at the same width was
+    /// 20pt. So the fix is not to invent something to fill the gap, it is to give
+    /// every metered row the same trailing column those rows already had, out of
+    /// what the row already says.
+    ///
+    /// The countdown is what goes there because it is the row's second fact about
+    /// the same window, and because right-aligned it becomes a column that can be
+    /// read down the panel — "when does this come back" at one x on every row —
+    /// which is a thing the panel could not do before and is worth more than the
+    /// middle dot it gives up.
+    ///
+    /// Only when the trailing half is otherwise empty. A row with further windows
+    /// on this line already has its trailing column and the countdown stays in the
+    /// sentence, which is also the direction that cannot cost information: the
+    /// chips are a reading the row states nowhere else, and the countdown is
+    /// dropped by the candidate ladder before they are.
+    ///
+    /// **Width and never height.** The line is one `lineBox` whatever is on it and
+    /// this changes nothing about that; and it is decided from settings and the
+    /// presence of a reset date, both of which the row already turns into a
+    /// `hasContent` answer, so nothing here can move a row when a fetch lands.
+    private var countdownRidesTheEdge: Bool {
+        !isSecondary
+            && chips.isEmpty
+            && overflow == 0
+            && appearance.showsCountdowns
+            && resetText != nil
+    }
+
     /// What sits at the trailing edge of the line: the further windows on the
-    /// headline line, this window's own figure on a secondary one.
+    /// headline line, the countdown when there are none, this window's own figure
+    /// on a secondary one.
     ///
     /// The empty rail the headline line used to hold is kept only where there is
-    /// nothing else at the trailing edge. It exists so a countdown stops at the
-    /// same x as the figures on the secondary lines under it; with chips on the
-    /// line, holding it as well would park them a rail's width in from the row's
-    /// own edge, which is the misalignment it was there to prevent.
+    /// nothing at all at the trailing edge. It exists so the sentence stops at the
+    /// same x as the leading halves of the secondary lines under it; with chips or
+    /// a countdown on the line, holding it as well would park them a rail's width
+    /// in from the row's own edge, which is the misalignment it was there to
+    /// prevent.
     @ViewBuilder
     private var trailing: some View {
         if isSecondary {
@@ -2272,6 +2638,26 @@ public struct MetricCaption: View {
                 // give back.
                 carriesSpend: shownSpend != nil
             )
+        } else if countdownRidesTheEdge, let reset = resetText {
+            // SF Pro with tabular digits and `Ink.muted`, exactly as it is set at
+            // the tail of the sentence — moving a run to the other end of the line
+            // is a change of position and must not become a change of rank.
+            Text(reset)
+                .font(.system(size: size, weight: .regular))
+                .monospacedDigit()
+                .foregroundColor(Tokens.Ink.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                // It is served before the sentence, which is the opposite of the
+                // priority the countdown has *inside* the sentence, and
+                // deliberately: there it is one clause among several and the
+                // ladder drops it to keep the reading; here it is the row's whole
+                // trailing column and giving it up would put the canyon back. The
+                // sentence has four candidates left to give way through and this
+                // has none, so the flexible half is the one that should bend. It
+                // can still truncate rather than overhang, which is what keeps
+                // `PanelWidthContractTests` true at 300pt and 130% type.
+                .layoutPriority(1)
         } else if appearance.showsUsageNumber {
             Color.clear
                 .frame(width: rail, height: 0)
@@ -2308,6 +2694,33 @@ public struct MetricCaption: View {
     private var rail: CGFloat { appearance.metrics.secondaryRail }
 
     private var shownSpend: SpendReport? { isSecondary ? nil : spend }
+
+    /// The pace claim, on the line that is entitled to carry it.
+    ///
+    /// Headline only, and dropped on a further window for the same reason money
+    /// is: the samples were fitted against *this* row's leading window, so
+    /// repeating the claim under a weekly cap would be a projection about one
+    /// window printed under another. The setting is already applied upstream by
+    /// `ForecastLine.text(projection:now:showsPace:)`, which is the one place the
+    /// decision is made, so this only answers which line it belongs on.
+    private var shownPace: String? { isSecondary ? nil : pace }
+
+    /// Whether the pace needs a separator in front of it.
+    ///
+    /// It needs one whenever something precedes it on the line, and needs the
+    /// absence whenever it opens the line — otherwise a caption whose amount and
+    /// countdown are both switched off begins with a middle dot and no left-hand
+    /// side, which reads as a run that failed to load rather than as a claim.
+    ///
+    /// The two questions asked here are the same two the runs above answer, in
+    /// the same order, rather than a flag threaded down from the candidate: a
+    /// second opinion about whether the countdown drew is exactly how the dot
+    /// came to be printed against nothing in the first place.
+    private func leadsPace(includesCountdown: Bool, reading: Reading) -> Bool {
+        if shownSpend != nil { return true }
+        if readingText(reading) != nil { return true }
+        return includesCountdown && appearance.showsCountdowns && resetText != nil
+    }
 
     /// What a candidate's reading step actually puts on the line, or nil when the
     /// user has switched every text channel on this line off and the caption is
@@ -2587,12 +3000,16 @@ struct BudgetMeter: View {
                 ),
                 warning: appearance.warningThreshold
             )
-            // The same ceiling and the same leading edge the row's own meter
+            // The same length and the same leading edge the row's own meter
             // takes. A budget line drawn twice the length of the quota above it
             // would say the user's number outranks the service's, which is the
-            // one thing this view's own doc says it must not do.
-            .frame(maxWidth: MeterGeometry.trackCap, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // one thing this view's own doc says it must not do — and that is a
+            // claim about the *same arithmetic*, not about the same constant, so
+            // it survives the track growing with the panel only because both
+            // meters ask `trackWidth(in:)` about the column they are actually in.
+            // They are always in the same one: this sits in the row's text column
+            // directly under the meter it must not outrank.
+            .modifier(TrackWidth(height: metrics.secondaryBarHeight))
 
             HStack(spacing: Tokens.Space.snug) {
                 Text("Budget")
@@ -2892,11 +3309,13 @@ public struct SecondaryChip: View {
                     //
                     // `chipFigureTint` and not `figureTint`: a chip is a
                     // subordinate reading and may not outrank the row's headline.
-                    // Measured on the shipped panel, the Claude row's `92%` sits at
-                    // `Ink.attention` (L* 65.73) under two chips at `Ink.body`
-                    // (95.82) — the two least important numbers on the row 2.37:1
-                    // brighter than the most important one, in colour and not only
-                    // in greyscale. The ramp still reaches the chip the moment its
+                    // Measured on the panel of the day, the Claude row's `92%` sat
+                    // at `Ink.attention` (L* 65.73, since re-cut to 76.92) under two
+                    // chips at `Ink.body` (95.82) — the two least important numbers
+                    // on the row 2.37:1 brighter than the most important one, in
+                    // colour and not only in greyscale. The re-cut narrows that to
+                    // 1.68:1 without closing it, which is why this is a rank rule
+                    // and not a lightness one. The ramp still reaches the chip the moment its
                     // own window wants attention; only the resting rung moves.
                     .foregroundColor(appearance.chipFigureTint(for: metric.percent,
                                                                providerAccent: accent))

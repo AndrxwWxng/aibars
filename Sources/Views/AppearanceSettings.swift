@@ -666,10 +666,13 @@ public final class AppearanceSettings: ObservableObject {
     /// window's chip on the caption line.
     ///
     /// One rung quieter at rest, and the reason is a measured inversion rather
-    /// than a preference. The Claude row's headline `92%` draws `Ink.attention`
-    /// at L\* 65.73; its two chips drew `Ink.body` at 95.82, so the two least
-    /// important numbers on the row were **2.37:1 brighter than the most
-    /// important one** — visible in colour, not merely in greyscale. A panel
+    /// than a preference. The Claude row's headline `92%` draws `Ink.attention`,
+    /// which was L\* 65.73 when this was written and is 76.92 now; its two chips
+    /// drew `Ink.body` at 95.82, so the two least important numbers on the row
+    /// were **2.37:1 brighter than the most important one** — visible in colour,
+    /// not merely in greyscale. The re-cut narrowed that to 1.68:1 and did not
+    /// close it, which is the point: the inversion was never about how light the
+    /// amber happened to be. A panel
     /// whose whole hierarchy is two inks and one weight step cannot afford a
     /// subordinate reading at the top of the ladder.
     ///

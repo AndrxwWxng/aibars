@@ -86,14 +86,42 @@ final class ZZPanelSnapshot: XCTestCase {
         let appearance = try defaults()
         let state = Self.populatedState()
         for (name, scheme) in [("dark", ColorScheme.dark), ("light", ColorScheme.light)] {
-            let view = MenuBarContentView(
-                state: state,
-                showSettings: .constant(false),
-                appearance: appearance
-            )
             try Self.write(
-                AnyView(view),
+                AnyView(try Self.panel(state: state, appearance: appearance)),
                 to: "aibars_panel_\(name).png",
+                scheme: scheme
+            )
+        }
+    }
+
+    /// The panel with the further windows on a line each, which is the
+    /// **Dashboard** preset's setting and the one this harness could not show.
+    ///
+    /// It is a render of its own because the style is panel-wide: `.expanded` is
+    /// one switch for every row, so "a row with expanded windows" is a picture of
+    /// the whole panel with it on. What there is to look at is the ladder — every
+    /// row holding `secondaryWindowLimit` lines whether or not the service filled
+    /// them, which is what makes a row's height a function of the stepper instead
+    /// of a function of the fetch. The empty rungs are the price, and a picture is
+    /// the only honest way to decide whether the price is worth paying.
+    ///
+    /// A limit of four rather than the preset's six, because four is where the
+    /// fixture straddles the interesting line: Claude Code fills three rungs of
+    /// it, Claude two, Codex one, and the four rows that report no further windows
+    /// at all — Perplexity, Copilot, Gemini, Cursor — hold four clear lines each.
+    /// Every case the ladder has is in one picture, including the expensive one.
+    @MainActor
+    func testWritePanelWithExpandedWindows() throws {
+        try DebugHarness.skipUnlessAsked("write panel PNGs")
+
+        let appearance = try defaults()
+        appearance.secondaryWindows = .expanded
+        appearance.secondaryWindowLimit = 4
+        let state = Self.populatedState()
+        for (name, scheme) in [("dark", ColorScheme.dark), ("light", ColorScheme.light)] {
+            try Self.write(
+                AnyView(try Self.panel(state: state, appearance: appearance)),
+                to: "aibars_panel_expanded_\(name).png",
                 scheme: scheme
             )
         }
@@ -116,18 +144,44 @@ final class ZZPanelSnapshot: XCTestCase {
         for width in [300.0, 520.0] {
             appearance.panelWidth = width
             for (name, scheme) in [("", ColorScheme.dark), ("_light", ColorScheme.light)] {
-                let view = MenuBarContentView(
-                    state: state,
-                    showSettings: .constant(false),
-                    appearance: appearance
-                )
                 try Self.write(
-                    AnyView(view),
+                    AnyView(try Self.panel(state: state, appearance: appearance)),
                     to: "aibars_panel_w\(Int(width))\(name).png",
                     scheme: scheme
                 )
             }
         }
+    }
+
+    // MARK: - The panel under test
+
+    /// The panel, with the two stores its rows draw from handed in.
+    ///
+    /// Built here rather than at each of the three cases, because a render that
+    /// reached for `UsageTrendStore.shared` and `BudgetStore.shared` would be two
+    /// defects at once: it would write sample rings into the developer's own
+    /// defaults, and the picture would show whatever that machine had been
+    /// collecting rather than what the app draws. The same argument `defaults()`
+    /// makes about `AppearanceSettings.shared`, one store along.
+    ///
+    /// The stores are seeded, and that is the point of them. Half of what this
+    /// harness exists to show cannot be drawn by settings alone: a pace claim
+    /// needs samples, a budget meter needs a budget, and until this pass there
+    /// was neither — so **no render this project has ever reviewed contained a
+    /// pace line**, including every render taken while the pace was a block that
+    /// resized the panel when it arrived.
+    @MainActor
+    private static func panel(
+        state: AppState,
+        appearance: AppearanceSettings
+    ) throws -> MenuBarContentView {
+        MenuBarContentView(
+            state: state,
+            showSettings: .constant(false),
+            appearance: appearance,
+            budgets: try budgets(),
+            trend: try trend(state: state)
+        )
     }
 
     // MARK: - Fixtures
@@ -265,8 +319,126 @@ final class ZZPanelSnapshot: XCTestCase {
             ))
         }
 
+        // Perplexity — full, exactly. The state between Gemini's 97 and
+        // Copilot's overage, and the one where the fill's square trailing cap
+        // meets the end of its own track: at 97 the cap is drawn against a track
+        // that is visibly not full, and at 100 there is nothing left to be
+        // visibly anything. Nothing in the panel had ever drawn it.
+        if let perplexity = provider("perplexity") {
+            perplexity.isAuthenticated = true
+            state.snapshots[perplexity.id] = .success(UsageData(
+                providerID: perplexity.id,
+                planName: "Pro",
+                primary: UsageMetric(
+                    label: "Daily", used: 100, limit: 100, unit: "%",
+                    resetDate: now.addingTimeInterval(11 * 3_600)
+                )
+            ))
+        }
+
+        // Copilot — past the cap, which the app has a deliberate answer for and
+        // no picture of. `UsageMetric.percent` clamps and `rawPercent` does not,
+        // precisely so the meter stops at full while the figure says 137% — two
+        // channels disagreeing on purpose, in the one direction that is honest.
+        // The rail reserves three digits and a unit, so this is also the reading
+        // that says whether it reserved enough.
+        if let copilot = provider("copilot") {
+            copilot.isAuthenticated = true
+            state.snapshots[copilot.id] = .success(UsageData(
+                providerID: copilot.id,
+                planName: "Business",
+                primary: UsageMetric(
+                    label: "Premium requests", used: 411, limit: 300, unit: nil,
+                    resetDate: now.addingTimeInterval(6 * 86_400)
+                )
+            ))
+        }
+
         state.lastRefresh = now.addingTimeInterval(-12)
         return state
+    }
+
+    /// A budget on the one service in the fixture that reports money.
+    ///
+    /// Claude Code's spend is $8,700.47 estimated, so a $8,000 budget puts the
+    /// row over by $700.47 — the state the budget meter was written for and the
+    /// one no render has shown, since the harness had no store to set a budget
+    /// in. Over rather than under deliberately: the under-budget drawing is a
+    /// grey bar part-filled, which the panel already shows nine of, and the whole
+    /// question a review of this meter has to answer is whether the alarm reads
+    /// as an alarm beside the usage ramp above it.
+    ///
+    /// It also draws the "est." qualifier, since the spend behind it is arithmetic
+    /// this app did rather than an invoice — `RowGeometry.spendReserve` counts
+    /// three cells for that word and nothing had ever drawn it.
+    @MainActor
+    private static func budgets() throws -> BudgetStore {
+        let store = BudgetStore(store: try scratch("budgets"))
+        store.setBudget(Budget(amountMinor: 800_000, currency: "USD"), for: "claudecode")
+        return store
+    }
+
+    /// Half an hour of rising samples for the three rows whose caption lines have
+    /// room to carry a claim.
+    ///
+    /// Seeded through `record`, which is what the refresh loop calls, so the fit's
+    /// own refusals — three samples, five minutes apart, a rising slope, an
+    /// arrival inside twelve hours — all apply. A row that draws no pace here is a
+    /// row the app would draw no pace for.
+    ///
+    /// Three rows and not one, because whether the claim survives is a question
+    /// about *width*: `MetricCaption` offers it as the richest of five candidates
+    /// and drops it first, so a row already carrying a spend, a countdown and two
+    /// chips has no room for it at 356pt and a row carrying a countdown alone has
+    /// plenty. That is the behaviour under review — the pace is the first thing to
+    /// go and nothing else on the line moves when it does — and one seeded row
+    /// could only show one half of it.
+    @MainActor
+    private static func trend(state: AppState) throws -> UsageTrendStore {
+        let now = Date()
+        let store = UsageTrendStore(store: try scratch("trend"), now: { now })
+        for serviceID in ["gemini", "cursor", "claude"] {
+            guard let provider = state.providers.first(where: { $0.serviceID == serviceID }),
+                  case .success(let data)? = state.snapshots[provider.id],
+                  data.primary.limit > 0
+            else { continue }
+            // Ending on the reading the row is showing, so the claim and the
+            // figure beside it are about the same number: five samples at five
+            // minutes, climbing to where the row already is.
+            let landing = data.primary.percent
+            for step in 0..<5 {
+                let percent = max(0, landing - Double(4 - step) * 0.03)
+                store.record(
+                    UsageData(
+                        providerID: data.providerID,
+                        fetchedAt: now.addingTimeInterval(-Double(4 - step) * 300),
+                        primary: UsageMetric(
+                            label: data.primary.label,
+                            used: percent * data.primary.limit,
+                            limit: data.primary.limit,
+                            unit: data.primary.unit,
+                            resetDate: data.primary.resetDate
+                        )
+                    ),
+                    for: provider.id
+                )
+            }
+        }
+        return store
+    }
+
+    /// A scratch defaults domain, wiped on the way in. `fatalError` on failure
+    /// rather than a fallback to `.standard`, following `RowReservationTests`: a
+    /// render seeded from the developer's own budgets and samples is not a weaker
+    /// picture, it is a picture of a different app.
+    @MainActor
+    private static func scratch(_ name: String) throws -> UserDefaults {
+        let domain = "dev.aibars.test-scratch.panel-snapshot.\(name)"
+        let store = try XCTUnwrap(
+            UserDefaults(suiteName: domain), "could not open the scratch domain \(domain)"
+        )
+        store.removePersistentDomain(forName: domain)
+        return store
     }
 
     // MARK: - Rendering

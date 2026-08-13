@@ -1169,16 +1169,20 @@ public enum Tokens {
     /// the track is the ground every meter fill is read against, and a single
     /// opacity cannot hold the same ratio against a near-white panel and a
     /// near-black one. These are set from the fill down: the resting stop clears
-    /// the track by **5.00:1 light and 5.41:1 dark**, amber by **5.10 and 5.09**,
-    /// red by **7.20 and 7.13** — all past the 3:1 a non-text graphic needs, on
-    /// both sides, at the *quietest* stop.
+    /// the track by **3.05:1 light and 3.19:1 dark**, amber by **4.78 and 7.19**,
+    /// red by **6.85 and 5.26** — all past the 3:1 a non-text graphic needs, on
+    /// both sides, at the *quietest* stop, which is resting and is cut as close to
+    /// the floor as the track allows on purpose (see `fill`).
     ///
-    /// Those figures moved because all three stops did. The resting stop is
-    /// `Ink.muted` now rather than a fourth grey written out in `UsageMeterGlyph`,
-    /// and the top stop is `Ink.alarm`; the pair recorded here before — "4.20 and
-    /// 6.98" for amber — was measured against an amber that had since been re-cut
-    /// and never re-measured, which is the drift a ramp written down in two files
-    /// produces and the reason it is only written down in one now.
+    /// Every one of those six figures has moved at least once, and each time
+    /// because a stop moved rather than because this pair did. The resting stop
+    /// left `Ink.muted` for `Meter.fill` when the ramp's first step turned out to
+    /// be invisible in greyscale; the amber and the red were then re-cut so the
+    /// ramp ranks in chroma, which swapped which of them sits nearest the track
+    /// in dark (amber 5.09 → 7.19, red 7.13 → 5.26). The pair recorded here two
+    /// re-cuts ago — "4.20 and 6.98" for amber — was measured against an amber the
+    /// app had already stopped drawing, which is the drift a ramp written down in
+    /// two files produces and the reason it is only written down in one now.
     public enum Meter {
         /// An empty track — bar and ring both. The meter slot has exactly two
         /// drawings: this with a fill on it, or nothing.
@@ -1197,9 +1201,11 @@ public enum Tokens {
         ///
         /// It was `Ink.muted`, folded there to "delete a duplicate", and the
         /// duplicate it deleted was the only greyscale step the ramp's *first*
-        /// boundary had. Measured on the shipped render: resting `Ink.muted`
-        /// L\* 67.61 against amber's 65.73 is **1.062:1, ΔL\* 1.87** in dark and
-        /// **1.020:1, ΔL\* 0.54** in light. Convert the panel to greyscale — which
+        /// boundary had. Measured on the render of the day: resting `Ink.muted`
+        /// L\* 67.61 against the amber of the day at 65.73 was **1.062:1, ΔL\*
+        /// 1.87** in dark and **1.020:1, ΔL\* 0.54** in light — both stops have
+        /// moved since, so those are the figures that made the case rather than
+        /// the ones that hold now. Convert the panel to greyscale — which
         /// the near-cap contract three files over insists every channel must
         /// survive — and a resting bar and a caution bar are the same grey. A ramp
         /// whose first step is invisible without hue is a ramp carried by hue
@@ -1214,12 +1220,19 @@ public enum Tokens {
         ///   `0x74777E` **3.054:1**. Light's five hundredths is the thinnest
         ///   margin in this enum and is stated rather than rounded away: this is
         ///   the first pair to re-measure if `Meter.track` moves.
-        /// - **≥ 9 L\* under `Ink.attention`**, the same greyscale gap
+        /// - **≥ 9 L\* from `Ink.attention`**, the same greyscale gap
         ///   `testAmberAndRedSeparateInGreyscale` demands of the ramp's other
-        ///   boundary. Measured **1.596:1 / ΔL\* 13.84** dark and
-        ///   **1.670:1 / ΔL\* 13.97** light, so the ramp is monotone in lightness
-        ///   for the first time in both appearances: dark 51.89 → 65.73 → 76.65,
-        ///   light 50.02 → 36.02 → 26.53.
+        ///   boundary, so that resting and caution are two greys once the hue comes
+        ///   off. Measured **ΔL\* 25.03** dark and **12.24** light.
+        ///
+        ///   It used to say "≥ 9 L\* *under*", and the direction died when the
+        ///   ramp was re-cut to rank in chroma: dark amber went up to L\* 76.92 to
+        ///   let the red take the contrast bound, so resting is now the *darker*
+        ///   of that pair in dark and the lighter of it in light. The gap is what
+        ///   was ever load-bearing and the gap is wider than it was in both
+        ///   appearances. The ladder now reads dark 51.89 → 76.92 → 66.76 and
+        ///   light 49.99 → 37.76 → 27.93 — no longer monotone in lightness, and
+        ///   monotone in chroma instead, which is stated on `Ink.alarm`.
         ///
         /// It is quieter than the ink it replaces, deliberately and by a lot:
         /// **4.633:1 dark / 4.186:1 light on `Surface.base`** against `muted`'s
@@ -1352,12 +1365,20 @@ public enum Tokens {
     ///
     /// Because the two survivors are the *only* colours, they also have to be
     /// distinguishable from each other with the hue removed — a greyscale
-    /// screenshot, a deuteranope, a menu bar template image. The pair this
-    /// replaces were 1.8 L\* apart in light and 2.9 in dark, so "at the cap" and
-    /// "near the cap" were the same mark to anyone not reading the hue. The rule
-    /// that fixes it is directional and is stated on `alarm`: **red is always the
-    /// stop further from the ground.** 9.49 L\* of separation in light, 10.92 in
-    /// dark.
+    /// screenshot, a deuteranope, a menu bar template image. The pair before last
+    /// were 1.8 L\* apart in light and 2.9 in dark, so "at the cap" and "near the
+    /// cap" were the same mark to anyone not reading the hue. That is fixed and
+    /// stays fixed: **9.83 L\* of separation in light, 10.16 in dark**, against a
+    /// floor of 9.
+    ///
+    /// **And they have to rank.** Separation says they are two marks; it does not
+    /// say which of them is worse, and the pair this replaces got that backwards
+    /// in the channel a viewer actually uses. Measured on the shipped dark render,
+    /// the 92% row's amber carried OKLCh chroma 0.1506 and the 97% row's red
+    /// 0.1069 — **the caution stop was 1.41× the chroma of the alarm stop**, so a
+    /// panel of nine rows pulled the eye to the second-worst one. The rule that
+    /// fixes it is stated on `alarm` and holds in both appearances: **chroma never
+    /// decreases going up the ramp, and red is always the darker of the two.**
     ///
     /// A brand mark is therefore drawn in `mark`, a neutral, in both appearances
     /// and in every window. Identity survives it, because identity was never the
@@ -1396,10 +1417,20 @@ public enum Tokens {
     /// lands on" was false for as long as a button was held down, and it put two
     /// inks under 4.5:1 there. The resolved planes are `#D0D1D3` light and
     /// `#36373A` dark. Every ink clears 4.5:1 on both: `body` 10.66/10.72,
-    /// `mark` 7.42/7.32, `muted` 4.80/4.81, `attention` 4.90/4.53, `alarm`
-    /// 6.92/6.34. The binding constraint is dark `attention` at 4.53, so that is
-    /// the first thing to re-measure if `Surface.base`, `Fill.pressed`,
-    /// `scrimAlpha` or the amber itself is ever re-cut.
+    /// `mark` 7.42/7.32, `muted` 4.80/4.81, `attention` 4.60/6.39, `alarm`
+    /// 6.59/4.68.
+    ///
+    /// The binding constraint is **light `attention` at 4.60**, and it moved here
+    /// from dark `attention` at 4.53 when the ramp was re-cut to rank. The two
+    /// numbers are the same fact seen from either side: the plane bounds a light
+    /// figure at L\* ≤ 38.32 and a dark one at L\* ≥ 65.51, and each appearance
+    /// now spends that bound on whichever of its two hues has the least chroma to
+    /// give — the light amber, which is brown at any lightness the bound allows,
+    /// and the dark red, which is pink at any lightness above it. Both sit on
+    /// their own bound with 0.10 and 0.18 to spare where the old pair had 0.03, so
+    /// this is a thicker margin than the palette has ever held. It is still the
+    /// first thing to re-measure if `Surface.base`, `Fill.pressed`, `scrimAlpha`
+    /// or either hue is ever re-cut.
     ///
     /// `.tertiary` is banned from the panel. There is no third neutral: a value
     /// is `body` or it is `muted`, and something that wants to be quieter than
@@ -1536,22 +1567,47 @@ public enum Tokens {
         /// shipped presets. One amber, one pair of hexes: "nearly out" and "needs
         /// you" are the same call to action and cannot be two colours.
         ///
-        /// **6.99:1 light and 7.39:1 dark on `Surface.base`; 4.90 and 4.53 on the
-        /// worst plane; 5.10 and 5.09 against `Meter.track`.** Dark's 4.53 is the
-        /// thinnest margin over the floor of any ink in this enum — three
-        /// hundredths — so this is the first pair to re-measure if `Surface.base`,
-        /// `Fill.pressed`, `scrimAlpha` or the amber itself moves again.
+        /// **6.55:1 light and 10.43:1 dark on `Surface.base`; 4.60 and 6.39 on the
+        /// worst plane; 4.78 and 7.19 against `Meter.track`.** Light's 4.60 is the
+        /// thinnest margin over the floor of any ink in this enum, so this is the
+        /// first pair to re-measure if `Surface.base`, `Fill.pressed`, `scrimAlpha`
+        /// or the amber itself moves again.
         ///
-        /// Both halves are re-cut, and neither is a taste. Light `0x8A5A00` →
-        /// `0x764C00`: the pressed card bounds a light figure at L\* ≤ 38.32
-        /// (solve `Y = (0.6237 + 0.05)/4.5 − 0.05 = 0.1027`), and the old value
-        /// sat above it at 42.33. Dark `0xD08214` → `0xE08D1C`: the same bound
-        /// from the other side puts a dark figure at L\* ≥ 65.51, and amber sits
-        /// on it at 65.73 so that `alarm` has the only room left to take. The
-        /// ratios this doc used to quote — "9.32:1 dark … 7.45 on a hovered card"
-        /// — were `0xF5A623`'s, left behind by a re-cut two commits back; they are
-        /// re-measured here rather than corrected, because the hex moved again.
-        public static let attention = dynamic(light: 0x764C00, dark: 0xE08D1C)
+        /// **Both halves are re-cut so that the ramp ranks, and the dark half
+        /// moved for a reason worth stating in full, because it reverses what this
+        /// doc used to say.** The sRGB gamut does not offer the same chroma at
+        /// every lightness, and it offers the two hues their maxima in opposite
+        /// directions: amber peaks *high* (`#FFA600` at L\* 75.2 is OKLCh C 0.171)
+        /// and red peaks *low* (`#FF0000` is L\* 53). The pressed plane bounds both
+        /// dark stops at L\* ≥ 65.51 and the greyscale rule holds them ≥ 9 L\*
+        /// apart, so there are exactly two arrangements, and only one of them
+        /// ranks:
+        ///
+        /// - amber on the bound and red above it — the shipped pair — caps amber
+        ///   at C 0.18 and red at **C 0.121**, because no sRGB red at L\* 74.5 is
+        ///   more saturated than a salmon. That is the inversion, and it was
+        ///   forced by the arrangement rather than by the hexes.
+        /// - red on the bound and amber above it caps red at **C 0.172** and amber
+        ///   at 0.171 — both stops *more* chromatic than the arrangement above
+        ///   gives them, and in the order that ranks.
+        ///
+        /// So dark `0xE08D1C` → `0xF1B347`: L\* 65.73 → 76.92, C 0.1506 → 0.1408,
+        /// hue 66.9° → 77.9°. The amber gives up 7% of its chroma and steps off
+        /// the contrast bound entirely (4.53 → 6.39), which is the half of the fix
+        /// that stops the caution stop shouting; `alarm` takes the bound and spends
+        /// it.
+        ///
+        /// Light `0x764C00` → `0x894800`, and light is designed rather than
+        /// derived from that. It keeps the arrangement it had — amber on the
+        /// ceiling the plane allows (L\* ≤ 38.32, `Y = (0.6237 + 0.05)/4.5 − 0.05
+        /// = 0.1027`), red below it — because the mirror image does not work here:
+        /// red at the ceiling would reach C 0.20, but it would push amber down to
+        /// L\* 29, where hue 60° is `#6C3500` and no longer reads as a warm alarm
+        /// at all. What is fixed instead is the *hue*: 73.0° → 57.9°, which is the
+        /// difference between an olive-brown and a burnt orange, and it buys 17%
+        /// more chroma (0.0965 → 0.1131) at the same bound. L\* 36.02 → 37.76,
+        /// taking the last two points the ceiling had left.
+        public static let attention = dynamic(light: 0x894800, dark: 0xF1B347)
 
         /// Over budget, and at the cap. The second of the two hues, and the last
         /// colour in the application.
@@ -1563,17 +1619,47 @@ public enum Tokens {
         /// ramp's top stop *is* this token now, byte for byte, and there is
         /// nowhere else to change it.
         ///
-        /// Red is always the stop further from the ground, which is what makes it
-        /// readable as "worse than amber" in a greyscale screenshot and to a
-        /// deuteranope: L\* 26.53 against amber's 36.02 in light, 76.65 against
-        /// 65.73 in dark — 9.49 and 10.92 apart, where the pair it replaces were
-        /// 1.8 and 2.9. The direction is forced as well as chosen: the pressed row
-        /// card bounds a light figure at L\* ≤ 38.32 and a dark one at L\* ≥ 65.51,
-        /// amber sits on the bound, and red takes the only room left.
+        /// **The two rules that make it read as worse than amber, in that order.**
         ///
-        /// 9.87:1 light and 10.35:1 dark on `Surface.base`; 6.92 and 6.34 on the
-        /// worst plane in the panel; 7.20 and 7.13 against `Meter.track`.
-        public static let alarm = dynamic(light: 0x7E1217, dark: 0xFFA5A7)
+        /// **Chroma never decreases going up the ramp.** Resting C 0.0113 →
+        /// amber 0.1131 → red 0.1595 in light, 0.0117 → 0.1408 → 0.1600 in dark:
+        /// each step is a step up, and the last one is 1.41× and 1.14×. This is
+        /// the rule that was broken, and it was broken in dark by a factor of 1.41
+        /// the other way — `0xFFA5A7` is C 0.1069 against the old amber's 0.1506,
+        /// so the worse reading was drawn in the softer, pinker, less saturated
+        /// colour. `0xFD7B74` is **+50% chroma** on that (0.1069 → 0.1600) and 10
+        /// L\* deeper, which is the difference between a salmon and a red.
+        ///
+        /// **Red is the darker of the two, in both appearances.** L\* 27.93
+        /// against amber's 37.76 in light, 66.76 against 76.92 in dark — 9.83 and
+        /// 10.16 apart, against a floor of 9, so which alarm it is still survives a
+        /// greyscale screenshot and a deuteranope. It is a physical rule rather
+        /// than a preference: red's chroma peaks at L\* 53 and amber's near 75, so
+        /// the darker of the two is the one that can hold the most colour, in
+        /// either appearance, on either ground.
+        ///
+        /// That replaces "red is always the stop *further from the ground*", which
+        /// held for one pass and cost the ramp its ranking. Further-from-the-ground
+        /// means darker in light and *lighter* in dark, so it asked the dark red to
+        /// sit above L\* 74.5 — the one place in the gamut where red has no chroma
+        /// left — and the salmon was the result rather than the choice. The new
+        /// rule is also the simpler one: the two appearances now agree about which
+        /// stop is darker instead of mirroring each other.
+        ///
+        /// The cost is stated rather than hidden: in dark, red is now *nearer* the
+        /// ground than amber, so a greyscale screenshot shows the 97% row's bar
+        /// darker than the 92% row's. Nothing rests on that. Near-cap is carried by
+        /// three channels that are not colour at all — the fill's square trailing
+        /// cap, the figure at `Ramp.alertWeight`, and a fill visibly past the
+        /// redline — and `UsageRampContrastTests` desaturates a rendered panel to
+        /// prove it rather than quoting this paragraph.
+        ///
+        /// 9.40:1 light and 7.64:1 dark on `Surface.base`; 6.59 and 4.68 on the
+        /// worst plane in the panel; 6.85 and 5.26 against `Meter.track`. Dark's
+        /// 4.68 is this appearance's binding ink, for the reason on `attention`:
+        /// each appearance spends its contrast bound on whichever hue has the least
+        /// chroma to give.
+        public static let alarm = dynamic(light: 0x890313, dark: 0xFD7B74)
 
         // `failure` was here, at `0xC62A2F / 0xFF6B6E` — a red for "the request
         // failed", beside a ramp whose warning stop was byte-identical to it. So
@@ -1605,31 +1691,33 @@ public enum Tokens {
         /// Not `dynamic`, because it is the one colour here that is deliberately
         /// translucent: it has to let the surface under it through.
         ///
-        /// The light half is `attention` light exactly — `rgb(0.463, 0.298, 0.000)`
-        /// is `0x764C00` — and the dark half is `attention` dark exactly, at a
-        /// heavier alpha. That is the whole arrangement, and it is written out by
-        /// hand rather than derived because `dynamic` builds its `NSColor` at
-        /// alpha 1 with no component accessor to reach back through, and the two
-        /// halves want different alphas: 0.09 in light and 0.12 in dark, because a
-        /// 9% tint of the ink's own value disappears into a near-black ground.
+        /// The light half is `attention` light exactly — `rgb(0.537, 0.282, 0.000)`
+        /// is `0x894800` — and the dark half is `attention` dark exactly —
+        /// `rgb(0.945, 0.702, 0.278)` is `0xF1B347` — at a heavier alpha. That is
+        /// the whole arrangement, and it is written out by hand rather than derived
+        /// because `dynamic` builds its `NSColor` at alpha 1 with no component
+        /// accessor to reach back through, and the two halves want different
+        /// alphas: 0.09 in light and 0.12 in dark, because a 9% tint of the ink's
+        /// own value disappears into a near-black ground.
         ///
-        /// It previously claimed to be "retuned to `attention`'s new stops" and
-        /// was not: the light half had been, but the dark half was still
-        /// `rgb(1.00, 0.65, 0.14)` = `0xFFA624`, which is the *retired* `0xF5A623`
-        /// amber. A dark warning banner drew two ambers, the wash and the ink on
-        /// it, neither of them the token they were both named after. Both halves
-        /// now track the shipped pair, so the next re-cut of `attention` is a
-        /// two-line change here instead of a silent drift.
+        /// It once claimed to be "retuned to `attention`'s new stops" and was not:
+        /// the light half had been, but the dark half was still `rgb(1.00, 0.65,
+        /// 0.14)` = `0xFFA624`, the *retired* `0xF5A623` amber, so a dark warning
+        /// banner drew two ambers, the wash and the ink on it, neither of them the
+        /// token they were both named after. Both halves track the shipped pair
+        /// now, and both moved again with the ramp's re-cut — which is what that
+        /// discipline is for: the drift is a two-line edit here rather than a
+        /// silent disagreement.
         ///
-        /// Resolved: over `Surface.base`, light `#EAE8E4` (1.142:1 above the
-        /// ground, `body` 13.31 and `muted` 6.00 on it) and dark `#251C12`
-        /// (1.159:1, `body` 15.09, `muted` 6.77). Over `Surface.raised`, which is
-        /// where `ConnectDialog` actually draws it, light `#F3EFE8` (`muted`
-        /// 6.41) and dark `#332B23` (`muted` 5.62).
+        /// Resolved: over `Surface.base`, light `#ECE7E4` (1.145:1 above the
+        /// ground, `body` 13.27 and `muted` 5.98 on it) and dark `#272117`
+        /// (1.217:1, `body` 14.37, `muted` 6.45). Over `Surface.raised`, which is
+        /// where `ConnectDialog` actually draws it, light `#F4EFE8` (`muted`
+        /// 6.42) and dark `#353028` (`muted` 5.29).
         public static let attentionWash = Color(nsColor: NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? NSColor(srgbRed: 0.878, green: 0.553, blue: 0.110, alpha: 0.12)
-                : NSColor(srgbRed: 0.463, green: 0.298, blue: 0.000, alpha: 0.09)
+                ? NSColor(srgbRed: 0.945, green: 0.702, blue: 0.278, alpha: 0.12)
+                : NSColor(srgbRed: 0.537, green: 0.282, blue: 0.000, alpha: 0.09)
         })
 
         /// Text and glyphs on an accent-filled chip.

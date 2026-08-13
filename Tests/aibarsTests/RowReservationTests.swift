@@ -319,6 +319,554 @@ final class RowReservationTests: XCTestCase {
         }
     }
 
+    // MARK: - A pace arriving cannot change a row's height
+
+    /// **The assertion the fold exists for, and the one nothing in the suite
+    /// made.**
+    ///
+    /// One provider, one reading, one set of settings, two rows: one built
+    /// against a trend store holding half an hour of rising samples, one against a
+    /// store with nothing in it. The store is the *only* difference between them,
+    /// and the two drawn heights must be the same number.
+    ///
+    /// What it would have reported against the block. `ForecastLine` was a fourth
+    /// child of the row's detail stack, inserted when — and only when — the fit
+    /// produced a phrase, so the paced row drew `contentSpacing +
+    /// lineBox(captionSize)` taller than the unpaced one: 19pt at cozy/100%, and
+    /// about 171pt down a nine-row panel. The comparison is exact rather than
+    /// tolerant, so every one of the 90 configurations this sweeps would have
+    /// failed, each naming its own — and a 19pt gap is not a rounding argument at
+    /// any density. Nothing measured the two stores against each other, which is
+    /// how a correct reservation for a block nothing inserted read as coverage for
+    /// two releases.
+    ///
+    /// The premise is asserted before the heights are compared, and that is not
+    /// ceremony: a fixture that quietly stopped producing a projection — a
+    /// tightened refusal, a shortened staleness limit — would leave two identical
+    /// unpaced rows and a test that passes by measuring nothing. So the paced
+    /// store must resolve a sentence and the empty one must not.
+    ///
+    /// The store is fed rather than stubbed. `UsageTrendStore.record` is what the
+    /// refresh loop calls, so five samples five minutes apart on a rising slope is
+    /// the same ring a real half-hour at the keyboard builds, refusals and gap
+    /// rule included.
+    @MainActor
+    func testAPaceArrivingCannotChangeARowsHeight() throws {
+        let provider = try Self.connectedProvider()
+        let now = Date()
+        let paced = try Self.risingTrend(for: provider, now: now)
+        let silent = UsageTrendStore(store: Self.scratchDefaults("pace-silent"), now: { now })
+        let result = Result<UsageData, ProviderError>.success(Self.reading(0.42, provider: provider))
+
+        // The premise, both halves of it.
+        XCTAssertNotNil(
+            ForecastLine.text(
+                projection: paced.projection(for: provider.id), now: now, showsPace: true
+            ),
+            "the fixture stopped producing a pace, so this case measures two identical rows"
+        )
+        XCTAssertNil(
+            ForecastLine.text(
+                projection: silent.projection(for: provider.id), now: now, showsPace: true
+            ),
+            "the empty store produced a pace, so this case has no control"
+        )
+
+        try sweep("pace-arriving") { appearance, at in
+            let with = Self.drawnHeight(
+                appearance: appearance, provider: provider, result: result, trend: paced
+            )
+            let without = Self.drawnHeight(
+                appearance: appearance, provider: provider, result: result, trend: silent
+            )
+            XCTAssertEqual(
+                with, without,
+                "\(at): the row drew \(with)pt with a pace on it and \(without)pt without one"
+            )
+        }
+    }
+
+    /// And the run it folded into is a real drawing, which is what makes the case
+    /// above a claim about the row rather than about a sentence nobody draws.
+    ///
+    /// The pace takes **width and never height**: measured on the caption line
+    /// itself at the width it asks for, the line is wider with the claim on it and
+    /// exactly as tall. Then the run is measured on its own, against the line it
+    /// rides — never taller than it, never shorter than the caption box it is held
+    /// at — which is why the equality above holds by construction rather than by
+    /// luck. The run is set at `captionSize`, and `captionSize` is under
+    /// `detailSize` at every density and every text scale, so there is no
+    /// arrangement of words in which the claim is the tallest thing on the row.
+    @MainActor
+    func testThePaceTakesWidthOnTheCaptionLineAndNeverHeight() throws {
+        let appearance = settings("pace-on-the-line")
+        let provider = try Self.connectedProvider()
+        let now = Date()
+        let trend = try Self.risingTrend(for: provider, now: now)
+        let phrase = try XCTUnwrap(
+            ForecastLine.text(projection: trend.projection(for: provider.id), now: now, showsPace: true)
+        )
+
+        for density in Self.densities {
+            for scale in Self.textScales {
+                appearance.density = density
+                appearance.textScale = scale
+                let metrics = appearance.metrics
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+
+                func caption(_ pace: String?) -> CGSize {
+                    let line = MetricCaption(
+                        metric: UsageMetric(
+                            label: "5h session", used: 42, limit: 100, unit: "%",
+                            resetDate: now.addingTimeInterval(4_800)
+                        ),
+                        accent: .accentColor,
+                        appearance: appearance,
+                        pace: pace
+                    )
+                    // `fixedSize` and not a wide frame: it asks the line for its
+                    // *ideal* width, which is the only measurement that can show
+                    // a run being drawn — inside a frame the line fills the frame
+                    // and the two are the same number whatever is on them. It
+                    // also means `ViewThatFits` is offered everything it asks
+                    // for, so the richest candidate is the one measured. The
+                    // narrow end, where the claim is the first candidate dropped,
+                    // is `ForecastLineTests`' subject and not this one's.
+                    return NSHostingView(rootView: AnyView(line.fixedSize())).fittingSize
+                }
+
+                let with = caption(phrase)
+                let without = caption(nil)
+                XCTAssertGreaterThan(
+                    with.width, without.width,
+                    "\(at): the line is \(with.width)pt wide either way, so the pace was not drawn at all "
+                    + "and the height case above is comparing two identical rows"
+                )
+                XCTAssertEqual(
+                    with.height, without.height, accuracy: 0.5,
+                    "\(at): the caption is \(with.height)pt with the pace on it and \(without.height)pt without"
+                )
+
+                // Why it cannot be otherwise, measured rather than asserted of the
+                // arrangement: the run is set at `captionSize`, which is below
+                // `detailSize` at every density and every scale, so it is never
+                // the tallest thing on the line it rides. That is `ForecastLine`'s
+                // own claim — "there is no arrangement of words in which it is the
+                // tallest thing on the row" — and it is the reason the equality
+                // above holds by construction and not by luck.
+                let block = NSHostingView(
+                    rootView: AnyView(ForecastLine(phrase: phrase, appearance: appearance))
+                ).fittingSize
+                XCTAssertLessThanOrEqual(
+                    block.height, without.height,
+                    "\(at): the pace run measures \(block.height)pt on a \(without.height)pt line"
+                )
+                XCTAssertGreaterThanOrEqual(
+                    block.height, Tokens.lineBox(metrics.captionSize),
+                    "\(at): the run is drawn under the caption box it is held at"
+                )
+            }
+        }
+    }
+
+    // MARK: - Width may move things sideways and may never move them down
+
+    /// **The panel getting wider cannot make a row taller.**
+    ///
+    /// This became a claim worth asserting when the meter stopped being a
+    /// constant. `MeterGeometry.trackWidth(in:)` grows the bar with the column, so
+    /// the slot is now sized from a `GeometryReader` — and a `GeometryReader` is
+    /// greedy in *both* axes by default. `TrackWidth` pins the height around it,
+    /// but "the modifier has a `.frame(height:)` on the outside" is the kind of
+    /// thing that is true until somebody simplifies it, and the failure mode is
+    /// the one the whole suite exists for: a row that changes height when the user
+    /// drags a width slider, in a panel `MenuBarExtra` sizes to its content.
+    ///
+    /// The moved countdown is under test here too, and by the same measurement:
+    /// `MetricCaption.countdownRidesTheEdge` is a width decision that reads the
+    /// column, so it also has to be provably free of height.
+    ///
+    /// Four widths crossed with the full 90-configuration space, `XCTAssertEqual`
+    /// with no tolerance, against the row's *drawn* height rather than its
+    /// reservation — the reservation cannot see this at all, because `panelWidth`
+    /// reaches `RowGeometry` only through `textColumnWidth` and never through any
+    /// term of the height. That is exactly why the drawing is what is measured:
+    /// the arithmetic is trivially width-free and the layout is where it could
+    /// stop being so.
+    ///
+    /// The premise is asserted first so the case cannot pass by measuring a bar
+    /// that never grew: at the shipped density the 300pt and 520pt columns give
+    /// 160pt and 200pt of track.
+    @MainActor
+    func testTheTrackGrowingWithThePanelCannotChangeARowsHeight() throws {
+        let provider = try Self.connectedProvider()
+        let data = Self.reading(0.92, provider: provider)
+
+        try sweep("track-growth-is-width-only") { appearance, at in
+            var heights: [Double: CGFloat] = [:]
+            var tracks: [Double: CGFloat] = [:]
+            for width in Self.panelWidths {
+                appearance.panelWidth = width
+                heights[width] = Self.drawnHeight(
+                    appearance: appearance, provider: provider, result: .success(data)
+                )
+                tracks[width] = MeterGeometry.trackWidth(
+                    in: Self.reservation(
+                        appearance: appearance, provider: provider, result: .success(data)
+                    ).textColumnWidth
+                )
+            }
+
+            // The bar really did grow, or the equality below is about nothing.
+            let narrow = try XCTUnwrap(tracks[300])
+            let wide = try XCTUnwrap(tracks[520])
+            XCTAssertGreaterThan(
+                wide, narrow,
+                "\(at): the track is \(narrow)pt at 300 and \(wide)pt at 520, so it did not grow "
+                    + "and this case is measuring a constant"
+            )
+
+            let expected = try XCTUnwrap(heights[300])
+            for width in Self.panelWidths {
+                XCTAssertEqual(
+                    try XCTUnwrap(heights[width]), expected,
+                    "\(at): the row draws \(heights[width] ?? -1)pt at \(width) against \(expected)pt "
+                        + "at 300 — width has reached the height"
+                )
+            }
+        }
+    }
+
+    /// And the same fact about the countdown, measured on the line it moved to
+    /// rather than on the row around it.
+    ///
+    /// `countdownRidesTheEdge` takes the countdown out of the caption's sentence
+    /// and puts it in the caption's trailing slot — the slot the chips ride when
+    /// there are any. That is a *rearrangement* of one line, so the thing to prove
+    /// is that the line is the same box either way: the caption is one `lineBox`
+    /// whatever is on it, and a row whose caption grew when a reset date arrived
+    /// would be the resize this suite exists to prevent, arriving through a clock.
+    ///
+    /// The premise first, as `testThePaceTakesWidthOnTheCaptionLineAndNeverHeight`
+    /// does: the line is measurably wider with the countdown on it, so the height
+    /// equality is not two measurements of an identical view.
+    @MainActor
+    func testTheCountdownTakesWidthOnTheCaptionLineAndNeverHeight() throws {
+        let appearance = settings("countdown-on-the-edge")
+        let now = Date()
+
+        for density in Self.densities {
+            for scale in Self.textScales {
+                appearance.density = density
+                appearance.textScale = scale
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+
+                func caption(_ reset: Date?) -> CGSize {
+                    let line = MetricCaption(
+                        metric: UsageMetric(
+                            label: "Daily", used: 100, limit: 100, unit: "%", resetDate: reset
+                        ),
+                        accent: .accentColor,
+                        appearance: appearance
+                    )
+                    // `fixedSize`, for the reason the pace case gives: inside a
+                    // frame the line fills the frame and both arrangements measure
+                    // the same number whatever is drawn on them.
+                    return NSHostingView(rootView: AnyView(line.fixedSize())).fittingSize
+                }
+
+                let with = caption(now.addingTimeInterval(11 * 3_600))
+                let without = caption(nil)
+                XCTAssertGreaterThan(
+                    with.width, without.width,
+                    "\(at): the line is \(with.width)pt wide either way, so the countdown was not "
+                        + "drawn at all and the height check below is comparing two identical rows"
+                )
+                XCTAssertEqual(
+                    with.height, without.height, accuracy: 0.5,
+                    "\(at): the caption is \(with.height)pt with the countdown at its trailing edge "
+                        + "and \(without.height)pt without one"
+                )
+            }
+        }
+    }
+
+    // MARK: - The further windows are reserved from the settings
+
+    /// **What the fetch came back with is not an input to the row's height.**
+    ///
+    /// Under `secondaryWindows == .expanded` — which the **Dashboard** preset
+    /// ships, with a limit of six — the row drew one line per window the service
+    /// reported and reserved none of them. So a service answering with three grew
+    /// its row 3 × (contentSpacing + lineBox(detailSize)) = 60pt at cozy/100% the
+    /// moment the answer landed, and `MenuBarExtra`, which sizes its window to its
+    /// content, moved the panel under the pointer. A service that answered with
+    /// one on Monday and three on Tuesday did it again.
+    ///
+    /// Four payloads, differing in nothing but how many further windows they
+    /// carry: none, one, three, and the six the stepper allows. One height. The
+    /// counts are the four the panel actually meets — a service with no further
+    /// windows at all is the common case and is the one that pays for this, so it
+    /// is measured rather than assumed.
+    @MainActor
+    func testWhatTheFetchReturnedIsNotAnInputToTheLadder() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("ladder-across-payloads")
+        for density in Self.densities {
+            for scale in Self.textScales {
+                for limit in [1, 3, 6] {
+                    appearance.density = density
+                    appearance.textScale = scale
+                    appearance.secondaryWindows = .expanded
+                    appearance.secondaryWindowLimit = limit
+                    let at = "\(density.rawValue)/\(Int(scale * 100))%/limit \(limit)"
+
+                    let heights = [0, 1, 3, 6].map { count in
+                        (count, Self.drawnHeight(
+                            appearance: appearance,
+                            provider: provider,
+                            result: .success(Self.reading(0.42, provider: provider, windows: count))
+                        ))
+                    }
+                    let spread = (heights.map(\.1).max() ?? 0) - (heights.map(\.1).min() ?? 0)
+                    XCTAssertEqual(
+                        spread, 0,
+                        "\(at): the row drew "
+                        + heights.map { "\($0.0) windows \($0.1)pt" }.joined(separator: ", ")
+                    )
+                }
+            }
+        }
+    }
+
+    /// And the ladder is the height it reserved: one line and the pitch in front
+    /// of it per rung, drawn as well as reserved.
+    ///
+    /// This is the half the reservation cannot check on its own — `RowGeometry` is
+    /// read by the card's corner radius and by nothing else — and it is the half
+    /// that says the empty rungs are really there. Measured off a payload with no
+    /// further windows in it at all, deliberately: that is the row that has to
+    /// hold the ladder open, and a row whose rungs appeared only when there was
+    /// something to put on them would pass every reservation case in this file and
+    /// still resize the panel.
+    ///
+    /// The step is measured between limits rather than against a total, so the
+    /// title line, the meter block and the trace cancel and what is left is one
+    /// rung.
+    ///
+    /// Two assertions, because the rung has two things to be right about: it is
+    /// the pitch `RowGeometry` reserved, and every rung is the same rung.
+    ///
+    /// Both take a point of tolerance and the point is measured rather than
+    /// waved at. A hosted view reports whole points, and a line of type rounds up
+    /// to them: at cozy/130% `lineBox(14.3)` is 17.3 and a drawn line is 18.0, so
+    /// the drawing runs 0.7pt a rung over the reservation — the same slack the
+    /// reservation has always taken against a caption, in the one direction that
+    /// cannot clip. What no tolerance covers, and what the case beside this one
+    /// asserts to the digit, is a rung that changes height according to whether
+    /// the fetch put anything on it.
+    @MainActor
+    func testTheLadderDrawsEveryRungItReserved() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("ladder-drawn")
+        let result = Result<UsageData, ProviderError>.success(
+            Self.reading(0.42, provider: provider, windows: 0)
+        )
+        for density in Self.densities {
+            for scale in Self.textScales {
+                appearance.density = density
+                appearance.textScale = scale
+                appearance.secondaryWindows = .expanded
+                let metrics = appearance.metrics
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+                let reserved = metrics.contentSpacing + Tokens.lineBox(metrics.detailSize)
+
+                appearance.secondaryWindowLimit = 1
+                let one = Self.drawnHeight(appearance: appearance, provider: provider, result: result)
+                appearance.secondaryWindowLimit = 6
+                let six = Self.drawnHeight(appearance: appearance, provider: provider, result: result)
+                // Off the widest span rather than off one step, because a hosted
+                // view reports a whole number of points: a 21.2pt rung shows as a
+                // 21pt step and a 22pt one, and five of them average back to what
+                // it actually is.
+                let rung = (six - one) / 5
+                XCTAssertEqual(
+                    rung, reserved, accuracy: 1.0,
+                    "\(at): a rung draws \(rung)pt where the row reserved \(reserved)pt"
+                )
+
+                for limit in 2...5 {
+                    appearance.secondaryWindowLimit = limit
+                    let deeper = Self.drawnHeight(
+                        appearance: appearance, provider: provider, result: result
+                    )
+                    XCTAssertEqual(
+                        deeper, one + CGFloat(limit - 1) * rung, accuracy: 1.0,
+                        "\(at): a ladder of \(limit) drew \(deeper)pt, off the line between "
+                        + "\(one)pt at one rung and \(six)pt at six"
+                    )
+                }
+            }
+        }
+    }
+
+    /// The other style pays nothing for the same setting. `.chips` folds the
+    /// further windows onto the caption line and `.hidden` drops them, so the
+    /// stepper — which is the ladder's depth under `.expanded` — must not reserve
+    /// a single point under either.
+    @MainActor
+    func testTheStepperCostsNoHeightWhereTheWindowsDoNotRideALine() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("ladder-other-styles")
+        let result = Result<UsageData, ProviderError>.success(
+            Self.reading(0.42, provider: provider, windows: 3)
+        )
+        for style in [AppearanceSettings.SecondaryWindowStyle.chips, .hidden] {
+            appearance.secondaryWindows = style
+            appearance.secondaryWindowLimit = 1
+            let shallow = Self.drawnHeight(appearance: appearance, provider: provider, result: result)
+            appearance.secondaryWindowLimit = 6
+            let deep = Self.drawnHeight(appearance: appearance, provider: provider, result: result)
+            XCTAssertEqual(
+                shallow, deep, accuracy: 0.5,
+                "\(style.rawValue): the stepper moved the row from \(shallow)pt to \(deep)pt"
+            )
+        }
+    }
+
+    // MARK: - The budget block
+
+    /// **A budgeted row is one height in every state, spend or no spend.**
+    ///
+    /// This is the third block on this row to be reserved from a setting after
+    /// being drawn from a payload, and it was the largest of the three. The
+    /// budget block is a `secondaryBarHeight` track and a `lineBox(detailSize)`
+    /// line joined at `captionGap`, and the row pays `contentSpacing` in front of
+    /// it — 6 + 3 + 3 + 14 = 26pt at cozy/100%, against the 19pt the pace block
+    /// cost and the 20pt a ladder rung costs. `MenuBarExtra` sizes its window to
+    /// its content, so a block that arrives with the first spend is the panel
+    /// resizing under the pointer.
+    ///
+    /// Four states rather than the usual three, and the fourth is the point. A
+    /// budgeted service passes through *waiting*, *failed*, *reporting with no
+    /// spend in the payload* and *reporting with one* — `BudgetPolicy` refuses the
+    /// comparison in the first three, so `ProviderRow.budget(for:)` has to hold
+    /// the block open in all of them. The two that were wrong when this case was
+    /// written were the ends of that list: `detailContent` drew nothing at all
+    /// while loading (the block simply was not called for), and drew a
+    /// `BudgetMeter` the moment a reading with a spend landed.
+    ///
+    /// `XCTAssertEqual` with no tolerance, exactly as the pace case uses: 26pt is
+    /// not a rounding argument at any density, and all four states draw the same
+    /// two children at the same sizes, so there is no line of type here that can
+    /// round differently between one state and the next.
+    ///
+    /// The premise is asserted first, twice over, for the reason the pace case
+    /// states: without it a store that silently stopped holding the budget would
+    /// leave four identical unbudgeted rows and a case that passes by measuring
+    /// nothing. So the budget must reach a status against the paid payload, and
+    /// must refuse one against the unpaid payload.
+    @MainActor
+    func testABudgetBlockArrivingCannotChangeARowsHeight() throws {
+        let provider = try Self.connectedProvider()
+        let budgets = BudgetStore(store: Self.scratchDefaults("budget-set"))
+        let budget = Budget(amountMinor: 10_000, currency: "USD")
+        budgets.setBudget(budget, for: provider.serviceID)
+        // Measured rather than estimated, so the block is the track and the line
+        // and nothing else: an estimate adds the "est." qualifier, which is width
+        // on a line that already exists and could not move a height either way.
+        let spend = SpendReport(
+            amountMinor: 4_200, currency: "USD", period: .month, confidence: .measured
+        )
+
+        // The premise, both halves of it.
+        XCTAssertNotNil(
+            BudgetPolicy.status(spend: spend, budget: budgets.budget(for: provider.serviceID)),
+            "the fixture stopped comparing a spend against a budget, so this case measures "
+            + "four rows that all draw an empty block"
+        )
+        XCTAssertNil(
+            BudgetPolicy.status(spend: nil, budget: budgets.budget(for: provider.serviceID)),
+            "a payload with no spend in it produced a budget status, so this case has no control"
+        )
+
+        let states: [(name: String, result: Result<UsageData, ProviderError>?)] = [
+            ("waiting", nil),
+            ("failed", .failure(.parse("the provider answered with something this parser could not read"))),
+            ("reporting, no spend", .success(Self.reading(0.42, provider: provider))),
+            ("reporting, spend", .success(Self.reading(0.42, provider: provider, spend: spend)))
+        ]
+
+        try sweep("budget-arriving") { appearance, at in
+            let heights = states.map { state in
+                (state.name, Self.drawnHeight(
+                    appearance: appearance,
+                    provider: provider,
+                    result: state.result,
+                    budgets: budgets
+                ))
+            }
+            let spread = (heights.map(\.1).max() ?? 0) - (heights.map(\.1).min() ?? 0)
+            XCTAssertEqual(
+                spread, 0,
+                "\(at): the row drew "
+                + heights.map { "\($0.0) \($0.1)pt" }.joined(separator: ", ")
+            )
+        }
+    }
+
+    /// And the block is really drawn, which is what makes the case above a claim
+    /// about a row rather than about a block nobody places.
+    ///
+    /// The same shape as `testTheLadderDrawsEveryRungItReserved`: a budget set on
+    /// the service makes the row taller by what `RowGeometry` reserves for it, and
+    /// the step is measured between two rows differing in nothing but the store,
+    /// so the title line, the meter block, the trace and the ladder all cancel.
+    ///
+    /// Measured off the *unpaid* payload, deliberately — that is the row that has
+    /// to hold the block open, and a block that appeared only when there was a
+    /// comparison to draw in it would pass the case above only by being absent
+    /// from all four of its states.
+    ///
+    /// A point of tolerance, and it is the same point the ladder case takes and
+    /// for the same measured reason: a hosted view reports whole points and a line
+    /// of type rounds up to them, so at cozy/130% `lineBox(14.3)` is 17.3 where a
+    /// drawn line is 18.0. The reservation runs under the drawing by that fraction
+    /// in the one direction that cannot clip.
+    @MainActor
+    func testTheRowDrawsTheBudgetBlockItReserved() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("budget-drawn")
+        let budgets = BudgetStore(store: Self.scratchDefaults("budget-drawn-set"))
+        budgets.setBudget(Budget(amountMinor: 10_000, currency: "USD"), for: provider.serviceID)
+        let result = Result<UsageData, ProviderError>.success(Self.reading(0.42, provider: provider))
+
+        for density in Self.densities {
+            for scale in Self.textScales {
+                appearance.density = density
+                appearance.textScale = scale
+                let metrics = appearance.metrics
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+                let reserved = metrics.contentSpacing
+                    + metrics.secondaryBarHeight
+                    + metrics.captionGap
+                    + Tokens.lineBox(metrics.detailSize)
+
+                let without = Self.drawnHeight(
+                    appearance: appearance, provider: provider, result: result
+                )
+                let with = Self.drawnHeight(
+                    appearance: appearance, provider: provider, result: result, budgets: budgets
+                )
+                XCTAssertEqual(
+                    with - without, reserved, accuracy: 1.0,
+                    "\(at): the budget block draws \(with - without)pt where the row reserved "
+                    + "\(reserved)pt"
+                )
+            }
+        }
+    }
+
     // MARK: - The chips fit the line they ride on
 
     /// The width contract, as arithmetic: **what the row reserves for the chips
@@ -480,12 +1028,75 @@ final class RowReservationTests: XCTestCase {
         ]
     }
 
+    /// - Parameter windows: how many further windows the service reported. The
+    ///   one part of a payload that used to reach the row's height, and the reason
+    ///   this parameter exists: a case that varies it is varying what came back in
+    ///   the fetch and nothing else. Defaulted to none, so every case written
+    ///   before the ladder keeps measuring the row it was written about.
+    /// - Parameter spend: the bill the payload carried, if any. The other part of
+    ///   a payload that used to reach the row's height, by the same route and for
+    ///   the same reason: a budget block drawn on `data.spend != nil` is a block
+    ///   whose presence the fetch decides. Defaulted to none for the same reason
+    ///   `windows` is.
     @MainActor
-    private static func reading(_ percent: Double, provider: AnyUsageProvider) -> UsageData {
+    private static func reading(
+        _ percent: Double,
+        provider: AnyUsageProvider,
+        windows: Int = 0,
+        spend: SpendReport? = nil
+    ) -> UsageData {
         UsageData(
             providerID: provider.id,
-            primary: UsageMetric(label: "5h", used: percent * 100, limit: 100, unit: "%")
+            primary: UsageMetric(label: "5h", used: percent * 100, limit: 100, unit: "%"),
+            // Distinct labels and distinct readings, because two windows sharing
+            // either would let a row draw one of them and drop the rest and still
+            // measure right — `ForEach` keyed on a repeated id is exactly that
+            // failure, and it is a failure a height case cannot see.
+            secondary: (0..<max(0, windows)).map { index in
+                UsageMetric(
+                    label: "Window \(index + 1)",
+                    used: Double(10 * (index + 1)),
+                    limit: 100,
+                    unit: "%"
+                )
+            },
+            spend: spend
         )
+    }
+
+    /// A trend store holding a ring the fit will answer for: five samples five
+    /// minutes apart, rising, the last of them landing on `now` so the answer is
+    /// not stale before it is read.
+    ///
+    /// Fed through `record`, which is what the refresh loop calls, rather than
+    /// assembled behind it. Every refusal the store makes — the 30s gap rule, the
+    /// six-hour trim, the staleness limit — therefore applies to this ring exactly
+    /// as it applies to a real one, so a fixture that stops producing a projection
+    /// is a fixture the app would also produce nothing for. `ForecastLineTests`
+    /// builds its rings the same way for the same reason.
+    @MainActor
+    private static func risingTrend(
+        for provider: AnyUsageProvider,
+        now: Date
+    ) throws -> UsageTrendStore {
+        let store = UsageTrendStore(store: scratchDefaults("pace-rising"), now: { now })
+        // 40% to 80% over twenty minutes: comfortably past the epsilon slope, and
+        // an arrival inside the twelve-hour horizon, which are the two refusals a
+        // rising ring can still hit.
+        for (index, percent) in [0.40, 0.50, 0.60, 0.70, 0.80].enumerated() {
+            let at = now.addingTimeInterval(-Double(4 - index) * 300)
+            store.record(
+                UsageData(
+                    providerID: provider.id,
+                    fetchedAt: at,
+                    primary: UsageMetric(
+                        label: "5h", used: percent * 100, limit: 100, unit: "%"
+                    )
+                ),
+                for: provider.id
+            )
+        }
+        return store
     }
 
     /// What `ProviderRow` reserves for this state, asked of the row itself.
@@ -513,19 +1124,30 @@ final class RowReservationTests: XCTestCase {
     /// it is handed a fresh one anyway. A trace is drawn into a fixed box either
     /// way, so an empty store is not weaker here: it is the state a first launch
     /// is in, which is the state the reserved slot has to be honest in.
+    /// - Parameter trend: the samples behind the row's pace claim. Empty by
+    ///   default, which is the state every case here but the pace ones wants; the
+    ///   pace cases hand in a loaded store and an empty one and compare the two
+    ///   rows, which is the only way to ask whether a projection can move a row.
+    /// - Parameter budgets: the user's caps. Empty by default for the reason
+    ///   above, and handed in by the two budget cases the same way the pace cases
+    ///   hand in a trend store — a budget is a setting, so the only way to ask
+    ///   whether the block it reserves is honest is to build two rows that differ
+    ///   in the store and nothing else.
     @MainActor
     private static func row(
         appearance: AppearanceSettings,
         provider: AnyUsageProvider,
-        result: Result<UsageData, ProviderError>?
+        result: Result<UsageData, ProviderError>?,
+        trend: UsageTrendStore? = nil,
+        budgets: BudgetStore? = nil
     ) -> ProviderRow {
         ProviderRow(
             provider: provider,
             result: result,
             onSignIn: {},
             appearance: appearance,
-            budgets: BudgetStore(store: scratchDefaults("budgets")),
-            trend: UsageTrendStore(store: scratchDefaults("trends")),
+            budgets: budgets ?? BudgetStore(store: scratchDefaults("budgets")),
+            trend: trend ?? UsageTrendStore(store: scratchDefaults("trends")),
             sparklines: RowSparklineStore()
         )
     }
@@ -558,9 +1180,17 @@ final class RowReservationTests: XCTestCase {
     private static func drawnHeight(
         appearance: AppearanceSettings,
         provider: AnyUsageProvider,
-        result: Result<UsageData, ProviderError>?
+        result: Result<UsageData, ProviderError>?,
+        trend: UsageTrendStore? = nil,
+        budgets: BudgetStore? = nil
     ) -> CGFloat {
-        let hosted = row(appearance: appearance, provider: provider, result: result)
+        let hosted = row(
+            appearance: appearance,
+            provider: provider,
+            result: result,
+            trend: trend,
+            budgets: budgets
+        )
             .frame(width: CGFloat(appearance.panelWidth))
         let host = NSHostingView(rootView: AnyView(hosted))
         host.layoutSubtreeIfNeeded()

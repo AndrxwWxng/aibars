@@ -227,13 +227,19 @@ public struct BrandMark {
     /// out before the ceiling does.
     ///
     /// The ceiling is also chosen against the alarms, which are the only other
-    /// chroma in the application: `Ink.attention` is OKLCh C **0.0965** light and
-    /// 0.1506 dark, `Ink.alarm` C 0.1414 light and 0.1069 dark. The binding case
+    /// chroma in the application: `Ink.attention` is OKLCh C **0.1131** light and
+    /// 0.1408 dark, `Ink.alarm` C 0.1595 light and 0.1600 dark. The binding case
     /// is the light amber, the quietest thing in the app that means "act", and
-    /// 0.070 is **0.725×** it — 0.465× the dark amber, 0.495× the light red,
-    /// 0.655× the dark red. The loudest derived value, 0.0705, is 0.730× the
+    /// 0.070 is **0.619×** it — 0.497× the dark amber, 0.439× the light red,
+    /// 0.437× the dark red. The loudest derived value, 0.0705, is 0.623× the
     /// light amber. A brand mark cannot out-shout an alarm because it is not
-    /// permitted three quarters of its saturation.
+    /// permitted five eighths of its saturation.
+    ///
+    /// Those ratios all fell when the alarm ramp was re-cut to rank in chroma —
+    /// the binding one from 0.725× to 0.619× — because every stop but the dark
+    /// amber gained chroma and the dark amber gave up only 7%. The ceiling itself
+    /// did not move and did not need to: it is stated against the *quietest*
+    /// alarm, and the quietest alarm got louder.
     ///
     /// Resolved rather than dynamic, for the reason `brandInk(dark:)` is: the
     /// strip is rasterised through `ImageRenderer`, which draws in the light

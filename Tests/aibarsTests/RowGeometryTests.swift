@@ -35,9 +35,14 @@ final class RowGeometryTests: XCTestCase {
     /// The panel builds one of these per row out of the settings it is drawing
     /// under. Spelled here so a test says which *setting* it is varying rather
     /// than which of seven arguments.
+    ///
+    /// `secondaryLines` defaults to none, so every case written before the ladder
+    /// existed keeps measuring the row it was written about, and a case that
+    /// varies the ladder says so at its call site.
     @MainActor
     private func geometry(
         _ appearance: AppearanceSettings,
+        secondaryLines: Int = 0,
         lines: RowGeometry.Lines
     ) -> RowGeometry {
         RowGeometry(
@@ -47,6 +52,7 @@ final class RowGeometryTests: XCTestCase {
             logoStyle: appearance.logoStyle,
             logoSize: CGFloat(appearance.logoSize),
             panelWidth: CGFloat(appearance.panelWidth),
+            secondaryLines: secondaryLines,
             lines: lines
         )
     }
@@ -102,9 +108,18 @@ final class RowGeometryTests: XCTestCase {
 
     // MARK: - The height ladder
 
-    /// The shipped configuration, drawing everything a row can draw.
+    /// The shipped configuration, drawing every block a row can put under its
+    /// title.
+    ///
+    /// It was `[.meter, .window, .forecast]` and came to 85pt: 18 title + 6 + 5
+    /// bar + 3 + 14 window + 6 + 13 pace + 20 padding. `.forecast` is deleted, so
+    /// the third block of a row that draws everything is the trace, and the same
+    /// row is 90. What the case protects is unchanged and is the reason it is
+    /// still here: **the tallest row's total is the sum of the terms it is built
+    /// from**, written twice so that neither a new total nor a gap renamed into a
+    /// different gap of the same value can pass quietly.
     @MainActor
-    func testCozyBarFiveWithMeterWindowAndForecast() {
+    func testCozyBarFiveWithMeterWindowAndTrace() {
         let appearance = settings("cozy-full")
         appearance.density = .cozy
         appearance.textScale = 1.0
@@ -118,35 +133,54 @@ final class RowGeometryTests: XCTestCase {
             + metrics.captionGap
             + Tokens.lineBox(metrics.detailSize)
             + metrics.contentSpacing
-            + Tokens.lineBox(metrics.captionSize)
+            + metrics.sparklineHeight
             + 2 * metrics.rowVerticalPadding
 
-        let row = geometry(appearance, lines: [.meter, .window, .forecast])
+        let row = geometry(appearance, lines: [.meter, .window, .sparkline])
         XCTAssertEqual(row.height, expected, "the height stopped matching the terms it is built from")
         // 18 title + 6 spacing + 5 bar + 3 caption gap + 14 window
-        //    + 6 spacing + 13 forecast + 20 padding.
-        XCTAssertEqual(row.height, 85, "the shipped three-line row is \(row.height)pt, not 85")
+        //    + 6 spacing + 18 trace + 20 padding.
+        XCTAssertEqual(row.height, 90, "the shipped three-block row is \(row.height)pt, not 90")
     }
 
-    /// Dropping the pace line drops it and the pitch that separated it, and
+    /// Dropping a line drops its own block and the gap that attached it, and
     /// nothing else.
+    ///
+    /// The case was written about the pace line, which hung off the foot of the
+    /// stack at `contentSpacing + lineBox(captionSize)`. That block no longer
+    /// exists in any arrangement — the pace is a run on the caption line, which is
+    /// one `lineBox` whatever is written on it — so the premise it was stated
+    /// against died with `Lines.forecast`. The property did not, and it is
+    /// asserted here about the line that still has a block of its own: the window
+    /// line, whose attachment is `captionGap` and not `contentSpacing`, because a
+    /// caption belongs to the meter above it rather than standing beside it.
+    ///
+    /// That makes it the *stronger* subject of the two. The pace block was
+    /// attached by the stack's own spacing, so a case about it could not tell
+    /// `contentSpacing` from `captionGap`; this one fails if the joint is ever
+    /// paid twice, or paid by the wrong token, or kept by a meter with nothing
+    /// under it. The two-line row is still 66pt, which is the number the old case
+    /// ended on.
     @MainActor
-    func testDroppingTheForecastDropsExactlyItsOwnBlock() {
-        let appearance = settings("cozy-no-forecast")
+    func testDroppingTheWindowLineDropsItAndTheJointThatHeldIt() {
+        let appearance = settings("cozy-no-window")
         appearance.density = .cozy
         appearance.textScale = 1.0
         appearance.meterThickness = 5
         let metrics = appearance.metrics
 
-        let full = geometry(appearance, lines: [.meter, .window, .forecast])
-        let row = geometry(appearance, lines: [.meter, .window])
+        let full = geometry(appearance, lines: [.meter, .window])
+        let row = geometry(appearance, lines: [.meter])
 
+        XCTAssertEqual(full.height, 66, "the two-line row is \(full.height)pt, not 66")
         XCTAssertEqual(
             row.height,
-            full.height - metrics.contentSpacing - Tokens.lineBox(metrics.captionSize),
-            "dropping the forecast moved something other than the forecast"
+            full.height - metrics.captionGap - Tokens.lineBox(metrics.detailSize),
+            "dropping the window line moved something other than the window line"
         )
-        XCTAssertEqual(row.height, 66, "the two-line row is \(row.height)pt, not 66")
+        // 18 title + 6 spacing + 5 bar + 20 padding, and the 3pt joint gone with
+        // the line it joined.
+        XCTAssertEqual(row.height, 49, "the meter-only row is \(row.height)pt, not 49")
     }
 
     /// Dropping the countdown as well takes the caption gap with it: the gap
@@ -267,25 +301,33 @@ final class RowGeometryTests: XCTestCase {
         }
     }
 
-    /// And it composes: adding it to a row that already carries a pace line costs
-    /// the same block. If the trace ever borrowed the forecast's pitch — or the
-    /// forecast the trace's — this is where that shows.
+    /// And it composes: adding it to a row that already carries further-window
+    /// lines costs the same block. If the trace ever borrowed the ladder's pitch —
+    /// or the ladder the trace's — this is where that shows.
+    ///
+    /// The case was written against `.forecast`, which was the other thing that
+    /// could stand between the meter block and the foot of the row. The ladder is
+    /// what stands there now, and it is the better subject for the same case: it
+    /// is a *count* of blocks rather than one bit, so a pitch paid once for the
+    /// group instead of once per line fails here too, where against a single pace
+    /// block the two were indistinguishable.
     @MainActor
-    func testTheTraceCostsTheSameBesideAPaceLine() {
+    func testTheTraceCostsTheSameBesideALadderOfFurtherWindows() {
         let appearance = settings("sparkline-composes")
         appearance.density = .cozy
         appearance.textScale = 1.0
         let metrics = appearance.metrics
 
-        let paced = geometry(appearance, lines: [.meter, .window, .forecast])
-        let both = geometry(appearance, lines: [.meter, .window, .forecast, .sparkline])
+        let laddered = geometry(appearance, secondaryLines: 2, lines: [.meter, .window])
+        let both = geometry(appearance, secondaryLines: 2, lines: [.meter, .window, .sparkline])
         XCTAssertEqual(
-            both.height - paced.height,
+            both.height - laddered.height,
             metrics.contentSpacing + metrics.sparklineHeight
         )
-        // The shipped three-line row is 85pt; 6 of pitch and an 18pt trace make
-        // it 109.
-        XCTAssertEqual(both.height, 109, "the four-block row is \(both.height)pt, not 109")
+        // The two-line row is 66pt; two further windows at 6 of pitch and a 14pt
+        // line each make it 106, and 6 of pitch and an 18pt trace make it 130.
+        XCTAssertEqual(laddered.height, 106, "the laddered row is \(laddered.height)pt, not 106")
+        XCTAssertEqual(both.height, 130, "the traced laddered row is \(both.height)pt, not 130")
     }
 
     /// The trace on a row with nothing else under its title: the ring meter takes
@@ -364,6 +406,100 @@ final class RowGeometryTests: XCTestCase {
         XCTAssertEqual(handBuilt(detailSize: 0).sparklineHeight, 12)
     }
 
+    // MARK: - The further windows
+
+    /// **What a further-window line costs, at every density and both ends of the
+    /// text slider.** One line and the pitch in front of it, once per line, and
+    /// nothing else.
+    ///
+    /// This is the reservation the panel did not have. Under
+    /// `secondaryWindows == .expanded` the row drew one line per window the fetch
+    /// came back with and reserved none of them, so a service that answered with
+    /// three grew its row by 3 × (6 + 14) = 60pt at cozy/100% while the panel was
+    /// open — and the **Dashboard** preset ships that style with a limit of six.
+    /// The count is a setting now, held open whatever the answer turns out to
+    /// contain, and this is the arithmetic behind it.
+    ///
+    /// Swept rather than spot-checked for the reason the trace's own case gives:
+    /// both terms move with density and with text scale, so a term written against
+    /// one density can be right there and wrong at the other two. `detailSize` and
+    /// not `captionSize`, because every one of these lines is a
+    /// `MetricCaption(isSecondary: true)` or a `SecondaryValue` and both hold
+    /// themselves at `lineBox(detailSize)`.
+    @MainActor
+    func testEachFurtherWindowCostsOneLineAndThePitchInFrontOfIt() {
+        let appearance = settings("secondary-cost")
+        for density in AppearanceSettings.Density.allCases {
+            for scale in [0.85, 1.0, 1.30] {
+                appearance.density = density
+                appearance.textScale = scale
+                let metrics = appearance.metrics
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+                let line = metrics.contentSpacing + Tokens.lineBox(metrics.detailSize)
+                let none = geometry(appearance, lines: [.meter, .window])
+
+                // The four counts the panel can actually be in: a service with no
+                // further windows, one, the common several, and the stepper's own
+                // ceiling.
+                for count in [0, 1, 3, RowGeometry.secondaryLineCeiling] {
+                    let row = geometry(appearance, secondaryLines: count, lines: [.meter, .window])
+                    XCTAssertEqual(
+                        row.height - none.height, CGFloat(count) * line,
+                        accuracy: 1e-9,
+                        "\(at): \(count) further windows cost \(row.height - none.height)pt"
+                    )
+                }
+            }
+        }
+    }
+
+    /// The ceiling, which is what stops a number reaching a frame height.
+    ///
+    /// `secondaryLines` is an `Int` on a public initialiser, so what protects the
+    /// row is this clamp and not the stepper's `1...6`: `RowGeometry` is
+    /// constructed by `ProviderRow`, by the Appearance pane's preview and by this
+    /// suite, and a caller that worked its count out from a payload rather than
+    /// from the settings would hand it whatever the payload had in it. Twenty
+    /// lines of arithmetic is a 400pt row; `Int.max` is a frame no layout survives.
+    @MainActor
+    func testTheLadderIsClampedAtBothEnds() {
+        let appearance = settings("secondary-ceiling")
+        let ceiling = geometry(
+            appearance, secondaryLines: RowGeometry.secondaryLineCeiling, lines: [.meter, .window]
+        )
+        for absurd in [RowGeometry.secondaryLineCeiling + 1, 20, 10_000, Int.max] {
+            XCTAssertEqual(
+                geometry(appearance, secondaryLines: absurd, lines: [.meter, .window]), ceiling,
+                "\(absurd) further windows measured past the ceiling"
+            )
+        }
+
+        let none = geometry(appearance, lines: [.meter, .window])
+        for absurd in [-1, -10_000, Int.min] {
+            XCTAssertEqual(
+                geometry(appearance, secondaryLines: absurd, lines: [.meter, .window]), none,
+                "\(absurd) further windows measured as something other than none"
+            )
+        }
+    }
+
+    /// And the ladder is height and only height. The rails are the panel's column
+    /// rather than the row's, so a row holding six further windows hands the same
+    /// figure column to the row beside it holding none — which is what keeps a
+    /// Dashboard panel one column of numbers instead of one per service.
+    @MainActor
+    func testTheLadderDoesNotTouchTheRailsOrTheColumns() {
+        let appearance = settings("secondary-rails")
+        let reference = geometry(appearance, lines: [.meter, .window])
+        for count in 0...RowGeometry.secondaryLineCeiling {
+            let row = geometry(appearance, secondaryLines: count, lines: [.meter, .window])
+            XCTAssertEqual(row.headlineRail, reference.headlineRail, "\(count) windows moved the headline rail")
+            XCTAssertEqual(row.secondaryRail, reference.secondaryRail, "\(count) windows moved the secondary rail")
+            XCTAssertEqual(row.leadingWidth, reference.leadingWidth, "\(count) windows moved the leading column")
+            XCTAssertEqual(row.textColumnWidth, reference.textColumnWidth, "\(count) windows moved the text column")
+        }
+    }
+
     // MARK: - Content independence
 
     /// The invariant the whole type exists for, stated as a type-level fact:
@@ -381,11 +517,19 @@ final class RowGeometryTests: XCTestCase {
             one.apply(preset)
             other.apply(preset)
             for lines in Self.allLineSets {
-                XCTAssertEqual(
-                    geometry(one, lines: lines),
-                    geometry(other, lines: lines),
-                    "\(preset.id) measured two identical rows differently at \(lines.rawValue)"
-                )
+                // The ladder is swept with the line sets rather than left at
+                // none, because it is the newest input and the only one that is a
+                // number: a term that read a global — the count of windows the
+                // last fetch happened to carry, say — would be equal here at zero
+                // and unequal at six.
+                for secondaryLines in [0, 1, RowGeometry.secondaryLineCeiling] {
+                    XCTAssertEqual(
+                        geometry(one, secondaryLines: secondaryLines, lines: lines),
+                        geometry(other, secondaryLines: secondaryLines, lines: lines),
+                        "\(preset.id) measured two identical rows differently at "
+                        + "\(lines.rawValue) and \(secondaryLines) further windows"
+                    )
+                }
             }
         }
     }
@@ -393,21 +537,41 @@ final class RowGeometryTests: XCTestCase {
     /// The other half of that: a line that is drawn has to cost something, or
     /// "the height is a function of the lines" is true only because the height
     /// ignores them.
+    ///
+    /// `.forecast` was in the list and is gone from it, and the last assertion —
+    /// that a row with the pace line is taller than the same row without it — went
+    /// with it, because that is now precisely the thing that must *not* be true:
+    /// a pace arriving may not move a row by a point. It is asserted in that
+    /// direction, by measurement, in
+    /// `RowReservationTests.testAPaceArrivingCannotChangeARowsHeight`.
+    ///
+    /// What replaces it here is the assertion the ladder created and the pace
+    /// block could never have supported: the further windows are a *count*, so
+    /// "one of them costs something" is the weak half of it and "every one of them
+    /// costs another block, all the way to the ceiling" is the whole of it.
     @MainActor
     func testEachLineTheRowDrawsCostsHeight() {
         let appearance = settings("lines-cost")
         appearance.logoStyle = .hidden
         let bare = geometry(appearance, lines: [])
-        for lines in [RowGeometry.Lines.meter, .window, .forecast, .sparkline] {
+        // `.budget` joins the list with the block it names. It is the one line
+        // here whose *drawing* is two things — a track and a figure under it — so
+        // a term that reserved only one of them would still pass this and be
+        // caught by `testTheRowDrawsTheBudgetBlockItReserved`, which measures the
+        // step against the arithmetic rather than against zero.
+        for lines in [RowGeometry.Lines.meter, .window, .sparkline, .budget] {
             XCTAssertGreaterThan(
                 geometry(appearance, lines: lines).height, bare.height,
                 "drawing \(lines.rawValue) cost the row nothing"
             )
         }
-        XCTAssertGreaterThan(
-            geometry(appearance, lines: [.meter, .window, .forecast]).height,
-            geometry(appearance, lines: [.meter, .window]).height
-        )
+        for count in 0..<RowGeometry.secondaryLineCeiling {
+            XCTAssertGreaterThan(
+                geometry(appearance, secondaryLines: count + 1, lines: [.meter, .window]).height,
+                geometry(appearance, secondaryLines: count, lines: [.meter, .window]).height,
+                "further window \(count + 1) cost the row nothing"
+            )
+        }
     }
 
     /// A row still loading draws its meter slot and puts "Loading…" in the
@@ -558,7 +722,16 @@ final class RowGeometryTests: XCTestCase {
         appearance.panelWidth = 300
         appearance.meterStyle = .ring
 
-        let row = geometry(appearance, lines: [.meter, .window, .forecast])
+        // Every block a row can draw, and the deepest ladder it can hold: the
+        // width is not a function of any of them — `testTheRailsDoNotDependOnWhich
+        // LinesARowDraws` is what says so — and naming the whole row here is what
+        // makes this case a statement about the narrowest panel rather than about
+        // one arrangement of it.
+        let row = geometry(
+            appearance,
+            secondaryLines: RowGeometry.secondaryLineCeiling,
+            lines: [.meter, .window, .sparkline]
+        )
         XCTAssertGreaterThan(row.textColumnWidth, 0, "the widest leading column swallowed the panel")
         // And not merely positive: a name and its figure share this line.
         XCTAssertGreaterThan(
@@ -584,13 +757,13 @@ final class RowGeometryTests: XCTestCase {
         }
     }
 
-    /// A comfortable row with all three lines is far past the clamp, so it draws
+    /// A comfortable row with all three blocks is far past the clamp, so it draws
     /// the full radius.
     @MainActor
     func testATallRowTakesTheFullRadius() {
         let appearance = settings("radius-tall")
         appearance.density = .comfortable
-        let row = geometry(appearance, lines: [.meter, .window, .forecast])
+        let row = geometry(appearance, lines: [.meter, .window, .sparkline])
         XCTAssertGreaterThan(row.height, 3 * Tokens.Radius.row)
         XCTAssertEqual(row.cardRadius, Tokens.Radius.row)
     }
@@ -884,7 +1057,12 @@ final class RowGeometryTests: XCTestCase {
                     logoStyle: .tile,
                     logoSize: value,
                     panelWidth: value,
-                    lines: [.meter, .window, .forecast]
+                    // The deepest ladder as well, so a poisoned length is
+                    // multiplied by six rather than added once: `secondaryHeight`
+                    // is the one term in the sum with a factor in front of it, and
+                    // a NaN there is a NaN six times over.
+                    secondaryLines: RowGeometry.secondaryLineCeiling,
+                    lines: [.meter, .window, .sparkline]
                 )
                 XCTAssertTrue(row.height.isFinite, "\(value) as a length gave a \(row.height)pt row")
                 XCTAssertGreaterThan(row.height, 0)
@@ -949,11 +1127,27 @@ final class RowGeometryTests: XCTestCase {
             geometry(appearance, lines: [.meter])
         )
         // Every bit set is every line the row knows how to draw, and no more.
-        // Four of them since the trace joined: a fifth bit added without a term
-        // in the sum fails here rather than costing a row height nobody reserved.
+        // **Four** of them since the budget block was reserved: the pace stopped
+        // being a bit and the budget became one, so this is a strictly wider
+        // assertion than the three-bit form it replaces rather than the same one
+        // renumbered. It did its job on the way through — the budget bit was added
+        // with its term in the sum and this case still named three, and it failed
+        // on 116pt against 90 rather than letting a fifth bit be added later with
+        // no term at all.
         XCTAssertEqual(
             geometry(appearance, lines: RowGeometry.Lines(rawValue: ~0)),
-            geometry(appearance, lines: [.meter, .window, .forecast, .sparkline])
+            geometry(appearance, lines: [.meter, .window, .sparkline, .budget])
+        )
+        // Bit 2 in particular, which is the one bit that used to mean something
+        // and does not any more. It named the pace block; it is retired rather
+        // than reused, so a `Lines(rawValue: 4)` surviving in an old call site — or
+        // in a `rawValue` somebody wrote down — means nothing, where reusing the
+        // bit for the trace would have made it silently mean the trace. This
+        // assertion is only possible because the bit was retired, and it is here
+        // so that reusing it later fails a test rather than passing one.
+        XCTAssertEqual(
+            geometry(appearance, lines: RowGeometry.Lines(rawValue: 1 << 2)),
+            geometry(appearance, lines: [])
         )
     }
 
@@ -970,7 +1164,10 @@ final class RowGeometryTests: XCTestCase {
             "aibars.appearance.logoSize": "enormous",
             "aibars.appearance.textScale": 47.0,
             "aibars.appearance.meterThickness": Double.nan,
-            "aibars.appearance.meterStyle": "dial"
+            "aibars.appearance.meterStyle": "dial",
+            // Twenty further-window lines is 400pt of row at cozy/100%, which is
+            // the whole panel. No stepper can write it and a text editor can.
+            "aibars.appearance.secondaryWindowLimit": 20
         ])
         // Unreadable cases fall back to their defaults rather than to whichever
         // case happens to be first.
@@ -981,8 +1178,20 @@ final class RowGeometryTests: XCTestCase {
         // which is exactly why RowGeometry guards it rather than trusting it.
         XCTAssertEqual(appearance.textScale, 1.30)
         XCTAssertTrue(appearance.metrics.barHeight.isNaN)
+        // The ladder's count is pulled in by the same pass, before any row reads
+        // it — `normalize()` runs at the end of `AppearanceSettings.init` and
+        // clamps this to the stepper's own `1...6`. So the ceiling inside
+        // `RowGeometry` is a *second* line of defence rather than the only one,
+        // and it is the line that covers a caller who did not come through the
+        // settings at all: the parameter is a bare `Int` on a public initialiser.
+        // `testTheLadderIsClampedAtBothEnds` is where that half is asserted.
+        XCTAssertEqual(appearance.secondaryWindowLimit, 6, "a stored 20 reached a row's ladder")
 
-        let row = geometry(appearance, lines: [.meter, .window, .forecast])
+        let row = geometry(
+            appearance,
+            secondaryLines: appearance.secondaryWindowLimit,
+            lines: [.meter, .window, .sparkline]
+        )
         XCTAssertTrue(row.height.isFinite, "a stored NaN reached the row's height")
         XCTAssertGreaterThan(row.height, 0)
         XCTAssertTrue(row.textColumnWidth.isFinite)
@@ -1016,16 +1225,34 @@ final class RowGeometryTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// All eight combinations of the three lines. Every case that sweeps has to
+    /// All sixteen combinations of the four lines. Every case that sweeps has to
     /// sweep the same set, or two of them disagree about what was covered.
+    ///
+    /// The list has been wrong twice now and in the same direction both times,
+    /// which is why it is spelled out in full rather than derived. It used to be
+    /// eight combinations of the meter, the window line and the pace, and the
+    /// trace — added later — was in none of them; then eight of the meter, the
+    /// window line and the trace, and the budget block — added later — was in
+    /// none of them. Both times the newest reservation was the one no sweeping
+    /// case touched, which is the "reads as coverage" failure the whole model is
+    /// written against. Sixteen is every bit `RowGeometry.Lines` defines, and
+    /// `testUnknownLineBitsDrawNothing` is what pins that count to the type.
     private static let allLineSets: [RowGeometry.Lines] = [
         [],
         [.meter],
         [.window],
-        [.forecast],
+        [.sparkline],
+        [.budget],
         [.meter, .window],
-        [.meter, .forecast],
-        [.window, .forecast],
-        [.meter, .window, .forecast]
+        [.meter, .sparkline],
+        [.meter, .budget],
+        [.window, .sparkline],
+        [.window, .budget],
+        [.sparkline, .budget],
+        [.meter, .window, .sparkline],
+        [.meter, .window, .budget],
+        [.meter, .sparkline, .budget],
+        [.window, .sparkline, .budget],
+        [.meter, .window, .sparkline, .budget]
     ]
 }

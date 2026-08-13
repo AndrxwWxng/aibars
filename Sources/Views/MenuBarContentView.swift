@@ -29,14 +29,37 @@ public struct MenuBarContentView: View {
         showSettings: Binding<Bool>,
         appearance: AppearanceSettings,
         keyboard: PanelKeyboardState = .resting,
-        restingListHeight: CGFloat? = nil
+        restingListHeight: CGFloat? = nil,
+        budgets: BudgetStore? = nil,
+        trend: UsageTrendStore? = nil
     ) {
         self._state = ObservedObject(wrappedValue: state)
         self._appearance = ObservedObject(wrappedValue: appearance)
         self._showSettings = showSettings
         self._keyboard = State(initialValue: keyboard)
         self._restingListHeight = State(initialValue: restingListHeight)
+        self.budgets = budgets
+        self.trend = trend
     }
+
+    /// The two stores a row draws from that the panel does not own.
+    ///
+    /// Nil is the app: `ProviderRow` falls back to `BudgetStore.shared` and
+    /// `UsageTrendStore.shared`, which is what it did before these existed and
+    /// what every call site but one still passes. Held and handed down rather
+    /// than left to the row so that a panel can be built with stores of its own,
+    /// and the one caller that needs it is the reason it is here.
+    ///
+    /// `ZZPanelSnapshot` renders the whole panel — that is the point of it, since
+    /// the defects it exists to show are content escaping the panel's frame and
+    /// rows changing height inside it — and it must not write to the developer's
+    /// own defaults to do it. Without these, two states the app draws constantly
+    /// could not appear in a review render at all: the pace claim, which needs
+    /// half an hour of samples behind it, and the budget meter, which needs a
+    /// budget set. The fixture was blind to both, which is how a pace *block* that
+    /// resized the panel survived two releases of being looked at.
+    private let budgets: BudgetStore?
+    private let trend: UsageTrendStore?
 
     /// The panel is drawn over the desktop, so its ground is a material and the
     /// scrim over it has to know which appearance it is resolving against.
@@ -576,7 +599,11 @@ public struct MenuBarContentView: View {
             onRefresh: { Task { await state.refresh(provider.id) } },
             isRefreshing: state.refreshingRows.contains(provider.id),
             appearance: appearance,
-            isSelected: keyboard.selection == provider.id
+            isSelected: keyboard.selection == provider.id,
+            // Nil in the app, where the row reaches for the shared stores itself.
+            // See the properties for the one caller that hands them in.
+            budgets: budgets,
+            trend: trend
         )
     }
 

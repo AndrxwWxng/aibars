@@ -324,9 +324,13 @@ public struct AppMark: View {
 /// second file's opinion about a colour the first file also holds. That is the
 /// lesson amber taught twice: `0xB45309` and then `0xF5A623` were both "the
 /// ramp's amber" written out beside `Ink.attention`, and both times one of the
-/// two got re-cut for contrast and the other did not. Every stop clears 4.5:1 on
-/// the worst plane in the panel — the pressed row card over the hardest
-/// wallpaper — at 4.80/4.81 resting, 4.90/4.53 amber, 6.92/6.34 red.
+/// two got re-cut for contrast and the other did not. Every stop that is also a
+/// figure clears 4.5:1 on the worst plane in the panel — the pressed row card
+/// over the hardest wallpaper — at 4.60/6.39 amber and 6.59/4.68 red, and every
+/// stop including resting clears 3:1 on the track it is drawn on. Resting is 2.93
+/// and 2.84 on that plane and is exempt by measurement rather than by omission:
+/// `UsageRampContrastTests.testTheRestingStopIsNeverText` proves nothing in the
+/// app draws it as type.
 ///
 /// The boundaries are settings (`cautionThreshold`, `warningThreshold`); only
 /// the palette lives here, so there is one place to read the ramp off. The
@@ -371,10 +375,13 @@ public enum UsageTint {
         //
         // `Tokens.Meter.fill`, and it was `Ink.muted` for one pass. Folding the
         // two together deleted a duplicate hex and, with it, the only greyscale
-        // step this boundary had: measured on the shipped render, resting muted
-        // L* 67.61 against amber's 65.73 is 1.062:1 in dark and 1.020:1 in light,
-        // so a resting bar and a caution bar were the same grey once the hue was
-        // taken away. The near-cap contract in `ProviderRow` promises three
+        // step this boundary had: measured on the render of the day, resting muted
+        // L* 67.61 against the amber of the day at 65.73 was 1.062:1 in dark and
+        // 1.020:1 in light, so a resting bar and a caution bar were the same grey
+        // once the hue was taken away. Both stops have moved since — the gap is
+        // 25.03 L* in dark and 12.24 in light now — so those are the figures that
+        // made the case rather than the ones that hold. The near-cap contract in
+        // `ProviderRow` promises three
         // channels that survive greyscale; a ramp whose first boundary survives
         // only in hue is the same promise broken one boundary earlier.
         //
@@ -411,9 +418,16 @@ public enum UsageTint {
         // red have to be told apart in a greyscale screenshot and by a
         // deuteranope, and 0xB92126 sat 1.8 L* from the light amber and
         // 0xFF6B6E 2.9 L* from the dark one — the same weight in two hues.
-        // `Ink.alarm` is always the stop *further* from the ground: L* 26.53
-        // against amber's 36.02 in light, 76.65 against 65.73 in dark, so the
-        // gaps are 9.49 and 10.92 and "worse than amber" survives the hue going.
+        // `Ink.alarm` is always the *darker* of the two, in both appearances:
+        // L* 27.93 against amber's 37.76 in light, 66.76 against 76.92 in dark,
+        // so the gaps are 9.83 and 10.16 and "which alarm is this" survives the
+        // hue going. That rule used to read "further from the ground", which
+        // means darker in light and lighter in dark — see `Ink.alarm`, where the
+        // second half of it is what cost the dark red its chroma.
+        //
+        // Which of the two is *worse* is not carried by lightness at all and is
+        // not this line's job: it is chroma, and it ranks up the ramp in both
+        // appearances. `UsageRampContrastTests` holds both properties.
         default:      return Tokens.Ink.alarm                                  // red
         }
     }

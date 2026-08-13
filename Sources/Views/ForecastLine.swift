@@ -13,93 +13,91 @@ import SwiftUI
 //
 // The samples, the fit, the refusals and every word of the copy stay there —
 // including whether this is a warning or a note, which the sentence says in
-// words rather than in colour. This decides where the line is drawn, in what
-// type, and whether it is drawn at all.
+// words rather than in colour. This decides how the claim is set and whether it
+// is drawn at all; `ProviderRow` decides where it goes.
 // ---------------------------------------------------------------------------
 
-/// One caption under a row's meter saying where the current pace is heading.
+/// The pace claim — "on pace to cap in 40m" — as a run on the row's caption
+/// line.
 ///
-/// Only ever draws when there is something honest to say. No samples yet, a
-/// service that isn't being spent, a cap further out than half an hour of
-/// samples can claim, or the setting switched off all produce an `EmptyView`
-/// with no height reserved behind it.
+/// It was a block: a fourth child of the row's detail stack, under the meter and
+/// over the further windows. That is the defect this pass closed, and it is worth
+/// stating in full because the shape of it is the shape of every height bug this
+/// panel has had. `RowGeometry` knew how to reserve the block — `Lines.forecast`,
+/// correct arithmetic, fifteen assertion sites behind it — and **nothing ever
+/// inserted it**. So a row drew the block unreserved, and the first time half an hour of
+/// samples supported a claim that row grew `contentSpacing + lineBox(captionSize)`
+/// — 19pt at cozy/100%, roughly 171pt down a full panel — while the panel was
+/// open. `MenuBarExtra` sizes its window to its content, so that is the window
+/// resizing under the pointer.
 ///
-/// That is the opposite of how the rest of the row treats a line that comes and
-/// goes — `RowActions` holds its space precisely so the panel cannot resize
-/// under the pointer, because `MenuBarExtra` sizes its window to the content.
-/// Reserving space here would be worse than useless:
-/// most rows have no pace to report at all, so every row in the panel would
-/// carry a blank line for the sake of the one that does. The resize is avoided
-/// from the other end instead — the caller places this inside the detail
-/// `VStack`, which already varies in height from one row to the next, and the
-/// line is only ever added to a row being drawn fresh rather than switched on
-/// under a panel that is already open.
+/// Two ways out, and reserving was the wrong one. Holding a 19pt slot on every
+/// row buys space for a line that is absent on nearly all of them: a fit needs
+/// three samples five minutes apart, a rising slope, and an arrival inside twelve
+/// hours, so a freshly launched panel has a projection for exactly nothing and
+/// still pays the full 171pt. Folding costs nothing and cannot cost anything —
+/// the caption is one `lineBox` whatever is on it, which is the same property
+/// that already lets the chips, the spend and the countdown come and go on that
+/// line without moving a row.
 ///
-/// So the height contract has two halves, and both are needed for the row to be
-/// measurable ahead of its content. Absent, the line costs nothing. Present, it
-/// is held at `Tokens.lineBox(captionSize)` — the same box every other
-/// single-line detail in the row is floored at — so the pace changing its
-/// wording, or a countdown stepping from "1h 20m" to "59m", cannot move the row
-/// underneath it. That is exactly the figure `RowGeometry` reserves for
-/// `Lines.forecast`, and `text` below is how a caller decides whether to put
-/// `.forecast` in the set: a non-nil sentence and a drawn line are the same
-/// condition, asked once.
+/// So the claim now rides at the tail of the sentence the caption already draws:
+/// `5h session · resets in 1h 19m · on pace to cap in 40m`. Three consequences,
+/// all of them wanted:
+///
+///   - **It cannot move a row.** Not "does not today": the run is one `Text` at
+///     `lineLimit(1)` inside a line held at `Tokens.lineBox(detailSize)`, and it
+///     is set a size *under* that line, so there is no arrangement of words in
+///     which it is the tallest thing on the row.
+///   - **It is dropped for width before anything else.** `MetricCaption` offers
+///     it as the richest candidate of five, above the ladder that was there
+///     before — so a line too tight to hold the pace draws exactly what it drew
+///     before the pace existed, never less.
+///   - **It follows the line rather than the row.** Under Minimal, where no
+///     window line is reserved, there is no line to ride and no claim is made —
+///     which is that preset's whole premise, a name and a number, and is the one
+///     place the old block contradicted it.
+///
+/// The quieting the block did by position is done by size instead. The pace is a
+/// claim the app is making and everything else on that line is a fact the
+/// provider stated, so it is set one step down at `Metrics.captionSize`, which is
+/// below `detailSize` at every density and every text scale (the floors are
+/// staggered 9/10/11 for exactly this reason).
 public struct ForecastLine: View {
     @ObservedObject private var appearance: AppearanceSettings
-    /// The row's id — "claude#2", not "claude". Two accounts of one service are
-    /// spent at their own rates and are sampled against their own keys.
-    public let providerID: String
-    /// When the window this row's headline meter belongs to renews.
+
+    /// The sentence, already decided. Nil draws nothing at all.
     ///
-    /// Nothing here reads it any more, and it stays in the signature because the
-    /// caller holds it and this is the view that would need it back. It had one
-    /// job: the line used to take the meter's warning colour when the cap was
-    /// projected to arrive before the renewal, and this was the fresher of the
-    /// two dates that decision was checked against. The ink is gone — see
-    /// `body` — so the check has nothing left to correct.
-    public let resetDate: Date?
+    /// Handed in rather than resolved here, and that is the one part of this
+    /// view's shape that changed with the fold. The caption has to know whether
+    /// there is a claim before it can decide whether to put a separator in front
+    /// of one, and a view that answered that question a second time — by asking
+    /// the trend store again — would be two copies of one decision, which is
+    /// precisely how a reservation and a drawing come to disagree. `text` below
+    /// is the decision; the row makes it once and both halves read the answer.
+    ///
+    /// `providerID`, `resetDate` and the trend store are gone with it. `resetDate`
+    /// had already been dead for a release — it was the input to a warning ink
+    /// this line no longer takes — and the store is now read one level up.
+    public let phrase: String?
 
-    /// Held plainly rather than observed, unlike the appearance beside it. The
-    /// samples are recorded by the same refresh that publishes the usage this
-    /// row is drawn from, so the row is already being rebuilt whenever the
-    /// projection has changed; observing the store as well would let a pace line
-    /// arrive on its own between refreshes, which is the mid-flight resize this
-    /// view exists to avoid. The setting is read the same way, on the way in: it
-    /// lives in a settings window that cannot be open at the same time as the
-    /// panel, and the panel is rebuilt by the time it is.
-    private let trend: UsageTrendStore
-
-    public init(
-        providerID: String,
-        resetDate: Date?,
-        appearance: AppearanceSettings? = nil,
-        trend: UsageTrendStore? = nil
-    ) {
-        self.providerID = providerID
-        self.resetDate = resetDate
-        // Resolved here rather than as default arguments, as everywhere else in
-        // the panel: a default argument is evaluated at the call site, and both
-        // shared objects are main-actor isolated, so that would constrain who is
+    public init(phrase: String?, appearance: AppearanceSettings? = nil) {
+        self.phrase = phrase
+        // Resolved here rather than as a default argument, as everywhere else in
+        // the panel: a default argument is evaluated at the call site, and the
+        // shared object is main-actor isolated, so that would constrain who is
         // allowed to build a row.
         self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
-        self.trend = trend ?? UsageTrendStore.shared
     }
 
     public var body: some View {
-        // Read at draw time and passed in, rather than taken inside the forecast:
-        // the copy is the whole of what this view decides to show, so a case has
-        // to be able to write it against a clock of its own.
-        let now = Date()
-        if let line = Self.text(
-            projection: trend.projection(for: providerID),
-            now: now,
-            showsPace: trend.showsPaceInPanel
-        ) {
-            Text(line)
-                // A caption one size under the countdown above it, and the only
-                // line in the panel set at this size. The pace is a claim the app
-                // is making and the countdown is a fact the provider stated, so
-                // the claim is drawn quieter.
+        if let phrase {
+            Text(phrase)
+                // A caption one size under the rest of the line it sits on, and
+                // the only run in the panel set at this size. The pace is a claim
+                // the app is making and the countdown beside it is a fact the
+                // provider stated, so the claim is drawn quieter — and drawn
+                // *smaller* is also what guarantees it can never be the run that
+                // sets the line's height.
                 //
                 // `.regular` written out rather than left to the default, which is
                 // §3.2: the panel has two weights, `titleWeight` for names,
@@ -139,15 +137,21 @@ public struct ForecastLine: View {
                 // as `Text.monospaced()`, one modifier along.
                 .foregroundColor(Tokens.Ink.muted)
                 // A pace that wraps to a second line has grown the row by more
-                // than the reading is worth.
+                // than the reading is worth. It cannot wrap where it is drawn
+                // now — `MetricCaption` only offers the candidate carrying it
+                // when the whole untruncated run fits — and it is stated anyway,
+                // because "the caller happens to measure me first" is not a
+                // height contract.
                 .lineLimit(1)
-                // Held at the row's line box rather than at whatever this
+                // Held at a caption's line box rather than at whatever this
                 // sentence happens to measure, so the wording changing — "under a
-                // minute" for "on pace to cap in 1h 20m" — cannot move the row.
-                // `minHeight` and not a fixed height, as everywhere else in the
-                // row: at the top of the text-scale range a caption's own line is
-                // a fraction taller than the box, and the choice there is between
-                // a clipped descender and a row a point over its reservation.
+                // minute" for "on pace to cap in 1h 20m" — cannot move anything,
+                // in the row or in the one place this is still drawn on its own,
+                // which is `ForecastLineTests`. `minHeight` and not a fixed
+                // height, as everywhere else in the row: at the top of the
+                // text-scale range a caption's own line is a fraction taller than
+                // the box, and the choice there is between a clipped descender
+                // and a point over the reservation.
                 .frame(minHeight: Tokens.lineBox(appearance.metrics.captionSize), alignment: .leading)
         }
     }
@@ -159,6 +163,10 @@ public struct ForecastLine: View {
     /// an arrival past the horizon — belongs to `UsageForecast`; this adds only
     /// the setting, which is the one part of the decision a forecast has no
     /// business knowing about.
+    ///
+    /// The one decision, asked once. `ProviderRow` calls this, hands the answer
+    /// to the caption as `pace`, and the caption uses the same value for the
+    /// separator in front of the run, for `hasContent`, and for the run itself.
     public static func text(projection: UsageProjection?, now: Date, showsPace: Bool) -> String? {
         guard showsPace, let projection else { return nil }
         return UsageForecast.phrase(for: projection, now: now)

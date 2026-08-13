@@ -210,6 +210,98 @@ final class MeterGeometryTests: XCTestCase {
         )
     }
 
+    // MARK: - How long the track is
+
+    /// The track's length at every panel the width slider offers, recorded rather
+    /// than bounded.
+    ///
+    /// The columns are the arithmetic `RowGeometry` does — panel less two 12pt
+    /// gutters less the 28pt leading column at the shipped logo size and no dial —
+    /// so these are the four widths a user can actually put the panel at and the
+    /// lengths they produce. Recorded because both ends of the clamp are load
+    /// bearing and each fails differently: the floor keeps the shipped panel's bar
+    /// exactly where it was, and the ceiling is where the bar starts out-resolving
+    /// the figure it illustrates.
+    func testTheTrackGrowsWithTheColumnBetweenItsFloorAndItsCeiling() {
+        let expected: [(panel: CGFloat, column: CGFloat, track: CGFloat)] = [
+            (300, 248, 160),
+            (356, 304, 160),
+            (420, 368, 184),
+            (520, 468, 200)
+        ]
+        for row in expected {
+            XCTAssertEqual(
+                MeterGeometry.trackWidth(in: row.column), row.track, accuracy: 0.001,
+                "a \(row.panel)pt panel has a \(row.column)pt column and draws "
+                    + "\(MeterGeometry.trackWidth(in: row.column))pt of track"
+            )
+        }
+    }
+
+    /// The shipped panel's bar did not move, and that is the half of this change
+    /// that has to be asserted rather than eyeballed.
+    ///
+    /// The whole argument for a growing track is that capping it flat at 160 "was
+    /// right at the default width and wrong above it", so a change that also moved
+    /// the default would have answered a different complaint. Half the column
+    /// reaches the floor at 320pt of column — a 376pt panel — so every width from
+    /// the slider's bottom up past the shipped 356 draws the same 160 it always
+    /// did.
+    func testEveryPanelUpToTheDefaultDrawsTheSameSixtyPointTrackItAlwaysDid() {
+        for column in stride(from: 200.0, through: 320.0, by: 4) {
+            XCTAssertEqual(
+                MeterGeometry.trackWidth(in: CGFloat(column)), MeterGeometry.trackFloor,
+                "a \(column)pt column moved the shipped bar"
+            )
+        }
+        // And the first column that does not: 322 is over twice the floor, so the
+        // bar starts growing at 161 rather than jumping.
+        XCTAssertEqual(MeterGeometry.trackWidth(in: 322), 161, accuracy: 0.001)
+    }
+
+    /// The ceiling is the resolution bound, and it is stated as arithmetic rather
+    /// than as a constant so that moving one moves the other.
+    ///
+    /// The figure two columns from the bar prints whole percent. `trackFloor`'s
+    /// third argument is that the bar must not resolve more than twice as finely
+    /// as that — 160pt moves 1.6pt per point of reading, and the 304pt bar this
+    /// replaced moved 3.04, "three times finer than the reading it illustrates".
+    /// At the ceiling the bar moves exactly 2pt per point, which is the factor of
+    /// two exactly, so this is the widest a track can be and still be honest.
+    func testTheCeilingIsWhereTheBarWouldStartOutResolvingItsOwnFigure() {
+        let ceiling = MeterGeometry.trackWidth(in: 10_000)
+        XCTAssertEqual(ceiling, MeterGeometry.trackCeiling)
+        // One point of reading, in points of bar.
+        XCTAssertEqual(ceiling / 100, 2, accuracy: 0.001)
+        // Which is the factor of two the floor's own doc claims for 160.
+        XCTAssertEqual(MeterGeometry.trackFloor / 100, 1.6, accuracy: 0.001)
+    }
+
+    /// A column narrower than the floor draws the column, not the floor.
+    ///
+    /// The floor is a floor for the *bar* and not a claim about the row it is in,
+    /// and the case is reachable: a 300pt panel at 130% type with a 40pt logo and a
+    /// dial beside it leaves under 160pt of column. A bar that insisted on its
+    /// floor there would be the overhang `PanelWidthContractTests` exists to stop.
+    func testTheTrackNeverOutgrowsTheColumnItIsIn() {
+        for column in [1.0, 40.0, 120.0, 159.0] {
+            XCTAssertEqual(
+                MeterGeometry.trackWidth(in: CGFloat(column)), CGFloat(column), accuracy: 0.001,
+                "a \(column)pt column drew more track than it has"
+            )
+        }
+    }
+
+    /// A length that is not a length draws nothing, rather than surviving into a
+    /// frame width. The same guard `fillWidth` and `ringTrim` keep, and for the
+    /// same reason: this one is read off a `GeometryReader`, so a view laid out
+    /// before its container has resolved can propose anything at all.
+    func testANonFiniteColumnDrawsNoTrack() {
+        for column in [CGFloat.nan, .infinity, -.infinity, -1, 0] {
+            XCTAssertEqual(MeterGeometry.trackWidth(in: column), 0)
+        }
+    }
+
     // MARK: - The dial
 
     /// What `ringTrim` returns is what gets *painted*, and that is the whole

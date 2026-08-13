@@ -50,10 +50,12 @@ final class UsageRampContrastTests: XCTestCase {
     ///
     /// The history: the resting stop *was* `Ink.muted`, a text ink, and it was
     /// folded there to delete a duplicate hex. That fold also deleted the ramp's
-    /// only greyscale step — resting L\* 67.61 against amber's 65.73 is 1.062:1 —
-    /// so a resting bar and a caution bar were the same grey the moment hue came
-    /// off. `Tokens.Meter.fill` un-folds it, and being a graphic and not a figure
-    /// is what buys the lightness that gap needs.
+    /// only greyscale step — resting L\* 67.61 against the amber of the day at
+    /// 65.73 was 1.062:1 — so a resting bar and a caution bar were the same grey
+    /// the moment hue came off. `Tokens.Meter.fill` un-folds it, and being a
+    /// graphic and not a figure is what buys the lightness that gap needs. Both
+    /// stops have moved since; `testEveryPairOfStopsSeparatesInGreyscale` carries
+    /// the figures that hold now.
     func testEveryStopThatIsTextClearsBodyTextContrastOnTheSurfaceItSitsOn() throws {
         for stop in stops where stop.name != "grey" {
             for dark in [false, true] {
@@ -152,34 +154,123 @@ final class UsageRampContrastTests: XCTestCase {
         }
     }
 
-    /// The ramp is monotone in lightness, which is the property that makes it a
-    /// ramp at all once the hue is taken off.
+    /// And the same floor for the two stops that are also bars, which is the
+    /// half of the ramp this file used to leave to `Tokens.Meter`'s prose.
     ///
-    /// `testAmberAndRedSeparateInGreyscale` holds the second boundary; this holds
-    /// the first, and until `Tokens.Meter.fill` existed it could not have been
-    /// written: resting `Ink.muted` sat 1.87 L\* from amber in dark and **0.54 in
-    /// light**, so the ramp's first step was invisible in a greyscale screenshot
-    /// and to a deuteranope. The floor is the same 9 the other boundary keeps.
+    /// Every stop is a fill before it is a figure — the bar and the dial are drawn
+    /// in it at every reading — so 3:1 on the track is a floor all three have to
+    /// clear and not only the resting one. It was asserted for resting alone
+    /// because resting is the only stop that does *not* also have to clear 4.5:1
+    /// somewhere, and 4.5 on the panel was quietly being treated as covering it.
+    /// It does not: the track is a different ground from the panel, it is the one
+    /// absolute token drawn inside the panel, and the re-cut moved both hues far
+    /// enough for the two figures to swap places in dark (amber 5.09 → 7.19, red
+    /// 7.13 → 5.26). Recorded so that a stop nudged toward the track fails here.
+    func testEveryStopClearsThreeToOneOnItsOwnTrack() throws {
+        let expected: [(name: String, percent: Double, light: Double, dark: Double)] = [
+            ("grey", 0.10, 3.05, 3.19),
+            ("amber", 0.85, 4.78, 7.19),
+            ("red", 0.95, 6.85, 5.26)
+        ]
+        for stop in expected {
+            for dark in [false, true] {
+                let ratio = try XCTUnwrap(
+                    contrast(UsageTint.color(for: stop.percent), on: Tokens.Meter.track, dark: dark)
+                )
+                XCTAssertGreaterThanOrEqual(
+                    ratio, 3.0,
+                    "\(stop.name) measures \(ratio):1 on the \(dark ? "dark" : "light") track — "
+                        + "a meter fill is a meaningful non-text graphic on it"
+                )
+                XCTAssertEqual(ratio, dark ? stop.dark : stop.light, accuracy: 0.02, stop.name)
+            }
+        }
+    }
+
+    /// The ramp ranks in the channel a viewer actually uses: **chroma never
+    /// decreases going up it.**
     ///
-    /// Measured now: dark 51.89 → 65.73 → 76.65 (13.84 then 10.92 apart), light
-    /// 50.02 → 36.02 → 26.53 (13.97 then 9.49). Monotone away from the ground in
-    /// both appearances, so "worse" always reads as "further from the panel".
-    func testTheRampIsMonotoneInGreyscale() throws {
+    /// This is the assertion the ramp has never had, and it is the one the shipped
+    /// palette failed. Measured off the dark render, the 92% row's amber carried
+    /// OKLCh chroma 0.1506 and the 97% row's red 0.1069 — the caution stop was
+    /// **1.41× the chroma of the alarm stop**, so the worse reading was drawn in
+    /// the softer, less saturated colour and a panel of nine rows pulled the eye to
+    /// the second-worst one. Contrast could not see it (both stops cleared every
+    /// floor) and lightness could not see it (they were 10.92 L\* apart), which is
+    /// why it survived two passes of this file.
+    ///
+    /// Recorded as well as bounded, because the margins are the design: light
+    /// 0.0113 → 0.1131 → 0.1595, dark 0.0117 → 0.1408 → 0.1600. The last step is
+    /// the thin one at 1.14× in dark, and it is thin for a gamut reason rather than
+    /// a taste — see `Ink.attention`, which sets out the two arrangements the
+    /// pressed-card bound allows and why only this one ranks.
+    ///
+    /// OKLCh rather than HSB saturation or Lab chroma: it is the only one of the
+    /// three that is perceptually uniform across lightness, and the two stops under
+    /// test sit 10 L\* apart on purpose.
+    func testChromaNeverDecreasesGoingUpTheRamp() throws {
+        let expected: [(dark: Bool, ladder: [Double])] = [
+            (false, [0.0113, 0.1131, 0.1595]),
+            (true, [0.0117, 0.1408, 0.1600])
+        ]
+        for row in expected {
+            let ladder = try [0.0, 0.85, 0.99].map {
+                chroma(try XCTUnwrap(resolve(UsageTint.color(for: $0), dark: row.dark)))
+            }
+            for step in 1..<ladder.count {
+                XCTAssertGreaterThan(
+                    ladder[step], ladder[step - 1],
+                    "the \(row.dark ? "dark" : "light") ramp loses chroma between stop "
+                        + "\(step - 1) (\(ladder[step - 1])) and stop \(step) (\(ladder[step])) — "
+                        + "the worse reading is drawn in the quieter colour"
+                )
+            }
+            for (measured, recorded) in zip(ladder, row.ladder) {
+                XCTAssertEqual(measured, recorded, accuracy: 0.002)
+            }
+        }
+    }
+
+    /// **Every pair** of stops is still two greys once the hue is taken off.
+    ///
+    /// This was `testTheRampIsMonotoneInGreyscale`, and it asserted something
+    /// stronger and narrower: that each stop is ≥ 9 L\* *further from the ground*
+    /// than the one below it. That premise died when the ramp was re-cut to rank in
+    /// chroma. The sRGB gamut hands amber its chroma high and red its chroma low,
+    /// so on a near-black ground the stop that can hold the most colour is the
+    /// *nearer* one — dark now reads 51.89 → 76.92 → 66.76 rather than
+    /// 51.89 → 65.73 → 76.65. `Ink.alarm` sets out the arithmetic.
+    ///
+    /// What replaces it is deliberately stated as three pairs rather than two
+    /// steps, and the trade is worth writing down in both directions. **Gained:**
+    /// resting-against-red is now measured rather than inferred, where the old form
+    /// only ever got it by transitivity; and the property the old form could not
+    /// express at all — that chroma ranks — is asserted next door in
+    /// `testChromaNeverDecreasesGoingUpTheRamp`, which is the test that would have
+    /// caught the defect this re-cut fixes. **Given up:** the signed direction, and
+    /// with it the ≥ 18 that transitivity used to buy between resting and red in
+    /// dark, which now measures 14.87. Nine is what a greyscale reader needs
+    /// between any two marks; the rest was a by-product of an ordering the gamut
+    /// will not pay for.
+    ///
+    /// Measured: light 49.99 / 37.76 / 27.93 — pairs 12.24, 9.83, 22.06. Dark
+    /// 51.89 / 76.92 / 66.76 — pairs 25.03, 10.16, 14.87.
+    func testEveryPairOfStopsSeparatesInGreyscale() throws {
         for dark in [false, true] {
-            let ground = lightness(try XCTUnwrap(resolve(Tokens.Surface.base, dark: dark)))
             let ladder = try [0.0, 0.85, 0.99].map {
                 lightness(try XCTUnwrap(resolve(UsageTint.color(for: $0), dark: dark)))
             }
-            let distances = ladder.map { abs($0 - ground) }
-            XCTAssertGreaterThanOrEqual(
-                distances[1] - distances[0], 9,
-                "resting L* \(ladder[0]) and amber L* \(ladder[1]) are \(distances[1] - distances[0]) "
-                    + "apart in \(dark ? "dark" : "light") — the ramp's first step needs hue to be seen"
-            )
-            XCTAssertGreaterThanOrEqual(
-                distances[2] - distances[1], 9,
-                "amber L* \(ladder[1]) and red L* \(ladder[2]) are \(distances[2] - distances[1]) apart"
-            )
+            let names = ["resting", "amber", "red"]
+            for first in 0..<ladder.count {
+                for second in (first + 1)..<ladder.count {
+                    XCTAssertGreaterThanOrEqual(
+                        abs(ladder[first] - ladder[second]), 9,
+                        "\(names[first]) L* \(ladder[first]) and \(names[second]) L* "
+                            + "\(ladder[second]) are \(abs(ladder[first] - ladder[second])) apart in "
+                            + "\(dark ? "dark" : "light") — one grey in a greyscale screenshot"
+                    )
+                }
+            }
         }
     }
 
@@ -214,7 +305,10 @@ final class UsageRampContrastTests: XCTestCase {
             // resting rows of nine stop carrying a slab at body-text contrast.
             //
             // Recomputed: grey 6.85 -> 4.19 light and 7.85 -> 4.63 dark. Amber
-            // and red are untouched.
+            // and red were untouched by that pass and have since moved again:
+            //
+            //   caution  #764C00 / #E08D1C  ->  Ink.attention  #894800 / #F1B347
+            //   warning  #7E1217 / #FFA5A7  ->  Ink.alarm      #890313 / #FD7B74
             //
             // The grounds moved as well — `Surface.base` went #F7F8FA ->
             // #F6F7FA light and #101114 -> #0C0D11 dark — but they are the
@@ -222,17 +316,25 @@ final class UsageRampContrastTests: XCTestCase {
             // swapping only the ground moves the dark column by about +0.2 and
             // the light column by about -0.04. The stops did the rest.
             //
-            // Re-recorded rather than corrected: grey 5.67 -> 6.85 light and
-            // 5.81 -> 7.85 dark, amber 5.58 -> 6.99 and 6.19 -> 7.39, red
-            // 5.97 -> 9.87 and 6.81 -> 10.35. The red pair moves furthest
-            // because #7E1217 is deliberately much darker than the #B92126 it
-            // replaces — red now has to sit a greyscale step away from amber,
-            // which `testAmberAndRedSeparateInGreyscale` is the assertion for,
-            // and the contrast is what that buys rather than what it was cut
-            // for.
+            // Re-recorded rather than corrected, twice. First: grey 5.67 -> 6.85
+            // light and 5.81 -> 7.85 dark, amber 5.58 -> 6.99 and 6.19 -> 7.39,
+            // red 5.97 -> 9.87 and 6.81 -> 10.35. Then the re-cut that made the
+            // ramp rank in chroma: amber 6.99 -> 6.55 and 7.39 -> 10.43, red
+            // 9.87 -> 9.40 and 10.35 -> 7.64.
+            //
+            // The dark column is the one that moved, and it moved because the two
+            // dark stops changed places against the contrast bound rather than
+            // because either was cut for contrast. Amber climbed to L* 76.92 and
+            // gained 3 points of ratio it does not need; red dropped to 66.76,
+            // spending 2.7 of its own to buy 50% more chroma. Neither number is a
+            // target — the targets are 4.5:1 on the pressed card, which
+            // `testNoInkFallsBelowFourFiveOnThePressedCard` holds, and the ranking,
+            // which `testChromaNeverDecreasesGoingUpTheRamp` holds. These are the
+            // figures those two decisions produced on the one ground that is the
+            // same in every drawing.
             ("grey", 0.10, 4.19, 4.63),
-            ("amber", 0.85, 6.99, 7.39),
-            ("red", 0.95, 9.87, 10.35)
+            ("amber", 0.85, 6.55, 10.43),
+            ("red", 0.95, 9.40, 7.64)
         ]
         for stop in expected {
             let light = try XCTUnwrap(
@@ -271,17 +373,26 @@ final class UsageRampContrastTests: XCTestCase {
     ///
     /// Light on `#D0D1D3` / dark on `#36373A`:
     ///
-    ///     body       10.66 / 10.72        attention   4.90 / 4.53
-    ///     mark        7.42 /  7.32        alarm       6.92 / 6.34
+    ///     body       10.66 / 10.72        attention   4.60 / 6.39
+    ///     mark        7.42 /  7.32        alarm       6.59 / 4.68
     ///     muted       4.80 /  4.81
     ///
-    /// The measured minimum is **4.53**, dark `attention`, which is 0.03 over
-    /// the floor and is therefore the binding constraint in the whole palette:
-    /// it is the first thing to re-measure if any of the three inputs to the
-    /// plane moves, and the reason the amber's dark half cannot be quietened
-    /// further. Both figures under 4.5 before the rebuild were on this plane and
-    /// unmeasured — light `attention` at 4.44 and the ramp's own resting grey at
-    /// 4.48 dark — because the file measured on a hovered card instead.
+    /// The measured minimum is **4.60**, *light* `attention`, and it moved here
+    /// from dark `attention` at 4.53 when the ramp was re-cut to rank in chroma.
+    /// The two are the same fact from either side: this plane bounds a light figure
+    /// at L\* ≤ 38.32 and a dark one at L\* ≥ 65.51, and each appearance now spends
+    /// its bound on whichever of its two hues has the least chroma to give — the
+    /// light amber, brown at any lightness the bound allows, and the dark red, pink
+    /// at any lightness above it. The margin over the floor widened from 0.03 to
+    /// 0.10 in the process, which is the thickest this palette has held.
+    ///
+    /// The assertion below therefore names *light* as the binding appearance, and
+    /// that is a real assertion rather than bookkeeping: it fails if a future
+    /// re-cut lets the dark half slide back down onto the bound, which is exactly
+    /// the arrangement that inverted the ramp. Both figures under 4.5 before the
+    /// palette rebuild were on this plane and unmeasured — light `attention` at
+    /// 4.44 and the ramp's own resting grey at 4.48 dark — because the file
+    /// measured on a hovered card instead.
     func testNoInkFallsBelowFourFiveOnThePressedCard() throws {
         let inks: [(name: String, colour: Color)] = [
             ("body", Tokens.Ink.body),
@@ -312,10 +423,14 @@ final class UsageRampContrastTests: XCTestCase {
             }
         }
         XCTAssertEqual(lowest.name, "attention", "the binding ink is now \(lowest.name)")
-        XCTAssertEqual(lowest.appearance, "dark")
         XCTAssertEqual(
-            lowest.ratio, 4.53, accuracy: 0.01,
-            "the palette's thinnest margin is \(lowest.ratio):1, recorded as 4.53"
+            lowest.appearance, "light",
+            "the binding appearance is \(lowest.appearance) — if it is dark again, the dark amber "
+                + "has slid back onto the bound and the ramp's chroma ranking is at risk"
+        )
+        XCTAssertEqual(
+            lowest.ratio, 4.60, accuracy: 0.01,
+            "the palette's thinnest margin is \(lowest.ratio):1, recorded as 4.60"
         )
     }
 
@@ -329,31 +444,260 @@ final class UsageRampContrastTests: XCTestCase {
     /// `Ink.attention` light L\* 42.33 against the ramp's red at 40.51 is
     /// **1.8 apart**, and 61.16 against 64.08 in dark is 2.9.
     ///
-    /// Measured now: light 36.02 amber against 26.53 red, **9.49 apart**; dark
-    /// 65.73 against 76.65, **10.92**. The floor is 9, which is under both and
+    /// Measured now: light 37.76 amber against 27.93 red, **9.83 apart**; dark
+    /// 76.92 against 66.76, **10.16**. The floor is 9, which is under both and
     /// far over what the retired pair could reach.
     ///
-    /// The direction is asserted as well as the distance, because it is what
-    /// makes red readable as *worse* than amber without naming a hue: red is
-    /// always the stop further from the ground. It is forced as much as chosen —
-    /// the pressed card bounds a light figure at L\* ≤ 38.32 and a dark one at
-    /// L\* ≥ 65.51, amber sits on the bound in both, and red takes the only room
-    /// left.
+    /// The direction is asserted as well as the distance, and the direction is the
+    /// half that changed. It used to be "red is always the stop *further from the
+    /// ground*", which means darker in light and lighter in dark — two opposite
+    /// facts under one sentence, and the second of them is what produced the
+    /// salmon: the only sRGB reds above L\* 74.5 are pastels, so the rule spent the
+    /// alarm stop's whole chroma budget on satisfying itself. It is now **red is
+    /// the darker of the two, in both appearances**, which is one fact rather than
+    /// two, holds on either ground, and is the direction the gamut pays for — red's
+    /// chroma peaks at L\* 53 and amber's near 75.
+    ///
+    /// This is a *replacement* for the old direction and not a relaxation: it is
+    /// still an ordering assertion, it now holds in both appearances rather than
+    /// flipping between them, and it is asserted alongside the ranking the old
+    /// direction could not deliver (`testChromaNeverDecreasesGoingUpTheRamp`). What
+    /// it gives up is the claim that red is the louder of the two in a *dark*
+    /// greyscale screenshot, which is true and is priced on `Ink.alarm`: near-cap
+    /// is carried there by shape and weight, and `testTheNearCapContractSurvives-
+    /// Desaturation` renders it rather than asserting it from a palette.
     func testAmberAndRedSeparateInGreyscale() throws {
         for dark in [false, true] {
             let amber = lightness(try XCTUnwrap(resolve(Tokens.Ink.attention, dark: dark)))
             let red = lightness(try XCTUnwrap(resolve(Tokens.Ink.alarm, dark: dark)))
-            let ground = lightness(try XCTUnwrap(resolve(Tokens.Surface.base, dark: dark)))
             XCTAssertGreaterThanOrEqual(
                 abs(amber - red), 9,
                 "amber L* \(amber) and red L* \(red) are \(abs(amber - red)) apart in "
                 + "\(dark ? "dark" : "light") — one alarm in a greyscale screenshot"
             )
-            XCTAssertGreaterThan(
-                abs(red - ground), abs(amber - ground),
-                "red is nearer the \(dark ? "dark" : "light") ground than amber, "
-                + "so it reads as the quieter of the two"
+            XCTAssertLessThan(
+                red, amber,
+                "red L* \(red) is lighter than amber L* \(amber) in "
+                + "\(dark ? "dark" : "light") — red is the darker stop in both appearances, "
+                + "because that is where the gamut keeps its chroma"
             )
+        }
+    }
+
+    // MARK: - The near-cap contract, rendered and desaturated
+
+    /// **Draw it, take the hue off, and check the state is still there.**
+    ///
+    /// `ProviderRow.nearCapChannels` promises that "at or above the warning
+    /// threshold" is carried by three channels that are not colour — the fill's
+    /// square trailing cap, the figure at `Ramp.alertWeight`, and a fill visibly
+    /// past the redline — and that promise is what lets the ramp be cut for
+    /// ranking rather than for legibility. Every existing test of it reads the
+    /// *inputs*: `nearCapChannels` returns two booleans and the tests assert the
+    /// booleans. That is a test of a switch, not of a drawing, and it would pass
+    /// unchanged if `MeterFill` stopped squaring its end or `UsageFigure` stopped
+    /// reading the weight it is handed.
+    ///
+    /// So this renders the meter and the figure, converts every pixel to CIE
+    /// luminance — which *is* desaturation, and is the same transfer the ratios in
+    /// this file use, so the two cannot disagree about what a colour is — and
+    /// measures each channel on the greyscale bitmap. The hue is not merely
+    /// ignored; it is discarded before anything is asserted.
+    ///
+    /// It matters more since the re-cut than it did before it. The old dark ramp
+    /// put red further from the ground than amber, so a dark greyscale screenshot
+    /// ranked the two by lightness on its own; the new one puts red *nearer* the
+    /// ground, which is the price of a red that can hold chroma at all. That price
+    /// is only payable because these three channels really are drawn — so they are
+    /// measured here rather than quoted from a doc comment.
+    @MainActor
+    func testTheNearCapContractSurvivesDesaturation() throws {
+        let track: CGFloat = 160, thickness: CGFloat = 5, warning = 0.95
+
+        @MainActor
+        func bar(_ percent: Double, squareCap: Bool, dark: Bool) throws -> GreyGrid {
+            try Self.desaturated(
+                AnyView(
+                    MeterTrack(
+                        percent: percent,
+                        height: thickness,
+                        tint: UsageTint.color(for: percent),
+                        isNearCap: squareCap,
+                        warning: warning
+                    )
+                    .frame(width: track)
+                ),
+                size: CGSize(width: track, height: thickness),
+                dark: dark
+            )
+        }
+
+        for dark in [false, true] {
+            let appearance = dark ? "dark" : "light"
+
+            // **Length — the redline.** Both appearances, because the fill is
+            // lighter than its track in one and darker in the other, and a
+            // measurement that only worked on a dark screenshot would be assuming
+            // the very thing under test.
+            var reach: [Double: Int] = [:]
+            for percent in [0.92, 0.97] {
+                let grey = try bar(percent, squareCap: percent >= warning, dark: dark)
+                let middle = grey.height / 2
+                // Sampled inside the fill and inside the empty track, three pixels
+                // in from each end so neither lands on the capsule's own
+                // antialiasing. The gap between them is the bar surviving
+                // desaturation, and it is asserted before anything is derived from
+                // it — otherwise a fill that had gone the same grey as its track
+                // would make every case below vacuously true.
+                let fill = grey.value(atX: 3, y: middle)
+                let empty = grey.value(atX: grey.width - 3, y: middle)
+                XCTAssertGreaterThan(
+                    abs(fill - empty), 0.10,
+                    "at \(percent) on \(appearance) the fill and its track are the same grey "
+                        + "once the hue is off — ΔY \(abs(fill - empty))"
+                )
+                reach[percent] = grey.lastRun(y: middle, from: empty, past: abs(fill - empty) / 2)
+            }
+
+            // The redline is drawn at `warning` of the track's own width, so its
+            // pixel is the same arithmetic in the bitmap.
+            let pixels = try XCTUnwrap(reach[0.97])
+            let scale = Double(pixels) / (Double(track) * 0.97)
+            let redline = Int((Double(track) * warning * scale).rounded())
+            XCTAssertLessThan(
+                try XCTUnwrap(reach[0.92]), redline,
+                "on \(appearance) a 92% fill reaches \(reach[0.92] ?? -1)px, already past the "
+                    + "redline at \(redline)px"
+            )
+            XCTAssertGreaterThan(
+                pixels, redline,
+                "on \(appearance) a 97% fill reaches \(pixels)px and does not clear the redline "
+                    + "at \(redline)px"
+            )
+
+            // **Shape — the square trailing cap.** Measured as the same reading
+            // drawn both ways rather than as two readings drawn once each, which
+            // is what isolates the channel: the two bitmaps differ in nothing but
+            // the end of the fill.
+            //
+            // The margin is small and is meant to be. `MeterTrack` itself records
+            // that the corner is 2.5pt on a 5pt bar and "0.19% of the fill's area";
+            // squaring one end of a capsule adds `r²(2 − π/2)` = 0.43r², which at
+            // 2x on a 5pt bar is 10.7 square pixels of coverage against a fill of
+            // about 3100. So this asserts the direction and the presence, not a
+            // size — a cap that stopped being drawn would take all 10.7 away.
+            let square = try bar(0.97, squareCap: true, dark: dark).inkMass()
+            let round = try bar(0.97, squareCap: false, dark: dark).inkMass()
+            XCTAssertGreaterThan(
+                square, round,
+                "on \(appearance) a near-cap fill lays down \(square) of ink against a round-ended "
+                    + "fill of the same length at \(round) — the trailing end is not squaring off"
+            )
+        }
+
+        // **Weight.** The same reading rendered on either side of the threshold,
+        // so the digits are identical and the only difference is the weight the
+        // contract asks for. Ink is summed as coverage rather than counted as
+        // pixels: antialiasing puts most of a stem's extra weight into partial
+        // coverage rather than into new pixels.
+        var ink: [String: Double] = [:]
+        for (name, threshold) in [("medium", 0.95), ("semibold", 0.90)] {
+            ink[name] = try Self.desaturated(
+                AnyView(
+                    UsageFigure(
+                        percent: 0.94,
+                        size: 13,
+                        unitSize: UsageFigure.unitSize(for: 13),
+                        weight: ProviderRow.figureWeight(percent: 0.94, warning: threshold),
+                        tint: Tokens.Ink.body
+                    )
+                ),
+                size: nil,
+                dark: true
+            ).inkMass()
+        }
+        let medium = try XCTUnwrap(ink["medium"])
+        let semibold = try XCTUnwrap(ink["semibold"])
+        XCTAssertGreaterThan(
+            semibold, medium * 1.02,
+            "\"94%\" lays down \(semibold) of ink at the near-cap weight against \(medium) below "
+                + "it — under 2% apart, which is not a weight step a reader can see"
+        )
+    }
+
+    /// A rendered view as a greyscale grid, with the hue thrown away.
+    ///
+    /// Drawn on the panel's own ground rather than on transparency: the contract is
+    /// about what a reader sees, and alpha is not what a screenshot keeps.
+    /// `cacheDisplay` rather than `ImageRenderer` for the reason `PanelLayoutTests`
+    /// records — the renderer resolves this app's scroll view to an empty box — and
+    /// one run-loop turn rather than a sleep, following `PanelWidthContractTests`.
+    @MainActor
+    private static func desaturated(_ view: AnyView, size: CGSize?, dark: Bool) throws -> GreyGrid {
+        let host = NSHostingView(rootView: AnyView(
+            view
+                .background(Tokens.Surface.base)
+                .environment(\.colorScheme, dark ? .dark : .light)
+        ))
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let resolved = size ?? host.fittingSize
+        host.frame = CGRect(origin: .zero, size: resolved)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(mode: .default, before: Date())
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+
+        var values = [Double](repeating: 0, count: rep.pixelsWide * rep.pixelsHigh)
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                func linear(_ value: CGFloat) -> Double {
+                    let channel = Double(min(max(value, 0), 1))
+                    return channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+                }
+                values[y * rep.pixelsWide + x] =
+                    0.2126 * linear(pixel.redComponent)
+                    + 0.7152 * linear(pixel.greenComponent)
+                    + 0.0722 * linear(pixel.blueComponent)
+            }
+        }
+        return GreyGrid(width: rep.pixelsWide, height: rep.pixelsHigh, values: values)
+    }
+
+    /// One rendered view with its hue removed. Deliberately not a `Color` or an
+    /// `NSImage`: everything below reads luminance and nothing can reach a
+    /// component, which is what makes "desaturated" a property of the fixture
+    /// rather than a promise in a comment.
+    private struct GreyGrid {
+        let width: Int
+        let height: Int
+        let values: [Double]
+
+        func value(atX x: Int, y: Int) -> Double {
+            values[min(max(y, 0), height - 1) * width + min(max(x, 0), width - 1)]
+        }
+
+        /// The last x on one row that stands `past` a threshold away from the empty
+        /// track's own luminance — the fill's reach along that row.
+        ///
+        /// A threshold rather than "any difference from the ground", because the
+        /// redline is a rectangle of `Surface.base` standing *in* the empty track
+        /// and would otherwise be counted as fill: at 92% it sits 5pt beyond the
+        /// end of the bar and reported the fill as reaching past the very mark it
+        /// exists to stand in front of. Half the measured fill-to-track distance,
+        /// so it works whichever side of the track the fill sits on.
+        func lastRun(y: Int, from empty: Double, past threshold: Double) -> Int {
+            var last = 0
+            for x in 0..<width where abs(value(atX: x, y: y) - empty) > threshold { last = x }
+            return last
+        }
+
+        /// Total coverage: the summed distance of every pixel from the ground the
+        /// drawing sits on, which is the corner. Sums partial coverage rather than
+        /// counting pixels, and works on either appearance.
+        func inkMass() -> Double {
+            let ground = value(atX: 0, y: 0)
+            return values.reduce(0) { $0 + abs($1 - ground) }
         }
     }
 
@@ -523,6 +867,37 @@ final class UsageRampContrastTests: XCTestCase {
     private func lightness(_ colour: NSColor) -> Double {
         let y = luminance(colour)
         return y > 216.0 / 24389.0 ? 116 * pow(y, 1.0 / 3.0) - 16 : y * 24389.0 / 27.0
+    }
+
+    /// OKLCh chroma: how much colour a colour has, on the one axis of the three
+    /// that is perceptually uniform across lightness.
+    ///
+    /// The axis the ramp has to rank on, and the reason it is this one rather than
+    /// HSB saturation or CIELAB chroma. Both of those move with lightness on their
+    /// own — HSB reports the old dark red `#FFA5A7` at 0.35 and the old dark amber
+    /// `#E08D1C` at 0.87 partly because one is 10 L\* lighter than the other — and
+    /// the two stops under test sit ten points apart by design, so a measure that
+    /// confounds the two would be measuring the separation twice and the colour not
+    /// at all.
+    ///
+    /// Written out here rather than reached for: `NSColor` has no OKLab space, and
+    /// the transfer is short enough that spelling it out is cheaper than a
+    /// dependency and clearer than a table. Same sRGB linearisation the luminance
+    /// above uses, so the two cannot disagree about what a colour is either.
+    private func chroma(_ colour: NSColor) -> Double {
+        func linear(_ value: CGFloat) -> Double {
+            let channel = Double(min(max(value, 0), 1))
+            return channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        let r = linear(colour.redComponent)
+        let g = linear(colour.greenComponent)
+        let b = linear(colour.blueComponent)
+        let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+        let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+        let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+        let a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+        let bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+        return (a * a + bb * bb).squareRoot()
     }
 
     /// The worst plane an ink in the panel can land on, built rather than

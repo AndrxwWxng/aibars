@@ -220,10 +220,24 @@ private enum Fixture {
     }
 
     /// The line a row would draw for `trend`, under `appearance`.
+    ///
+    /// Built through `ForecastLine.text` rather than by handing the view a store,
+    /// because that is now the only way a row builds one: the fold moved the
+    /// claim onto the caption line, so the view takes a resolved string and the
+    /// decision — the setting, and every refusal `UsageForecast` makes — happens
+    /// once, above it. A helper that reached the store a second way would be
+    /// asserting a path the app no longer has.
     static func line(_ trend: UsageTrendStore, _ appearance: AppearanceSettings) -> ForecastLine {
-        // The reset date is the ink's input and not the layout's, so it is left
-        // out: every measurement below reads a width or a height.
-        ForecastLine(providerID: providerID, resetDate: nil, appearance: appearance, trend: trend)
+        ForecastLine(phrase: phrase(trend), appearance: appearance)
+    }
+
+    /// The sentence the row would resolve for `trend`, by the row's own route.
+    static func phrase(_ trend: UsageTrendStore, id: String = providerID) -> String? {
+        ForecastLine.text(
+            projection: trend.projection(for: id),
+            now: Date(),
+            showsPace: trend.showsPaceInPanel
+        )
     }
 
     /// The sentence the view is about to draw, read the way the view reads it.
@@ -351,10 +365,8 @@ final class ForecastLineLayoutTests: XCTestCase {
         let appearance = try appearance("unknown")
         for providerID in ["", "claude#2", "not-a-provider"] {
             let line = ForecastLine(
-                providerID: providerID,
-                resetDate: nil,
-                appearance: appearance,
-                trend: store
+                phrase: Fixture.phrase(store, id: providerID),
+                appearance: appearance
             )
             XCTAssertEqual(
                 height(line), 0, accuracy: 0.01,

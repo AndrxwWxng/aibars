@@ -107,6 +107,157 @@ final class PanelLayoutTests: XCTestCase {
     func testWidthIsFixed() throws {
         XCTAssertEqual(try panel(connected: 3, name: "layout.width").fittingSize.width, 356)
     }
+
+    // MARK: - The stores the panel hands its rows
+
+    /// **A pace arriving cannot resize the window.** `MenuBarExtra` sizes its
+    /// window to `fittingSize`, so this is that number measured against itself
+    /// with the only difference being half an hour of samples in the trend store.
+    ///
+    /// Against the pace *block* it would have reported
+    /// `contentSpacing + lineBox(captionSize)` per row that qualified — 19pt at
+    /// cozy/100%, three rows of it here, 57pt of window moving under the pointer
+    /// while the panel was open.
+    ///
+    /// **What this case cannot see**, said plainly, because a case that implies
+    /// coverage it does not have is how the block survived two releases: a claim
+    /// that costs no height is invisible to a measurement of height, so an equal
+    /// number here is also what a panel that never drew a pace at all would
+    /// report. Two things close that half and neither can live here.
+    /// `RowReservationTests.testThePaceTakesWidthOnTheCaptionLineAndNeverHeight`
+    /// measures the run being drawn — wider line, same height — at every density
+    /// and both ends of the text slider. And `ZZPanelSnapshot` now has samples
+    /// behind it, so a reviewer can see the claim in the panel.
+    ///
+    /// A rendered assertion cannot stand in for either, and that is a fact about
+    /// the tool rather than a preference: `ImageRenderer` draws this panel's
+    /// header and leaves its `ScrollView` empty, so a raster of the whole panel is
+    /// a picture with no rows in it. That is why every rendered case in this file
+    /// is of a single row, and it is worth knowing before writing another.
+    @MainActor
+    func testAPaceArrivingCannotResizeThePanel() throws {
+        let state = AppState()
+        let now = Date()
+        for provider in state.providers.prefix(3) {
+            provider.isAuthenticated = true
+            state.snapshots[provider.id] = .success(UsageData(
+                providerID: provider.id,
+                planName: "Pro",
+                primary: UsageMetric(label: "5h window", used: 60, limit: 100, unit: "%")
+            ))
+        }
+
+        let appearance = try scratchAppearance("layout.pace")
+        let silent = try scratchTrends("layout.pace-silent")
+        let paced = try scratchTrends("layout.pace-loaded")
+        // Fed through `record`, which is what the refresh loop calls, so the fit's
+        // own refusals apply: five samples five minutes apart, rising, arriving
+        // inside the horizon. 40% to 60% over twenty minutes caps in about forty.
+        for provider in state.providers.prefix(3) {
+            for (index, percent) in [0.40, 0.45, 0.50, 0.55, 0.60].enumerated() {
+                paced.record(
+                    UsageData(
+                        providerID: provider.id,
+                        fetchedAt: now.addingTimeInterval(-Double(4 - index) * 300),
+                        primary: UsageMetric(label: "5h window", used: percent * 100, limit: 100, unit: "%")
+                    ),
+                    for: provider.id
+                )
+            }
+        }
+        // The premise. Without it a green run means "no projection was made" just
+        // as readily as "the projection cost nothing".
+        let first = try XCTUnwrap(state.providers.first)
+        XCTAssertNotNil(
+            ForecastLine.text(projection: paced.projection(for: first.id), now: now, showsPace: true),
+            "the fixture produced no projection, so this case is comparing two identical panels"
+        )
+        XCTAssertNil(
+            ForecastLine.text(projection: silent.projection(for: first.id), now: now, showsPace: true),
+            "the empty store produced a projection, so this case has no control"
+        )
+
+        func height(_ trend: UsageTrendStore) -> CGFloat {
+            let view = MenuBarContentView(
+                state: state,
+                showSettings: .constant(false),
+                appearance: appearance,
+                trend: trend
+            )
+            return NSHostingView(rootView: AnyView(view)).fittingSize.height
+        }
+        XCTAssertEqual(
+            height(paced), height(silent),
+            "the panel asks for \(height(paced))pt with three pace claims on it and "
+            + "\(height(silent))pt without"
+        )
+    }
+
+    /// The panel hands its rows the stores it was built with.
+    ///
+    /// Two lines in `row(for:)`, and every call site in the app passes nil to
+    /// both — so without this case they are two lines that can be deleted with the
+    /// whole suite staying green, and the only thing that would go quiet is the
+    /// render harness. That is the shape of the defect this pass was sent to fix
+    /// in the first place: a correct piece of plumbing that nothing exercises
+    /// reads as coverage.
+    ///
+    /// The budget is the half that can be measured, because a budget meter is a
+    /// block of real height: a panel built with a store that has one is taller
+    /// than the same panel built with an empty store.
+    ///
+    /// What the growth *means* has changed since this was written, and the
+    /// assertion is the stronger one for it. It used to record that the budget
+    /// block is not reserved — the meter was built inline on `budgetLine(for:) !=
+    /// nil`, so the panel grew when a spend landed as readily as when a budget was
+    /// set. It is reserved now, from `RowGeometry.Lines.budget`, which is asked of
+    /// the store and never of the payload, so the only thing left that can move
+    /// this panel's height is the store itself — which is exactly the plumbing
+    /// under test, and it is why the comparison still holds after the resize was
+    /// closed. `ProviderRow` reads the store plainly and never observes it, so the
+    /// block can still only appear on a rebuild and never while the panel sits
+    /// open; that a *spend* can no longer move it either is asserted to the point
+    /// by `RowReservationTests.testABudgetBlockArrivingCannotChangeARowsHeight`.
+    /// The trend store rides the same two lines and cannot be seen this way, by
+    /// construction: see the case above.
+    @MainActor
+    func testThePanelHandsItsRowsTheStoresItWasBuiltWith() throws {
+        let state = AppState()
+        let provider = try XCTUnwrap(state.providers.first)
+        provider.isAuthenticated = true
+        state.snapshots[provider.id] = .success(UsageData(
+            providerID: provider.id,
+            planName: "Pro",
+            primary: UsageMetric(label: "5h window", used: 60, limit: 100, unit: "%"),
+            // The provider's own figure rather than a local estimate, so the
+            // budget line under it is the meter and nothing else: an estimate adds
+            // the "est." qualifier, which is width on a line that already exists
+            // and could not change the height this case reads either way.
+            spend: SpendReport(
+                amountMinor: 4_200, currency: "USD", period: .month, confidence: .measured
+            )
+        ))
+
+        let appearance = try scratchAppearance("layout.budget")
+        let empty = try scratchBudgets("layout.budget-none")
+        let funded = try scratchBudgets("layout.budget-set")
+        funded.setBudget(Budget(amountMinor: 10_000, currency: "USD"), for: provider.serviceID)
+
+        func height(_ budgets: BudgetStore) -> CGFloat {
+            let view = MenuBarContentView(
+                state: state,
+                showSettings: .constant(false),
+                appearance: appearance,
+                budgets: budgets
+            )
+            return NSHostingView(rootView: AnyView(view)).fittingSize.height
+        }
+        XCTAssertGreaterThan(
+            height(funded), height(empty),
+            "the panel drew the same row with a budget set and without one, so the store it was "
+            + "built with is not reaching its rows"
+        )
+    }
 }
 
 // MARK: - The sentence above the list
@@ -929,6 +1080,15 @@ private struct Raster {
         }
         return runs
     }
+
+    // A `differingBytes(from:)` was written here, to ask whether two renders of
+    // the panel are the same picture — the one measurement that can see a run
+    // which costs no height. It is deleted because it cannot be asked of a panel:
+    // `ImageRenderer` draws the header and leaves the `ScrollView` empty, so both
+    // sides of the comparison were pictures with no rows in them and the answer
+    // was a confident nought. Every rendered case in this file is of a single row
+    // for that reason, and the pace is measured as a *width* on the caption line
+    // instead — see `RowReservationTests`.
 
     /// The pixel a point lands in.
     private func pixel(_ point: CGFloat) -> Int {
