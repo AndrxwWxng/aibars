@@ -31,6 +31,12 @@ public struct ProviderRow: View {
     /// The samples the pace line is fitted from, read the same way and for the
     /// same reason, and handed on to the one view that states a projection.
     private let trend: UsageTrendStore
+    /// The row's own last twenty-four hours, already bucketed. Read plainly and
+    /// never observed, for the reason above and one more of its own: it is
+    /// rebuilt by the same sweep that publishes the reading this row is drawn
+    /// from, so the row is already being rebuilt whenever it has moved, and
+    /// observing would let a trace arrive on its own between refreshes.
+    private let sparklines: RowSparklineStore
 
     @State private var isHovered = false
 
@@ -45,7 +51,8 @@ public struct ProviderRow: View {
         isRefreshing: Bool = false,
         appearance: AppearanceSettings? = nil,
         budgets: BudgetStore? = nil,
-        trend: UsageTrendStore? = nil
+        trend: UsageTrendStore? = nil,
+        sparklines: RowSparklineStore? = nil
     ) {
         self.provider = provider
         self.result = result
@@ -56,12 +63,13 @@ public struct ProviderRow: View {
         self.showsPlanName = showsPlanName
         self.isRefreshing = isRefreshing
         // Resolved here rather than as default arguments: a default argument is
-        // evaluated at the call site, and all three shared objects are
+        // evaluated at the call site, and all four shared objects are
         // main-actor isolated, so that would constrain who is allowed to build
         // a row.
         self._appearance = ObservedObject(wrappedValue: appearance ?? AppearanceSettings.shared)
         self.budgets = budgets ?? BudgetStore.shared
         self.trend = trend ?? UsageTrendStore.shared
+        self.sparklines = sparklines ?? RowSparklineStore.shared
     }
 
     private var metrics: AppearanceSettings.Metrics { appearance.metrics }
@@ -145,7 +153,14 @@ public struct ProviderRow: View {
         // rows exactly as before; a row that has reported keeps its box when its
         // session dies under it.
         guard provider.isAuthenticated || result != nil else { return [] }
-        var lines: RowGeometry.Lines = .meter
+        // Reserved for every row that has something to report, under the setting,
+        // in every state that row can be in: reporting, loading, failed,
+        // quotaless. It is a setting and one bit — has this row anything to say —
+        // and neither of those flips while the panel is open, which is the whole
+        // contract. Whether the trace has a single hour in it is not asked, here
+        // or anywhere: a slot that appeared when the first hour landed would grow
+        // the row a day after the service was connected.
+        var lines: RowGeometry.Lines = appearance.showsRowSparkline ? [.meter, .sparkline] : [.meter]
         if reservesWindowLine { lines.insert(.window) }
         return lines
     }
@@ -738,6 +753,11 @@ public struct ProviderRow: View {
         // 38pt rather than 66 — vertical space in proportion to what the row has
         // to say.
         guard provider.isAuthenticated || result != nil else { return false }
+        // The trace is a block under the title, so a row that draws one is top
+        // aligned however empty the rest of its text column is. Under the ring
+        // with amounts and countdowns off this is the only block there is, and
+        // centring it against an 18pt mark would hang the name off the ceiling.
+        if appearance.showsRowSparkline { return true }
         // Every style but the ring draws its meter in the text column, and that
         // slot is occupied on every row — a quota, a reading of zero, a service
         // that reports no quota at all, and a row still waiting each fill it with
@@ -774,6 +794,14 @@ public struct ProviderRow: View {
             switch result {
             case .success(let data):
                 primaryMetric(data)
+                // The trace is a sibling of the meter block and not part of it,
+                // and it is written at all three connected states rather than
+                // wrapped once around them: these are already the enclosing
+                // stack's children at `contentSpacing`, which is exactly the
+                // pitch `RowGeometry` reserved, and a stack introduced to save
+                // two lines would be a second opinion about that pitch. All
+                // three states reserve the slot, so all three fill it.
+                sparkline
                 // Under the headline meter and above the further windows,
                 // because it is a reading of the headline window and of nothing
                 // else. Draws nothing at all — no reserved height — until the
@@ -807,6 +835,7 @@ public struct ProviderRow: View {
                 // panel is allowed to print are each short enough to fit, and
                 // whatever the server actually said is in the row's tooltip.
                 stated(error.errorDescription ?? "Not reporting")
+                sparkline
             }
         } else {
             // Loading, which is the state a real launch spends its first seconds
@@ -815,6 +844,27 @@ public struct ProviderRow: View {
             // it now occupies exactly the box it will occupy once it reports, so
             // the row does not grow when the answer lands.
             stated("Checking…")
+            sparkline
+        }
+    }
+
+    /// The row's own last day, under the meter that reads the same window at an
+    /// instant. Past, then present in the rail, then future in the pace line.
+    ///
+    /// The slot is placed whenever the setting is on, and holds nothing when
+    /// there is nothing — never `EmptyView`, which would be a row drawing
+    /// `contentSpacing + sparklineHeight` less than `RowGeometry` reserved for it.
+    /// The store answers nil for a row it has not built a trace for yet, and an
+    /// empty array draws a box with no ink in it, which is the correct picture of
+    /// "no history" and is the same thing the meter slot does on a row with no
+    /// quota.
+    @ViewBuilder
+    private var sparkline: some View {
+        if appearance.showsRowSparkline {
+            RowSparkline(
+                peaks: sparklines.series(for: provider.id)?.peaks ?? [],
+                height: metrics.sparklineHeight
+            )
         }
     }
 
@@ -2044,14 +2094,27 @@ public struct MetricCaption: View {
         }
     }
 
+    private var amountText: String { Self.amountText(for: metric) }
+
     /// For percentage metrics the number is already in the trailing rail, so
     /// the line names the window instead of repeating "47 / 100".
-    private var amountText: String {
+    ///
+    /// The denominator is drawn only where there is one. A limit of zero is a
+    /// window with no ceiling — `ClaudeCodeProvider` reports all four of its
+    /// windows that way — so it reads "45.0k tokens in the last 5h", which is the
+    /// true sentence, rather than "45.0k / 0 tokens", which is a division by
+    /// nothing. That is the distinction the panel draws everywhere: a figure means
+    /// there is a quota, no figure means there is not.
+    ///
+    /// Static and pure so the copy can be asserted against a provider's real
+    /// payload without hosting a caption, which is the arrangement
+    /// `MenuBarStripContent.accessibilityLabel` is already in.
+    static func amountText(for metric: UsageMetric) -> String {
         if metric.unit == "%" {
             return metric.label
         }
         let unit = metric.unit.map { " \($0)" } ?? ""
-        if metric.limit > 0 {
+        if metric.limit > 0, metric.limit.isFinite {
             return "\(metric.displayUsed) / \(metric.displayLimit)\(unit)"
         }
         return "\(metric.displayUsed)\(unit) \(metric.label.lowercased())"
@@ -2172,11 +2235,19 @@ public struct StatusLine: View {
         }
     }
 
+    private var text: String { Self.text(for: metric) }
+
     /// A unit is the provider saying "this is a count", so lead with the
     /// figure: "0 reqs this cycle" answers something, "GPT-4 class requests"
     /// does not. Without a unit the metric is a state — Copilot's "Active" —
     /// and prefixing it with a number would be nonsense.
-    private var text: String {
+    ///
+    /// No denominator here in any branch, and that is correct rather than an
+    /// omission: this line is only ever drawn for a window with no ceiling, so
+    /// there is no figure to divide by. Static and pure for the reason
+    /// `MetricCaption.amountText(for:)` is — the sweep that proves no uncapped
+    /// window renders a "/0" has to be able to ask all four of these.
+    static func text(for metric: UsageMetric) -> String {
         guard let unit = metric.unit else { return metric.label }
         return "\(metric.displayUsed) \(unit) \(metric.label.lowercased())"
     }
@@ -2223,7 +2294,13 @@ public struct SecondaryValue: View {
         .frame(minHeight: Tokens.lineBox(size))
     }
 
-    private var value: String {
+    private var value: String { Self.value(for: metric) }
+
+    /// The value and its unit, and never a ceiling: this view is chosen precisely
+    /// when the window has none, so a denominator here would be a figure the
+    /// provider did not publish. Static and pure for the reason
+    /// `MetricCaption.amountText(for:)` is.
+    static func value(for metric: UsageMetric) -> String {
         let unit = metric.unit.map { " \($0)" } ?? ""
         return "\(metric.displayUsed)\(unit)"
     }
@@ -2557,8 +2634,9 @@ public struct SecondaryChip: View {
                 // percentage and may be wider.
                 //
                 // And a ceiling above it, at the nine cells `RowGeometry` reserves:
-                // `9767.2M/0` is the widest reading the formatter can put here and
-                // it takes exactly those nine. The floor is clamped under the
+                // a capped count with both halves formatted — Cursor's `1.0k/1.0k`
+                // — is the widest reading the formatter can put here in practice
+                // and it takes exactly those nine. The floor is clamped under the
                 // ceiling rather than stated flat, because a line too narrow to
                 // hold a whole chip hands this run less than four cells and a
                 // `minWidth` above its own `maxWidth` is not a frame.
@@ -2583,11 +2661,35 @@ public struct SecondaryChip: View {
         }
     }
 
+    private var reading: (digits: String, unit: String?) { Self.reading(for: metric) }
+
     /// The reading split where the panel splits every reading: the digits, which
     /// the ramp may colour, and the unit, which it may not.
-    private var reading: (digits: String, unit: String?) {
+    ///
+    /// A limit of zero means the window has no ceiling, and it is the one case
+    /// this got wrong. `ClaudeCodeProvider` reports `Today`, `7 days` and `30
+    /// days` at `limit: 0`, and the chip drew them as `644.6M/0` — which is not a
+    /// window at 644.6 million of nothing, it is a fraction whose denominator is
+    /// zero, and it read as a bug on every Claude Code row in the panel. The bare
+    /// value is what the rest of the row already says about the same metric:
+    /// `MetricCaption` writes "45.0k tokens in the last 5h" and `SecondaryValue`
+    /// writes "644.6M tokens", both of them on the panel's one rule that a figure
+    /// means there is a quota and no figure means there is not.
+    ///
+    /// No unit on the bare value, and that is the chip and not the rule. The rail
+    /// beside the label is nine mono cells; "644.6M" is six of them and
+    /// "644.6M tokens" is thirteen, so the unit would be truncated away by the
+    /// cap and the reading with it. What the window counts is on the row's own
+    /// headline line, which is where a chip's reader takes it from.
+    ///
+    /// Static and pure so the copy can be asserted against a provider's real
+    /// payload without hosting a chip.
+    static func reading(for metric: UsageMetric) -> (digits: String, unit: String?) {
         if metric.unit == "%" || metric.limit == 100 {
             return ("\(Int(metric.used.rounded()))", "%")
+        }
+        guard metric.limit > 0, metric.limit.isFinite else {
+            return (metric.displayUsed, nil)
         }
         return ("\(metric.displayUsed)/\(metric.displayLimit)", nil)
     }

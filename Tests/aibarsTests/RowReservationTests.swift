@@ -15,16 +15,26 @@ import SwiftUI
 /// appeared at one combination of settings and were invisible at the shipped one.
 final class RowReservationTests: XCTestCase {
 
-    /// The whole space, named once: five presets, three densities and both ends
-    /// of the text-size slider plus the middle. 45 configurations, and each case
-    /// below walks all of them.
+    /// The whole space, named once: five presets, three densities, both ends of
+    /// the text-size slider plus the middle, and the sparkline switch in both
+    /// positions. 90 configurations, and each case below walks all of them.
     ///
     /// Density and text scale are swept *over* each preset rather than left to
     /// it, because they are the two settings that move every box on the row —
     /// and a preset pins one value of each, so a preset sweep alone measures five
-    /// points of a 45-point space.
+    /// points of a 90-point space.
+    ///
+    /// The sparkline is swept for a different reason. It is the first optional
+    /// drawing on the row that *reserves* — the pace line costs nothing when it
+    /// says nothing, and this costs its slot whether or not there is a day of
+    /// history behind it. That is the whole risk in it: a slot whose drawn height
+    /// and reserved height disagree by a point reintroduces exactly the resize
+    /// this suite exists to prevent, and it would only appear with the switch on.
+    /// Overridden after `apply(preset)` rather than left to the preset, so the
+    /// space stays 90 points wide on the day a preset turns the trace on.
     private static let densities = AppearanceSettings.Density.allCases
     private static let textScales: [Double] = [0.85, 1.0, 1.30]
+    private static let sparklines: [Bool] = [false, true]
 
     /// The panel widths a user can set, both ends of the slider included. The
     /// same four `PanelWidthContractTests` draws at, so a failure here and a
@@ -54,10 +64,17 @@ final class RowReservationTests: XCTestCase {
         for preset in AppearanceSettings.Preset.allCases {
             for density in Self.densities {
                 for scale in Self.textScales {
-                    appearance.apply(preset)
-                    appearance.density = density
-                    appearance.textScale = scale
-                    try body(appearance, "\(preset.rawValue)/\(density.rawValue)/\(Int(scale * 100))%")
+                    for sparkline in Self.sparklines {
+                        appearance.apply(preset)
+                        appearance.density = density
+                        appearance.textScale = scale
+                        appearance.showsRowSparkline = sparkline
+                        try body(
+                            appearance,
+                            "\(preset.rawValue)/\(density.rawValue)/\(Int(scale * 100))%"
+                                + "/trace \(sparkline ? "on" : "off")"
+                        )
+                    }
                 }
             }
         }
@@ -212,6 +229,93 @@ final class RowReservationTests: XCTestCase {
                 expired, live,
                 "\(at): the row collapsed when its credential was discarded under it"
             )
+        }
+    }
+
+    // MARK: - The trace reserves what it draws
+
+    /// **The one thing the trace may cost, asked of the row rather than of the
+    /// line set.** Turning the switch on adds `contentSpacing + sparklineHeight`
+    /// and nothing else, in every state the row can be in.
+    ///
+    /// The trace is the first optional drawing on a row that reserves. The pace
+    /// line is on by default precisely because it costs nothing when it says
+    /// nothing; this costs its slot on a fresh install with no history at all, so
+    /// the reservation is the only thing standing between the feature and a panel
+    /// that grows a day after a service is connected.
+    @MainActor
+    func testTheTraceCostsExactlyItsOwnBlockInEveryState() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("trace-cost")
+        for preset in AppearanceSettings.Preset.allCases {
+            for density in Self.densities {
+                for scale in Self.textScales {
+                    for state in Self.states(for: provider) {
+                        appearance.apply(preset)
+                        appearance.density = density
+                        appearance.textScale = scale
+                        let at = "\(preset.rawValue)/\(density.rawValue)/\(Int(scale * 100))%/\(state.name)"
+
+                        appearance.showsRowSparkline = false
+                        let without = Self.reservation(
+                            appearance: appearance, provider: provider, result: state.result
+                        ).height
+                        appearance.showsRowSparkline = true
+                        let with = Self.reservation(
+                            appearance: appearance, provider: provider, result: state.result
+                        ).height
+
+                        XCTAssertEqual(
+                            with - without,
+                            appearance.metrics.contentSpacing + appearance.metrics.sparklineHeight,
+                            accuracy: 1e-9,
+                            "\(at): the trace cost the row \(with - without)pt"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// And the row *draws* that same block — which is the half the reservation
+    /// cannot see on its own, since `RowGeometry.height` is read by the card's
+    /// corner radius and by nothing else.
+    ///
+    /// Measured with an empty store, deliberately: a row with no trace in it yet
+    /// must draw exactly as tall as the slot reserved for it, because that is the
+    /// state every row is in on the first launch after the switch is turned on.
+    /// One point of tolerance, the same the state-constancy case takes and for
+    /// the same reason — the rail's 14pt glyph square, not the trace.
+    @MainActor
+    func testTheRowDrawsTheTraceSlotItReserved() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("trace-drawn")
+        for density in Self.densities {
+            for scale in Self.textScales {
+                appearance.density = density
+                appearance.textScale = scale
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+                let result = Result<UsageData, ProviderError>.success(
+                    Self.reading(0.42, provider: provider)
+                )
+
+                appearance.showsRowSparkline = false
+                let without = Self.drawnHeight(
+                    appearance: appearance, provider: provider, result: result
+                )
+                appearance.showsRowSparkline = true
+                let with = Self.drawnHeight(
+                    appearance: appearance, provider: provider, result: result
+                )
+
+                XCTAssertEqual(
+                    with - without,
+                    appearance.metrics.contentSpacing + appearance.metrics.sparklineHeight,
+                    accuracy: 1.0,
+                    "\(at): the row drew \(with - without)pt where it reserved "
+                    + "\(appearance.metrics.contentSpacing + appearance.metrics.sparklineHeight)pt"
+                )
+            }
         }
     }
 
@@ -400,10 +504,15 @@ final class RowReservationTests: XCTestCase {
         row(appearance: appearance, provider: provider, result: result).geometry
     }
 
-    /// Both stores empty and neither of them the shared one: a budget on the
-    /// service under test adds a meter to the row, and a pace line adds a
-    /// caption, so whatever the machine running the suite has been collecting
-    /// would decide the height being measured.
+    /// All three stores empty and none of them the shared one: a budget on the
+    /// service under test adds a meter to the row, a pace line adds a caption,
+    /// and a trace adds ink to a slot — so whatever the machine running the suite
+    /// has been collecting would decide what is being measured.
+    ///
+    /// The sparkline store is the one of the three that cannot move a height, and
+    /// it is handed a fresh one anyway. A trace is drawn into a fixed box either
+    /// way, so an empty store is not weaker here: it is the state a first launch
+    /// is in, which is the state the reserved slot has to be honest in.
     @MainActor
     private static func row(
         appearance: AppearanceSettings,
@@ -416,7 +525,8 @@ final class RowReservationTests: XCTestCase {
             onSignIn: {},
             appearance: appearance,
             budgets: BudgetStore(store: scratchDefaults("budgets")),
-            trend: UsageTrendStore(store: scratchDefaults("trends"))
+            trend: UsageTrendStore(store: scratchDefaults("trends")),
+            sparklines: RowSparklineStore()
         )
     }
 

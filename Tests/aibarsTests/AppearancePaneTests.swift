@@ -215,7 +215,14 @@ final class AppearancePaneTests: XCTestCase {
             provider: provider,
             result: .success(data),
             onSignIn: {},
-            appearance: appearance
+            appearance: appearance,
+            // A store of its own, empty, for the reason the account id is made
+            // up: whatever the machine running the suite has collected must not
+            // decide what this row draws. It is also the harder half of the
+            // parity case — the preview draws a full day from `RowSparkline.sample`
+            // and this draws nothing at all, and the two still have to measure the
+            // same, which is the whole claim about a reserved slot.
+            sparklines: RowSparklineStore()
         )
     }
 
@@ -257,21 +264,80 @@ final class AppearancePaneTests: XCTestCase {
     func testTheSampleRowIsTheHeightOfARealRow() {
         let appearance = settings("sample-row-height")
         for preset in AppearanceSettings.Preset.allCases {
-            appearance.apply(preset)
-            let sample = SampleService.claude
-            let width = CGFloat(appearance.panelWidth)
+            // Both positions of the trace switch, because it is the one row
+            // setting whose *drawing* differs between the two: the preview always
+            // has a full day to draw and a real row usually has nothing. If the
+            // slot were ever measured rather than reserved, this is the pair that
+            // separates.
+            for sparkline in [false, true] {
+                appearance.apply(preset)
+                appearance.showsRowSparkline = sparkline
+                let sample = SampleService.claude
+                let width = CGFloat(appearance.panelWidth)
+                let at = "\(preset.id)/trace \(sparkline ? "on" : "off")"
 
-            let previewed = fittingHeight(
-                SampleRow(appearance: appearance, service: sample),
-                width: width
-            )
-            let real = fittingHeight(realRow(appearance, from: sample), width: width)
+                let previewed = fittingHeight(
+                    SampleRow(appearance: appearance, service: sample),
+                    width: width
+                )
+                let real = fittingHeight(realRow(appearance, from: sample), width: width)
+
+                XCTAssertEqual(
+                    previewed, real, accuracy: 0.5,
+                    "\(at): the preview draws a \(previewed)pt row for a \(real)pt one"
+                )
+            }
+        }
+    }
+
+    /// And the trace costs the preview exactly what `RowGeometry` says it costs
+    /// the row: one block and the pitch in front of it.
+    ///
+    /// Measured on the preview rather than on the reservation because that is
+    /// where the two could come apart — the sample stacks its own detail views,
+    /// so a trace inserted at a different spacing from the row's would agree
+    /// about the reservation and disagree about the drawing.
+    @MainActor
+    func testTheTraceCostsThePreviewWhatItCostsTheRow() {
+        let appearance = settings("sample-row-trace")
+        let sample = SampleService.claude
+        let width = CGFloat(appearance.panelWidth)
+
+        for density in AppearanceSettings.Density.allCases {
+            appearance.density = density
+            appearance.showsRowSparkline = false
+            let without = fittingHeight(SampleRow(appearance: appearance, service: sample), width: width)
+            appearance.showsRowSparkline = true
+            let with = fittingHeight(SampleRow(appearance: appearance, service: sample), width: width)
 
             XCTAssertEqual(
-                previewed, real, accuracy: 0.5,
-                "\(preset.id): the preview draws a \(previewed)pt row for a \(real)pt one"
+                with - without,
+                appearance.metrics.contentSpacing + appearance.metrics.sparklineHeight,
+                accuracy: 0.5,
+                "\(density.rawValue): the preview grew \(with - without)pt for the trace"
             )
         }
+    }
+
+    /// The switch is wired to something that draws. A toggle whose preview did
+    /// not move is indistinguishable, in this window, from a toggle that does
+    /// nothing — which is the failure the whole preview column exists to catch.
+    @MainActor
+    func testThePaneAndItsPreviewBuildWithTheTraceOn() {
+        let appearance = settings("pane-trace-on")
+        appearance.showsRowSparkline = true
+        let host = hosted(AppearancePane(appearance: appearance))
+        XCTAssertGreaterThan(
+            controls(in: host).count, 8,
+            "the pane builds only \(controls(in: host).count) controls with the trace on"
+        )
+
+        let width = CGFloat(appearance.panelWidth)
+        appearance.showsRowSparkline = false
+        let off = fittingHeight(SampleRow(appearance: appearance, service: .claude), width: width)
+        appearance.showsRowSparkline = true
+        let on = fittingHeight(SampleRow(appearance: appearance, service: .claude), width: width)
+        XCTAssertGreaterThan(on, off, "the preview did not change when the trace was switched on")
     }
 
     /// The invariant the panel has, demonstrated by the thing that previews it.

@@ -23,10 +23,10 @@ public struct RowGeometry: Equatable {
 
     /// Which optional lines this row draws. Presence only — never what they say.
     ///
-    /// Three, because three is what changes a row's height. The plan, the
-    /// account label and the action buttons all live on the title line, which is
-    /// one box whatever is in it, and the error and loading lines are the window
-    /// line's own box with different words in it.
+    /// Four, because four is what changes a row's height. The plan, the account
+    /// label and the action buttons all live on the title line, which is one box
+    /// whatever is in it, and the error and loading lines are the window line's
+    /// own box with different words in it.
     public struct Lines: OptionSet, Equatable {
         public let rawValue: Int
 
@@ -59,6 +59,16 @@ public struct RowGeometry: Equatable {
         /// only when there is something honest to say, which is why it is asked
         /// about rather than assumed.
         public static let forecast = Lines(rawValue: 1 << 2)
+        /// The twenty-four-hour trace under the meter block.
+        ///
+        /// Presence here is a *setting* and the same one bit the meter slot turns
+        /// on — has this row anything to report — and never whether the trace has
+        /// anything in it. That is the whole discipline: a row whose slot appeared
+        /// when its first hour of history landed would grow 6 + 18 = 24pt under
+        /// the pointer a day after the service was connected, which is the resize
+        /// this type exists to make impossible. An empty slot beside a full one is
+        /// the price, and it is the same price the meter slot has always paid.
+        public static let sparkline = Lines(rawValue: 1 << 3)
     }
 
     /// The logo-and-dial column, the gap to the text included. Zero when there
@@ -176,8 +186,24 @@ public struct RowGeometry: Equatable {
         // at the full pitch from it.
         let forecastHeight = lines.contains(.forecast) ? Tokens.lineBox(metrics.captionSize) : 0
 
+        // A sibling of the meter block and of the pace line, at the full pitch
+        // from both: the trace is a reading of the same window the meter reads,
+        // taken over a day instead of at an instant, and a block of its own is
+        // what says so. Reserved at `Metrics.sparklineHeight` exactly — not a
+        // floor, unlike the text lines: a text line at the top of the scale range
+        // can measure a fraction over its box and the row would rather be a point
+        // tall than clip a descender, where a `Path` in a fixed frame has no such
+        // fraction and reserving slack for one would be 1pt of dead air on every
+        // row.
+        let sparklineHeight = lines.contains(.sparkline) ? Self.positive(metrics.sparklineHeight) : 0
+
         var textHeight = titleHeight
         if meterBlock > 0 { textHeight += metrics.contentSpacing + meterBlock }
+        // Between the meter block and the pace line because that is the order the
+        // row draws them. Addition commutes, so the sum does not care; a
+        // reservation that reads in a different order from the drawing is how the
+        // two come apart when somebody next edits one of them.
+        if sparklineHeight > 0 { textHeight += metrics.contentSpacing + sparklineHeight }
         if forecastHeight > 0 { textHeight += metrics.contentSpacing + forecastHeight }
 
         height = max(leadingHeight, textHeight) + 2 * metrics.rowVerticalPadding
@@ -196,7 +222,7 @@ public struct RowGeometry: Equatable {
     // reserved 25pt of capsule padding and a coloured dot that `SecondaryChip`
     // states outright it does not draw; it reserved the label at four cells
     // where real window labels run seven to nineteen characters; it reserved the
-    // reading at seven cells where `9767.2M/0` takes nine; and it used
+    // reading at seven cells where a capped count takes nine; and it used
     // `Space.snug` for the gap between two chips where `SecondaryChipRun` sets
     // its stack at `Space.medium`. Being small in three places and generous in
     // one, it handed a 356pt row three slots for a run whose ideal was 344pt of
@@ -368,13 +394,22 @@ public struct RowGeometry: Equatable {
         Tokens.figureWidth(positive(chipSize), digits: 8)
     }
 
-    /// A window's reading: "61%", "12/100", "9767.2M/0".
+    /// A window's reading: "61%", "12/100", "1.0k/1.0k", "9767.2M".
     ///
-    /// Nine cells, which is what `SecondaryChip` can actually be handed rather
-    /// than the seven this used to reserve. `ClaudeCodeProvider` reports token
-    /// windows at `limit: 0`, and `UsageMetric.format` renders 9 767 200 000 as
-    /// `9767.2M` — with the slash and the zero that is nine characters, and it
-    /// measures 61.20pt in SF Mono at 11 against the 62 nine cells reserve.
+    /// Nine cells, and the string that used to justify them is gone. It was
+    /// `9767.2M/0` — `ClaudeCodeProvider` reports its token windows at `limit: 0`,
+    /// and the chip rendered "no ceiling" as a fraction over zero. A window with
+    /// no cap now reads as the bare value, so that reading is seven characters
+    /// (7 × 6.8035 = 47.63pt in SF Mono at 11) and not nine.
+    ///
+    /// Nine stays, and not out of inertia: what is left at the wide end is a
+    /// *capped* count with both halves formatted. `CursorProvider` reports request
+    /// buckets as counts, and `UsageMetric.format` renders a thousand of them as
+    /// `1.0k` — so `1.0k/1.0k` is nine characters, 9 × 6.8035 = 61.23pt against
+    /// the 62 that nine cells reserve. That is the reading this rail is now cut
+    /// for. A wider pair truncates against the ceiling `chipRuns` hands the run
+    /// rather than overhanging it, which is the direction this whole section was
+    /// rebuilt to fail in.
     private static func chipReadingRail(_ chipSize: CGFloat) -> CGFloat {
         Tokens.figureWidth(positive(chipSize), digits: 9)
     }

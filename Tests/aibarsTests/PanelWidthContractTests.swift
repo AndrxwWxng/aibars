@@ -45,6 +45,22 @@ final class PanelWidthContractTests: XCTestCase {
     /// one branch where the reservation is not simply a division.
     private static let scales: [Double] = [0.85, 1.0, 1.30]
 
+    /// The sparkline switch, in both positions.
+    ///
+    /// Swept alongside the widths because the trace is the second thing the row
+    /// draws that spans the whole text column, and the first one broke this
+    /// contract: `SecondaryChipRun` spans it under `.fixedSize()`, so it reported
+    /// an ideal 40pt wider than the column and nothing could take the width back.
+    ///
+    /// What is measured here is the row *around* the slot — the block the trace
+    /// adds must not perturb anything horizontal. The trace's own width is pinned
+    /// where it can be stated exactly rather than inferred from a bitmap:
+    /// `RowSparklineTests.testTheTraceAsksForNoWidthAtAll` hosts a full
+    /// twenty-four-bucket series and requires a fitting width of zero. That is
+    /// the stronger claim of the two, because a row whose store has nothing in it
+    /// yet draws an empty `Path`, and an empty `Path` cannot overhang anything.
+    private static let sparklines: [Bool] = [false, true]
+
     // MARK: - The contract
 
     @MainActor
@@ -52,9 +68,11 @@ final class PanelWidthContractTests: XCTestCase {
         let appearance = AppearanceSettings.shared
         let originalWidth = appearance.panelWidth
         let originalScale = appearance.textScale
+        let originalSparkline = appearance.showsRowSparkline
         defer {
             appearance.panelWidth = originalWidth
             appearance.textScale = originalScale
+            appearance.showsRowSparkline = originalSparkline
         }
 
         let state = Self.pathologicalState()
@@ -62,18 +80,21 @@ final class PanelWidthContractTests: XCTestCase {
 
         for width in Self.widths {
             for scale in Self.scales {
-                appearance.panelWidth = width
-                appearance.textScale = scale
-                let panel = MenuBarContentView(
-                    state: state,
-                    showSettings: .constant(false),
-                    appearance: appearance
-                )
-                if let escape = Self.inkOutside(AnyView(panel), panelWidth: CGFloat(width)) {
-                    failures.append(String(
-                        format: "%.0fpt panel at %.0f%% type: ink %.0fpt outside the ground (%@ edge)",
-                        width, scale * 100, escape.overhang, escape.edge
-                    ))
+                for sparkline in Self.sparklines {
+                    appearance.panelWidth = width
+                    appearance.textScale = scale
+                    appearance.showsRowSparkline = sparkline
+                    let panel = MenuBarContentView(
+                        state: state,
+                        showSettings: .constant(false),
+                        appearance: appearance
+                    )
+                    if let escape = Self.inkOutside(AnyView(panel), panelWidth: CGFloat(width)) {
+                        failures.append(String(
+                            format: "%.0fpt panel at %.0f%% type, trace %@: ink %.0fpt outside the ground (%@ edge)",
+                            width, scale * 100, sparkline ? "on" : "off", escape.overhang, escape.edge
+                        ))
+                    }
                 }
             }
         }
@@ -98,9 +119,11 @@ final class PanelWidthContractTests: XCTestCase {
         let appearance = AppearanceSettings.shared
         let originalWidth = appearance.panelWidth
         let originalScale = appearance.textScale
+        let originalSparkline = appearance.showsRowSparkline
         defer {
             appearance.panelWidth = originalWidth
             appearance.textScale = originalScale
+            appearance.showsRowSparkline = originalSparkline
         }
 
         let state = Self.pathologicalState()
@@ -108,22 +131,26 @@ final class PanelWidthContractTests: XCTestCase {
 
         for width in Self.widths {
             for scale in Self.scales {
-                appearance.panelWidth = width
-                appearance.textScale = scale
-                for provider in state.providers where provider.isAuthenticated {
-                    let row = ProviderRow(
-                        provider: provider,
-                        result: state.snapshots[provider.id],
-                        onSignIn: {},
-                        appearance: appearance
-                    )
-                    .frame(width: CGFloat(width))
+                for sparkline in Self.sparklines {
+                    appearance.panelWidth = width
+                    appearance.textScale = scale
+                    appearance.showsRowSparkline = sparkline
+                    for provider in state.providers where provider.isAuthenticated {
+                        let row = ProviderRow(
+                            provider: provider,
+                            result: state.snapshots[provider.id],
+                            onSignIn: {},
+                            appearance: appearance
+                        )
+                        .frame(width: CGFloat(width))
 
-                    if let escape = Self.inkOutside(AnyView(row), panelWidth: CGFloat(width)) {
-                        failures.append(String(
-                            format: "%.0fpt panel at %.0f%% type: %@ draws %.0fpt past the %@ edge",
-                            width, scale * 100, provider.serviceID, escape.overhang, escape.edge
-                        ))
+                        if let escape = Self.inkOutside(AnyView(row), panelWidth: CGFloat(width)) {
+                            failures.append(String(
+                                format: "%.0fpt panel at %.0f%% type, trace %@: %@ draws %.0fpt past the %@ edge",
+                                width, scale * 100, sparkline ? "on" : "off",
+                                provider.serviceID, escape.overhang, escape.edge
+                            ))
+                        }
                     }
                 }
             }
@@ -135,7 +162,99 @@ final class PanelWidthContractTests: XCTestCase {
         )
     }
 
+    // MARK: - The reading a window with no ceiling prints
+
+    /// **A limit of zero is "no ceiling", and it may not be drawn as a
+    /// denominator.**
+    ///
+    /// It was. `SecondaryChip` rendered `ClaudeCodeProvider`'s token windows as
+    /// `644.6M/0`, and "/0" is not a window with no cap — it is a fraction over
+    /// zero, which is either a bug or nonsense depending on how carefully the
+    /// reader is looking. It is asserted in this suite rather than a tidier one
+    /// because the fixture below is where the real payload lives, and because the
+    /// two characters were also two mono cells of an incompressible run on the
+    /// line that overflowed.
+    ///
+    /// Swept over all four of the row's string-producing readings and over the
+    /// provider's own payload, built by `ClaudeCodeReport` from real totals, so
+    /// the case is about what the app is sent and not about a metric written
+    /// here.
+    func testNoUncappedWindowIsDrawnWithADenominator() {
+        let data = ClaudeCodeReport.data(
+            providerID: "claudecode",
+            totals: ClaudeCodeTotals(
+                sessionWindow: Self.bucket(45_000),
+                today: Self.bucket(644_600_000),
+                week: Self.bucket(4_334_500_000),
+                month: Self.bucket(9_767_200_000),
+                byModel: [:],
+                lastTurnAt: Date()
+            )
+        )
+
+        let windows = [data.primary] + data.secondary
+        XCTAssertEqual(windows.count, 4, "the provider stopped reporting the four windows this case sweeps")
+
+        for metric in windows {
+            XCTAssertEqual(metric.limit, 0, "\"\(metric.label)\" is no longer an uncapped window")
+            let printed = [
+                SecondaryChip.reading(for: metric).digits,
+                SecondaryChip.reading(for: metric).unit ?? "",
+                MetricCaption.amountText(for: metric),
+                StatusLine.text(for: metric),
+                SecondaryValue.value(for: metric)
+            ]
+            for line in printed {
+                XCTAssertFalse(
+                    line.contains("/0"),
+                    "\"\(metric.label)\" printed \"\(line)\" — a denominator of zero"
+                )
+                XCTAssertFalse(
+                    line.contains("/"),
+                    "\"\(metric.label)\" printed \"\(line)\" — a division for a window with nothing to divide by"
+                )
+            }
+        }
+    }
+
+    /// And the chip prints the value itself, which is the other half: a reading
+    /// that dropped the "/0" by dropping the reading would pass the case above.
+    func testAnUncappedChipPrintsTheBareValue() {
+        let metric = UsageMetric(label: "Today", used: 644_600_000, limit: 0, unit: "tokens")
+        let reading = SecondaryChip.reading(for: metric)
+        XCTAssertEqual(reading.digits, "644.6M")
+        XCTAssertNil(reading.unit, "the chip's nine-cell rail was handed a unit as well as a value")
+    }
+
+    /// A capped window is untouched, which is what makes the change a
+    /// distinction rather than a deletion: a figure means there is a quota.
+    func testACappedWindowKeepsItsDenominator() {
+        let percentage = UsageMetric(label: "Weekly", used: 61, limit: 100, unit: "%")
+        XCTAssertEqual(SecondaryChip.reading(for: percentage).digits, "61")
+        XCTAssertEqual(SecondaryChip.reading(for: percentage).unit, "%")
+
+        let counted = UsageMetric(label: "Requests", used: 120, limit: 500, unit: "reqs")
+        XCTAssertEqual(SecondaryChip.reading(for: counted).digits, "120/500")
+        XCTAssertEqual(MetricCaption.amountText(for: counted), "120 / 500 reqs")
+    }
+
     // MARK: - Fixtures
+
+    /// A window holding exactly `count` tokens.
+    ///
+    /// All of them counted as input, and the report adds the four token fields
+    /// together, so the figure the row prints is the figure named at the call
+    /// site rather than a sum a reader of this file would have to do.
+    private static func bucket(_ count: Int) -> ClaudeCodeBucket {
+        ClaudeCodeBucket(
+            turns: 1,
+            inputTokens: count,
+            outputTokens: 0,
+            cacheCreationTokens: 0,
+            cacheReadTokens: 0,
+            estimatedUSD: 0
+        )
+    }
 
     /// Every payload shape that has ever been able to widen a row, in one
     /// panel: token windows with no ceiling, a four-figure spend, three
@@ -143,9 +262,11 @@ final class PanelWidthContractTests: XCTestCase {
     ///
     /// Taken from what providers really send rather than invented.
     /// `ClaudeCodeProvider` reports `Today`, `7 days` and `30 days` at
-    /// `limit: 0` with token counts in them — a seven-character label beside a
-    /// nine-character reading, against a chip estimate that reserves four and
-    /// seven.
+    /// `limit: 0` with token counts in them — a seven-character label beside what
+    /// used to be a nine-character reading, against a chip estimate that reserved
+    /// four and seven. The reading is seven characters now that "no ceiling" no
+    /// longer prints a denominator; the label is unchanged, and it is the label
+    /// that the estimate got wrong by the wider margin.
     @MainActor
     static func pathologicalState() -> AppState {
         let state = AppState()

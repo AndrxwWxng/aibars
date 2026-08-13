@@ -233,6 +233,137 @@ final class RowGeometryTests: XCTestCase {
         XCTAssertEqual(withMeter.height, withoutMeter.height, "the ring row paid for its dial twice")
     }
 
+    // MARK: - The trace
+
+    /// **What `.sparkline` costs, at every density and both ends of the text
+    /// slider.** One block and the pitch in front of it, and nothing else.
+    ///
+    /// Swept rather than spot-checked because `sparklineHeight` is derived from
+    /// `detailSize` and therefore moves with both settings, and a term written
+    /// against one density can be right there and wrong at the other two.
+    ///
+    /// Written as the difference rather than as a total: the trace is additive by
+    /// construction, and stating it that way is what makes the case fail if it
+    /// ever starts interacting with the lines around it.
+    @MainActor
+    func testTheTraceCostsItsOwnBlockAndTheGapInFrontOfIt() {
+        let appearance = settings("sparkline-cost")
+        for density in AppearanceSettings.Density.allCases {
+            for scale in [0.85, 1.0, 1.30] {
+                appearance.density = density
+                appearance.textScale = scale
+                let metrics = appearance.metrics
+                let at = "\(density.rawValue)/\(Int(scale * 100))%"
+
+                let without = geometry(appearance, lines: [.meter, .window])
+                let with = geometry(appearance, lines: [.meter, .window, .sparkline])
+                XCTAssertEqual(
+                    with.height - without.height,
+                    metrics.contentSpacing + metrics.sparklineHeight,
+                    accuracy: 1e-9,
+                    "\(at): the trace cost \(with.height - without.height)pt"
+                )
+            }
+        }
+    }
+
+    /// And it composes: adding it to a row that already carries a pace line costs
+    /// the same block. If the trace ever borrowed the forecast's pitch — or the
+    /// forecast the trace's — this is where that shows.
+    @MainActor
+    func testTheTraceCostsTheSameBesideAPaceLine() {
+        let appearance = settings("sparkline-composes")
+        appearance.density = .cozy
+        appearance.textScale = 1.0
+        let metrics = appearance.metrics
+
+        let paced = geometry(appearance, lines: [.meter, .window, .forecast])
+        let both = geometry(appearance, lines: [.meter, .window, .forecast, .sparkline])
+        XCTAssertEqual(
+            both.height - paced.height,
+            metrics.contentSpacing + metrics.sparklineHeight
+        )
+        // The shipped three-line row is 85pt; 6 of pitch and an 18pt trace make
+        // it 109.
+        XCTAssertEqual(both.height, 109, "the four-block row is \(both.height)pt, not 109")
+    }
+
+    /// The trace on a row with nothing else under its title: the ring meter takes
+    /// the leading column, the window line is switched off, and the text stack is
+    /// the title and the trace. The one configuration where the reservation is
+    /// the trace and the padding and nothing else.
+    @MainActor
+    func testATraceAloneUnderTheTitleIsTheWholeTextStack() {
+        let appearance = settings("sparkline-alone")
+        appearance.density = .cozy
+        appearance.textScale = 1.0
+        appearance.meterStyle = .ring
+        appearance.logoStyle = .hidden
+        let metrics = appearance.metrics
+
+        let row = geometry(appearance, lines: [.meter, .sparkline])
+        let text = titleLine(metrics) + metrics.contentSpacing + metrics.sparklineHeight
+        let leading = leadingLine(logo: 0, ring: metrics.ringDiameter)
+        XCTAssertEqual(row.height, max(leading, text) + 2 * metrics.rowVerticalPadding)
+        // 18 title + 6 spacing + 18 trace = 42 of text, against a 22pt dial, + 20
+        // padding.
+        XCTAssertEqual(row.height, 62, "the trace-only row is \(row.height)pt, not 62")
+    }
+
+    /// The invariant, restated for the new case: nothing about the *content* of
+    /// the trace is an input, because there is no parameter for it. Two rows
+    /// built from the same settings and the same lines measure the same whatever
+    /// the store happens to hold — which is what lets a row with no history at
+    /// all stand beside a row with a full day and neither of them move.
+    @MainActor
+    func testTheTraceHasNoContentToBeAFunctionOf() {
+        let appearance = settings("sparkline-content")
+        let other = settings("sparkline-content-twin")
+        for preset in AppearanceSettings.Preset.allCases {
+            appearance.apply(preset)
+            other.apply(preset)
+            XCTAssertEqual(
+                geometry(appearance, lines: [.meter, .window, .sparkline]),
+                geometry(other, lines: [.meter, .window, .sparkline]),
+                "\(preset.id) measured two identical traced rows differently"
+            )
+        }
+    }
+
+    /// The box itself, at the three densities. `detailSize * 1.6` rounded, which
+    /// is 10 → 16, 11 → 17.6 → 18 and 12 → 19.2 → 19: three distinct heights, all
+    /// of them under the 22pt ring beside them, so the trace never out-measures
+    /// the meter it annotates.
+    @MainActor
+    func testTheTraceBoxIsSixteenEighteenAndNineteen() {
+        let appearance = settings("sparkline-box")
+        appearance.textScale = 1.0
+        let expected: [AppearanceSettings.Density: CGFloat] = [
+            .compact: 16, .cozy: 18, .comfortable: 19
+        ]
+        for density in AppearanceSettings.Density.allCases {
+            appearance.density = density
+            let metrics = appearance.metrics
+            XCTAssertEqual(
+                metrics.sparklineHeight, (metrics.detailSize * 1.6).rounded(),
+                "\(density.rawValue): the box stopped being 1.6 detail sizes"
+            )
+            XCTAssertEqual(
+                metrics.sparklineHeight, expected[density],
+                "\(density.rawValue) draws a \(metrics.sparklineHeight)pt trace"
+            )
+        }
+    }
+
+    /// The floor, which is only reachable from a `Metrics` built by hand — the
+    /// app's own `detailSize` floors at 10, so 16 is the smallest box it can
+    /// produce. A trace under 12pt has no shape left to read.
+    @MainActor
+    func testTheTraceBoxNeverFallsBelowTwelve() {
+        XCTAssertEqual(handBuilt(detailSize: 1).sparklineHeight, 12)
+        XCTAssertEqual(handBuilt(detailSize: 0).sparklineHeight, 12)
+    }
+
     // MARK: - Content independence
 
     /// The invariant the whole type exists for, stated as a type-level fact:
@@ -267,7 +398,7 @@ final class RowGeometryTests: XCTestCase {
         let appearance = settings("lines-cost")
         appearance.logoStyle = .hidden
         let bare = geometry(appearance, lines: [])
-        for lines in [RowGeometry.Lines.meter, .window, .forecast] {
+        for lines in [RowGeometry.Lines.meter, .window, .forecast, .sparkline] {
             XCTAssertGreaterThan(
                 geometry(appearance, lines: lines).height, bare.height,
                 "drawing \(lines.rawValue) cost the row nothing"
@@ -809,9 +940,11 @@ final class RowGeometryTests: XCTestCase {
             geometry(appearance, lines: [.meter])
         )
         // Every bit set is every line the row knows how to draw, and no more.
+        // Four of them since the trace joined: a fifth bit added without a term
+        // in the sum fails here rather than costing a row height nobody reserved.
         XCTAssertEqual(
             geometry(appearance, lines: RowGeometry.Lines(rawValue: ~0)),
-            geometry(appearance, lines: [.meter, .window, .forecast])
+            geometry(appearance, lines: [.meter, .window, .forecast, .sparkline])
         )
     }
 

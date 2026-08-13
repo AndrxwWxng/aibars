@@ -197,6 +197,7 @@ public struct AppearancePane: View {
             Toggle("Reset countdowns", isOn: $appearance.showsCountdowns)
             Toggle("Plan names", isOn: $appearance.showsPlanNames)
             Toggle("Account labels", isOn: $appearance.showsAccountLabels)
+            Toggle("24-hour sparkline", isOn: $appearance.showsRowSparkline)
 
             Picker("Extra usage windows", selection: $appearance.secondaryWindows) {
                 ForEach(AppearanceSettings.SecondaryWindowStyle.allCases) { style in
@@ -222,6 +223,10 @@ public struct AppearancePane: View {
     /// the preview being broken.
     private var rowContentFooter: String {
         var lines = ["The extra windows are where a row's height goes: four of them is four more lines under one service. As chips they ride the row's own line of context instead and cost it no height at all, so a narrow panel or large type fits fewer of them than the limit allows."]
+        // Always present, never conditioned on the switch. What it explains is
+        // the empty box a user sees the first day, and the moment to explain that
+        // is before they turn it on rather than after they have wondered.
+        lines.append("The sparkline is the last day of a row's headline window, one point an hour at the highest reading in it, and it reserves its slot on every connected row whether or not there is a day of history behind it yet — a row that grew when its history arrived would resize the panel under the pointer.")
         if appearance.meterStyle == .numberOnly {
             lines.append("With the number-only meter the percentage stays on whatever that switch says — it is the only usage left on the row.")
         }
@@ -873,9 +878,17 @@ struct SampleRow: View {
     /// reserves the line in states the sample cannot be in, and a preview that
     /// answers a question a different way than the thing it previews is a preview
     /// that will eventually answer it differently.
+    ///
+    /// `.sparkline` off the setting alone, exactly as the panel's row takes it.
+    /// The sample always has a trace to draw — `RowSparkline.sample` is a fixed
+    /// series — where a real row may have nothing yet, and that difference must
+    /// not reach the measurement: both reserve the slot from the switch, so the
+    /// preview is the height of the row it previews on a machine with no history
+    /// at all.
     private var lines: RowGeometry.Lines {
         var drawn: RowGeometry.Lines = [.meter]
         if reservesWindowLine { drawn.insert(.window) }
+        if appearance.showsRowSparkline { drawn.insert(.sparkline) }
         return drawn
     }
 
@@ -936,6 +949,10 @@ struct SampleRow: View {
     /// alignment has to agree with the panel's, and the panel is what this is a
     /// preview of.
     private var drawsDetail: Bool {
+        // A trace is a block under the title, so a row that draws one is top
+        // aligned however empty the rest of its text column is — the panel's own
+        // first question, asked here in the same place and the same order.
+        if appearance.showsRowSparkline { return true }
         // Every style but the ring draws its meter in the text column, and that
         // slot is occupied on every row.
         guard appearance.meterStyle == .ring else { return true }
@@ -1164,12 +1181,32 @@ struct SampleRow: View {
 
     // MARK: Body
 
-    /// The meter block and whatever the further windows are set to, in the same
-    /// order and on the same spacing as the panel's row.
+    /// The meter block, the trace, and whatever the further windows are set to,
+    /// in the same order and on the same spacing as the panel's row.
     @ViewBuilder
     private var detail: some View {
         meterBlock
+        sparkline
         secondaryWindows
+    }
+
+    /// The sample's own last day, in the same slot the panel's row puts it in.
+    ///
+    /// `RowSparkline.sample` and not the real store, and that is the point of a
+    /// preview: its job is to show what the setting does, and a preview that drew
+    /// a blank box on a machine with no history yet would be indistinguishable
+    /// from the setting being broken. The fixed series carries a gap and a reset
+    /// because those are the two cases the drawing exists to handle, and this pane
+    /// is where a user finds out that it does.
+    ///
+    /// Reserved off the same switch the panel's row reads and drawn in the same
+    /// position in the same stack, because a preview that omitted it would be
+    /// exactly the divergence this whole row was rebuilt to make impossible.
+    @ViewBuilder
+    private var sparkline: some View {
+        if appearance.showsRowSparkline {
+            RowSparkline(peaks: RowSparkline.sample, height: metrics.sparklineHeight)
+        }
     }
 
     /// The headline window: its slot, and the line of context under it, at half
