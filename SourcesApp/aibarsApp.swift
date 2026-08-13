@@ -41,6 +41,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // removed in System Settings while the app isn't running, and the
             // toggle in Settings has to open showing that.
             LoginItem.shared.refresh()
+            // Reads the stored combination and registers it. A no-op unless the
+            // user has recorded one, so a first launch takes no key combination
+            // off anybody — the same restraint as the notification prime below.
+            GlobalHotkey.shared.start()
             // A no-op unless the user has already turned alerts on, so a first
             // launch raises no permission prompt. Asking for notifications
             // before anyone has asked for notifications is the nag this app is
@@ -61,6 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async {
             MainActor.assumeIsolated { MenuBarAppearance.shared.attach() }
         }
+    }
+
+    /// Hands the combination back. The process is about to go and the kernel
+    /// would release it anyway, but a registration this app opened is one it
+    /// closes — and the pairing is what makes the recorder's suspend/resume
+    /// readable as the same discipline rather than as a special case.
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { GlobalHotkey.shared.stop() }
     }
 }
 
@@ -125,7 +137,7 @@ final class MenuBarAppearance: ObservableObject {
     /// where the window cannot be found the old reading is still right most of
     /// the time, and it is the reading the app shipped with.
     var appearance: NSAppearance {
-        Self.statusBarWindows.first?.effectiveAppearance
+        MenuBarPanel.statusBarWindows.first?.effectiveAppearance
             ?? NSApp?.effectiveAppearance
             ?? NSAppearance(named: .aqua)
             ?? NSAppearance.currentDrawing()
@@ -163,7 +175,7 @@ final class MenuBarAppearance: ObservableObject {
     /// and finding no window simply leaves this watching nothing until something
     /// calls again.
     func attach() {
-        observations = Self.statusBarWindows.map { window in
+        observations = MenuBarPanel.statusBarWindows.map { window in
             window.observe(\.effectiveAppearance) { [weak self] _, _ in
                 // Hopped rather than read inline: KVO delivers on whichever
                 // thread made the change, and the value this cares about is the
@@ -182,7 +194,7 @@ final class MenuBarAppearance: ObservableObject {
     /// `attach` ends in a `publish` and the counts agree by then, so this settles
     /// in one round rather than bouncing.
     private func reread() {
-        if Self.statusBarWindows.count == observations.count {
+        if MenuBarPanel.statusBarWindows.count == observations.count {
             publish()
         } else {
             attach()
@@ -197,16 +209,22 @@ final class MenuBarAppearance: ObservableObject {
         isDark = dark
     }
 
-    /// Matched on the class name because `NSStatusBarWindow` is not a type this
-    /// app can name. One per screen carrying a bar, and two displays with
-    /// different wallpapers can be painted differently — but the strip is one
-    /// image serving every bar, so there is one answer available and the first
-    /// window is the one that gives it.
-    private static var statusBarWindows: [NSWindow] {
-        (NSApp?.windows ?? []).filter {
-            String(describing: type(of: $0)).contains("NSStatusBarWindow")
-        }
-    }
+    // `statusBarWindows` was here, as a private copy of the class-name match.
+    // It is `MenuBarPanel.statusBarWindows` now, because the global shortcut has
+    // to find the same window to click the button inside it — and a window
+    // lookup written twice is two answers to "which window is the status item's"
+    // that are free to drift.
+    //
+    // What the copy said and is still true of the one that replaced it: one
+    // window per screen carrying a bar, and two displays with different
+    // wallpapers can be painted differently — but the strip is one image serving
+    // every bar, so there is one answer available and the first window is the one
+    // that gives it.
+    //
+    // Nothing about *when* this answers has moved. `MenuBarPanel.statusBarWindows`
+    // is a pure read of `NSApp.windows` with no state of its own, so `attach()`
+    // being deferred a run-loop turn is still what decides whether there is a
+    // window to find.
 
     private static func isDark(_ appearance: NSAppearance?) -> Bool {
         appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
