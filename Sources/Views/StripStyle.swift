@@ -344,11 +344,11 @@ public struct StripMark: View {
 /// A reserved figure cell with the reading drawn leading-aligned inside it.
 ///
 /// Three styles print a number and all three print it the same way, which is the
-/// only arrangement under which the cell can be reserved once. Monospaced
-/// because the figures tick every refresh and a proportional face would shift the
-/// strip sideways as they do; one point under the mark, because SF Mono's digits
-/// sit inside their line box and at the mark's own height they out-measure the
-/// logo beside them.
+/// only arrangement under which the cell can be reserved once. Tabular figures
+/// because the readings tick every refresh and proportional digits would shift
+/// the strip sideways as they do; one point under the mark, because a digit sits
+/// inside its line box and at the mark's own height it out-measures the logo
+/// beside it.
 ///
 /// This is what `MenuBarStripRenderer.figure(for:)` became, and it is still the
 /// one place the strip's leading-alignment rule is written down.
@@ -371,11 +371,13 @@ public struct StripFigure: View {
 
     public var body: some View {
         Text(segment.figure)
-            .font(.system(
-                size: Tokens.Strip.figureSize(height: height),
-                weight: .semibold,
-                design: .monospaced
-            ))
+            // The same face as every figure in the panel, through the same
+            // accessor — the strip and the panel are on screen together and two
+            // digit faces a centimetre apart is a seam. It was `design:
+            // .monospaced` written out here rather than taken from `Ramp`, which
+            // is how it would have stayed mono for a pass after the panel
+            // stopped being.
+            .font(Tokens.Ramp.figureFont(Tokens.Strip.figureSize(height: height), weight: .semibold))
             .foregroundStyle(ink.band(segment.percent))
             .lineLimit(1)
             // A reserved cell, and the reason a tabular face was not enough on

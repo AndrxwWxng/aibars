@@ -545,7 +545,16 @@ public struct RowGeometry: Equatable {
         // `MetricCaption` and `StatusLine` both set their line at `Space.medium`
         // between the sentence and the run.
         let toTheSentence = Tokens.Space.medium
-        let overflowChip = Tokens.figureWidth(size, digits: 3) + Tokens.Space.medium
+        // Three cells at `.regular`, which is what `OverflowChip` draws "+99" in
+        // — and `+` measures exactly a digit in this face, so three cells is the
+        // string rather than an estimate of it. The weight is named because under
+        // the mono face this parameter did not exist and could not have been
+        // wrong: one advance served every weight. Here a cell cut at a weight the
+        // run does not take is either slack or an overflow, and which one it is
+        // depends on which way it is wrong. `OverflowChip` is `fixedSize`, so
+        // this side is the overflow.
+        let overflowChip = Tokens.figureWidth(size, digits: 3, weight: .regular)
+            + Tokens.Space.medium
         return max(0, column - toTheSentence - overflowChip - (carriesSpend ? spendReserve(size) : 0))
     }
 
@@ -580,7 +589,11 @@ public struct RowGeometry: Equatable {
     /// truncated label still names the window's family; the reading beside it is
     /// untouched, and that is the reading the chip is there for.
     private static func chipLabelCap(_ chipSize: CGFloat) -> CGFloat {
-        Tokens.figureWidth(positive(chipSize), digits: 8)
+        // At `.regular`, because a chip's label is prose and `SecondaryChip` sets
+        // it there. Cells of the figure face for a run that is not a figure, as
+        // above — the cell is a unit of measure here rather than a claim about
+        // what is in it.
+        Tokens.figureWidth(positive(chipSize), digits: 8, weight: .regular)
     }
 
     /// A window's reading: "61%", "12/100", "1.0k/1.0k", "9767.2M".
@@ -589,18 +602,22 @@ public struct RowGeometry: Equatable {
     /// `9767.2M/0` — `ClaudeCodeProvider` reports its token windows at `limit: 0`,
     /// and the chip rendered "no ceiling" as a fraction over zero. A window with
     /// no cap now reads as the bare value, so that reading is seven characters
-    /// (7 × 6.8035 = 47.63pt in SF Mono at 11) and not nine.
+    /// and not nine.
     ///
     /// Nine stays, and not out of inertia: what is left at the wide end is a
     /// *capped* count with both halves formatted. `CursorProvider` reports request
     /// buckets as counts, and `UsageMetric.format` renders a thousand of them as
-    /// `1.0k` — so `1.0k/1.0k` is nine characters, 9 × 6.8035 = 61.23pt against
-    /// the 62 that nine cells reserve. That is the reading this rail is now cut
-    /// for. A wider pair truncates against the ceiling `chipRuns` hands the run
+    /// `1.0k` — so `1.0k/1.0k` is nine characters, and nine cells is what holds
+    /// it. That is the reading this rail is cut for. The arithmetic that used to
+    /// be quoted here — 9 × 6.8035 = 61.23pt against the 62 nine cells reserve —
+    /// was SF Mono's single advance; the cell is measured off the real face at
+    /// the weight the reading is drawn in now, so the count is the claim and the
+    /// points are not. A wider pair truncates against the ceiling `chipRuns` hands the run
     /// rather than overhanging it, which is the direction this whole section was
     /// rebuilt to fail in.
     private static func chipReadingRail(_ chipSize: CGFloat) -> CGFloat {
-        Tokens.figureWidth(positive(chipSize), digits: 9)
+        // At `titleWeight`, which is where `SecondaryChip` sets its reading.
+        Tokens.figureWidth(positive(chipSize), digits: 9, weight: Tokens.Ramp.titleWeight)
     }
 
     /// What `SpendFigure` cannot give back, on a line that carries one.
@@ -633,11 +650,18 @@ public struct RowGeometry: Equatable {
     /// past the ground in the first place.
     private static func spendReserve(_ chipSize: CGFloat) -> CGFloat {
         let size = positive(chipSize)
-        return Tokens.figureWidth(size, digits: 9)
+        // Each run at the weight `SpendFigure` sets it in: the amount at
+        // `titleWeight`, because it is the reading; the `est.` qualifier and the
+        // middle dot after it at `.regular`, because they are the caption's own
+        // words. The amount is the term that matters — it is the widest and it is
+        // the one drawn heaviest, and reserving it at the caption's weight would
+        // be 3.5% short of the thing `layoutPriority(1)` guarantees will be drawn
+        // whatever else has to give.
+        return Tokens.figureWidth(size, digits: 9, weight: Tokens.Ramp.titleWeight)
             + Tokens.Space.snug
-            + Tokens.figureWidth(size, digits: 3)
+            + Tokens.figureWidth(size, digits: 3, weight: .regular)
             + Tokens.Space.snug
-            + Tokens.figureWidth(size, digits: 1)
+            + Tokens.unitWidth(size, weight: .regular)
     }
 
     /// A length, with a NaN answering 0 rather than surviving the arithmetic.

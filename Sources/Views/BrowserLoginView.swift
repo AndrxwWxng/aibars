@@ -543,11 +543,7 @@ private struct StepRow: View {
             // circle that sits a hair low against three lines of type, and 17 is
             // on no scale this app keeps.
             Text("\(number)")
-                .font(.system(
-                    size: Tokens.Ramp.caption,
-                    weight: Tokens.Ramp.titleWeight,
-                    design: Tokens.Ramp.figureDesign
-                ))
+                .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.muted)
                 .frame(width: Tokens.lineBox(Tokens.Ramp.title), height: Tokens.lineBox(Tokens.Ramp.title))
                 .background(Circle().fill(Tokens.quiet(Tokens.Fill.controlHover)))

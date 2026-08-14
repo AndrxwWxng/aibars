@@ -152,15 +152,21 @@ final class AppearanceMetricsTests: XCTestCase {
     // MARK: - The rails
 
     /// The literal widths the panel reserves at the shipped density. Spelled out
-    /// rather than recomputed from the same formula, so a change to the advance
-    /// ratio or to the multiplier has to be admitted here.
+    /// rather than recomputed from the same formula, so a change to the face, to
+    /// the weight a run is drawn in, or to the type multiplier has to be admitted
+    /// here.
+    ///
+    /// 35 and 29 while the figures were SF Mono, 39 and 34 now: SF Pro's tabular
+    /// digit is wider than SF Mono's at these sizes, its `%` is about 1.47 times
+    /// a digit where SF Mono's was exactly one, and both rails are cut at the
+    /// weight their run is actually set in.
     @MainActor
     func testTheRailsAtCozy() {
         let appearance = settings("rails")
         appearance.density = .cozy
         appearance.textScale = 1.0
-        XCTAssertEqual(appearance.metrics.headlineRail, 35, "the headline rail is not 35pt at cozy")
-        XCTAssertEqual(appearance.metrics.secondaryRail, 29, "the secondary rail is not 29pt at cozy")
+        XCTAssertEqual(appearance.metrics.headlineRail, 39, "the headline rail is not 39pt at cozy")
+        XCTAssertEqual(appearance.metrics.secondaryRail, 34, "the secondary rail is not 34pt at cozy")
     }
 
     /// A secondary window's figure is a smaller reading of the same kind, so its

@@ -72,8 +72,8 @@ public enum StripFit {
     /// from the current one.
     ///
     /// `height` is the mark's height — `AppearanceSettings.menuBarGlyphHeight` —
-    /// and the figure is set one point under it, because SF Mono's digits sit
-    /// inside their line box and otherwise out-measure the logo beside them.
+    /// and the figure is set one point under it, because a digit sits inside its
+    /// line box and otherwise out-measures the logo beside it.
     /// Three cells wide whatever is in it, so "7", "100" and the em dash a
     /// status-only service shows all reserve the same column — *leading*-aligned,
     /// not trailing: this doc and `Tokens.Strip.figureCell`'s both used to claim

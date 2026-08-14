@@ -429,19 +429,16 @@ private struct AlertLogRow: View {
 
             Spacer(minLength: Tokens.Space.gutter)
 
-            // The row's figure, in the one rail this pane reserves. Digits and
-            // the unit letters attached to them and nothing else, so it is the
-            // figure face — which is also why the "ago" it used to carry is
-            // gone: a word in the rail would be a word in SF Mono, and the
-            // column it sits in beside a log of past events says it anyway.
+            // The row's figure, in the one rail this pane reserves. The "ago"
+            // it used to carry is gone: a rail is cut in digit cells, a word in
+            // it is a word measured in units it is not made of, and the column
+            // it sits in beside a log of past events says "ago" anyway.
             // Regular, not the weight a figure takes. It reads as a figure and it
             // is set in the figure face, but what it reports is a countdown — how
             // long ago, the same run `Countdown.short` writes under a bar — and a
             // countdown is context. The row's subject is the sentence to its left.
             Text(age)
-                .font(.system(size: Tokens.Ramp.caption,
-                              weight: .regular,
-                              design: Tokens.Ramp.figureDesign))
+                .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption))
                 .foregroundStyle(Tokens.Ink.muted)
                 .lineLimit(1)
                 .frame(width: AlertColumn.age, alignment: .trailing)
@@ -476,10 +473,11 @@ private struct AlertLogRow: View {
 /// because "80%" here and "62%" there are the same kind of answer to an eye
 /// running down the settings window.
 ///
-/// Digits and a per-cent sign and nothing else, which is the rule for which face
-/// a run takes: this is SF Mono, in the reserved rail `Control.readoutWidth`
-/// names. It was SF Pro with tabular digits, which is the treatment for a run
-/// with a word in it.
+/// Digits and a per-cent sign and nothing else, so it goes through
+/// `Ramp.figureFont` in the reserved rail `Control.readoutWidth` names. While the
+/// figures were a second face that sentence was a rule about which face; it is a
+/// rule about which *rail* now, and the rail is the half that was doing the
+/// work.
 private struct PercentStepper: View {
     let title: String
     @Binding var value: Int
@@ -501,9 +499,7 @@ private struct PercentStepper: View {
                     // system `LabeledContent` label and a stepper's own glyphs,
                     // and a readout drawn heavier than the label naming it is the
                     // wrong thing emphasised in a settings row.
-                    .font(.system(size: Tokens.Ramp.caption,
-                                  weight: .regular,
-                                  design: Tokens.Ramp.figureDesign))
+                    .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption))
                     .monospacedDigit()
                     .foregroundStyle(Tokens.Ink.muted)
                     // A readout wide enough to wrap would take the row's height

@@ -290,10 +290,14 @@ final class HistoryChartLayoutTests: XCTestCase {
     /// the spec's rail table, and the plot's leading edge is the only place it
     /// is observable from outside.
     func testTheAxisRailIsFourReservedCellsRatherThanTheWidthOfTheLabelsInIt() {
-        let rail = Tokens.figureWidth(Tokens.Ramp.caption, digits: 3)
+        // Each term at the weight the axis label draws it in, and the unit as a
+        // unit cell rather than a fourth digit: the `%` is about 1.47 times a
+        // digit in this face where SF Mono's was exactly one. 27 before the face
+        // changed, 31 now.
+        let rail = Tokens.figureWidth(Tokens.Ramp.caption, digits: 3, weight: Tokens.Ramp.titleWeight)
             + Tokens.Space.hairline
-            + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
-        XCTAssertEqual(rail, 27, accuracy: 0.0001, "the axis rail is no longer three cells, a hairline and a unit")
+            + Tokens.unitWidth(Tokens.Ramp.caption, weight: .regular)
+        XCTAssertEqual(rail, 31, accuracy: 0.0001, "the axis rail is no longer three cells, a hairline and a unit")
 
         let plot = HistoryChart.plotRect(in: CGSize(width: 320, height: 160))
         XCTAssertEqual(
@@ -314,9 +318,9 @@ final class HistoryChartLayoutTests: XCTestCase {
     /// rail is also the same width at every size the pane can be dragged to,
     /// including the ones too small to draw it in.
     func testTheRailIsTheSameWidthAtEverySizeThePaneCanBe() {
-        let expected = Tokens.figureWidth(Tokens.Ramp.caption, digits: 3)
+        let expected = Tokens.figureWidth(Tokens.Ramp.caption, digits: 3, weight: Tokens.Ramp.titleWeight)
             + Tokens.Space.hairline
-            + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
+            + Tokens.unitWidth(Tokens.Ramp.caption, weight: .regular)
             + Tokens.Space.small
         let sizes = [
             CGSize(width: 240, height: 120),

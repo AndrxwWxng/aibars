@@ -479,13 +479,13 @@ public final class AppearanceSettings: ObservableObject {
         // hand cannot then hand it a figure size that disagrees with its title
         // size, and the memberwise init stays at the ten parameters it had.
 
-        /// The row's answer, set in SF Mono.
+        /// The row's answer.
         ///
         /// The same size as the name it sits opposite, and no longer a bump on
         /// it. A 15pt number beside a 13pt name is where "the panel shouts"
         /// came from, and it was buying prominence the figure already has for
-        /// free: it is the only mono run on the line, it sits alone in a
-        /// reserved trailing rail, and it is the one thing on a resting row
+        /// free: it sits alone in a reserved trailing rail, and it is the one
+        /// thing on a resting row
         /// that colour is allowed to arrive on.
         public var figureSize: CGFloat { max(11, titleSize) }
 
@@ -530,26 +530,34 @@ public final class AppearanceSettings: ObservableObject {
         /// secondary rail is narrower — but every rail on a row ends at the same
         /// trailing edge, and that shared edge is the column the eye scans down.
         ///
-        /// The reservation is SF Mono's advance, and only SF Mono's: `"100%"` set
-        /// in the mono design measures 32.14pt at 13pt inside a 33pt rail, and the
-        /// same string in SF Pro measures 36.29pt and hangs out of it. Anyone
-        /// tempted to "simplify" the figure's mono design away has to widen this
-        /// first, or the one reading that matters most is the one drawn outside
-        /// its own column.
+        /// Three digit cells, a hairline and one unit cell, each measured off the
+        /// face and the weight it actually holds: the digits at `alertWeight`,
+        /// because that is what a row past its warning line sets them in and a
+        /// rail cut at the lighter weight would be 3.5% short at exactly the
+        /// moment nothing may move; the `%` at `.regular`, because `UsageFigure`
+        /// holds the unit at the resting weight however heavy the digits go.
+        ///
+        /// This used to be three mono cells and a fourth mono cell for the unit,
+        /// with a note that `"100%"` in SF Pro overflows a rail cut for SF Mono.
+        /// It does — by 3.3pt at 13pt — which is why the face change came with a
+        /// measured cell and a unit cell of its own rather than a new constant.
         public var headlineRail: CGFloat {
             Tokens.figureWidth(figureSize, digits: 3)
                 + Tokens.Space.hairline
-                + Tokens.figureWidth(unitSize, digits: 1)
+                + Tokens.unitWidth(unitSize, weight: .regular)
         }
 
         /// The same rail for a secondary window's line, built off `detailSize`.
         /// Its unit follows the headline's rule and takes the figure's own size,
         /// so the two rails are the same shape at two scales rather than two
         /// different treatments of a number.
+        /// Both runs at `titleWeight`, because a further window's value and its
+        /// unit are one `Text` in `SecondaryValue` and that is where it is set —
+        /// unlike the headline, whose unit is a second run at the resting weight.
         public var secondaryRail: CGFloat {
-            Tokens.figureWidth(detailSize, digits: 3)
+            Tokens.figureWidth(detailSize, digits: 3, weight: Tokens.Ramp.titleWeight)
                 + Tokens.Space.hairline
-                + Tokens.figureWidth(detailSize, digits: 1)
+                + Tokens.unitWidth(detailSize, weight: Tokens.Ramp.titleWeight)
         }
     }
 

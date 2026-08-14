@@ -207,26 +207,28 @@ public enum Tokens {
         // `.regular` out loud, which is where the contrast actually was.
         /// Percentages and any figure the eye scans down a column.
         ///
-        /// Monospaced, not rounded: tabular figures are the whole of the
-        /// "terminal data" half of the direction, and this one line reaches
-        /// every figure call site in both windows. `.monospaced` is a
-        /// `Font.Design`, so it goes through `Font.system` and needs no
-        /// availability gate — `NSFont(name: "SFMono-Regular", size:)` returns
-        /// nil, because SF Mono is not registered for lookup by name.
+        /// **SF Pro with tabular figures, not SF Mono.** The columns were never
+        /// the font — they are `figureWidth`'s reserved rails and the fixed digit
+        /// advance inside them, and `.monospacedDigit()` gives both of those on
+        /// the system face. What SF Mono added on top was its *voice*: a coding
+        /// face has slab terminals, an exaggerated aperture and a slashed zero,
+        /// and eleven rows of it down a panel read as a terminal window rather
+        /// than as an instrument. Every figure in the app is one word next to a
+        /// word set in SF Pro, and two faces on one line is a seam the eye finds
+        /// before it finds the reading.
         ///
-        /// The rule for which face a run takes, so no call site has to judge it:
-        /// a run that is only digits, separators and the unit letters attached to
-        /// them is SF Mono; a run containing a word is SF Pro with
-        /// `.monospacedDigit()`. So `92`, `%`, `1.2k`, `$32.84`, `12s` are this.
-        /// `resets in 1h 20m`, `on pace to cap in 40m` and `updated 12s ago` are
-        /// not — full mono on prose is the terminal pastiche the direction rules
-        /// out.
+        /// So the rule that used to say "digits take SF Mono, prose takes SF Pro
+        /// with `.monospacedDigit()`" collapses to its second half: **everything
+        /// is SF Pro, and everything with a digit in it is tabular.** There is no
+        /// judgement left at a call site, which is one fewer than before.
         ///
-        /// And the clause that turns "we use a mono font" into "we have
-        /// columns": every SF Mono run lives inside a reserved, fixed-width,
-        /// trailing-aligned rail from `figureWidth` below. SF Mono never appears
-        /// outside a rail, because a mono run that is free to size itself is
-        /// just a font choice — the columns are the point.
+        /// The clause that turns "we use tabular figures" into "we have columns"
+        /// is unchanged and is the load-bearing one: every figure run lives inside
+        /// a reserved, fixed-width, trailing-aligned rail from `figureWidth`
+        /// below. Tabular digits fix the width of a digit, not the length of a
+        /// string — `9%` still reflows to `92%` — so the rail is what stops a
+        /// reading from moving its neighbours, and a figure free to size itself
+        /// is just a font choice.
         ///
         /// The *reserved* and *fixed-width* halves of that are unconditional. The
         /// *trailing* half has one exception, and it is the menu bar strip, where
@@ -235,13 +237,25 @@ public enum Tokens {
         /// its own mark instead of after it. `Tokens.Strip.figureCell` reserves the
         /// width and `StripFigure` — in `StripStyle.swift` — owns that one decision.
         ///
-        /// Reached through `Font.system(size:weight:design:)` and never through
+        /// Reached through `figureFont` below and never through
         /// `Text.monospaced()`. That method is `macOS 13.3`; the `View` overload
         /// is 13.0, and wherever the receiver is statically a `Text` the compiler
         /// binds the 13.3 one and silently raises the app's floor past the stated
         /// minimum with no diagnostic. `Font.Design` carries no availability at
-        /// all, and `View.monospacedDigit()` is macOS 12 and safe.
-        public static let figureDesign: Font.Design = .monospaced
+        /// all, and `Font.monospacedDigit()` is macOS 12 and safe.
+        public static let figureDesign: Font.Design = .default
+
+        /// The face every figure in the app is set in: the system font at
+        /// `figureDesign`, with its digits made tabular.
+        ///
+        /// One function rather than `design:` at thirty call sites, because the
+        /// tabular feature is not a `Font.Design` and a call site that took the
+        /// design and forgot the feature would draw proportional digits — which
+        /// is invisible until a 1 follows a 4 and the column twitches. Asking for
+        /// the font in one place makes that unrepresentable.
+        public static func figureFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+            .system(size: size, weight: weight, design: figureDesign).monospacedDigit()
+        }
     }
 
     // `sectionTracking` was here, and the uppercased group header it was for is
@@ -253,24 +267,131 @@ public enum Tokens {
     // A group header is a word — sentence case, `Ramp.detail`, `Ink.muted` — not
     // a rule with a word on it.
 
-    /// Width of `digits` monospaced characters at `size`.
+    /// Width of `digits` tabular digit cells at `size`.
     ///
     /// Tabular figures fix the width of a digit, not the length of a string:
     /// `9%` still reflows to `92%` and drags the label beside it. Every figure
     /// column is therefore reserved, and this is the width to reserve it at.
     ///
-    /// 0.6185 is SF Mono's measured advance ratio on this platform — "888"
-    /// measures 24.11pt at 13pt, a ratio of 0.61816 — so this is the real column
-    /// rather than an em-based guess with slack in it. It replaces the
-    /// `(detailSize * 2.8)` that `ProviderRow` was estimating with.
+    /// **Measured, not a ratio.** It used to be `size * 0.6185`, which was SF
+    /// Mono's advance ratio on this platform — exact, because a mono face has one
+    /// advance at every size and weight. SF Pro does not: its tabular digit runs
+    /// 0.648 of the point size at 9pt and 0.610 at 16pt as the optical size
+    /// changes, and another 4% wider again at semibold. A single constant is
+    /// therefore either too narrow somewhere or too wide everywhere, and too
+    /// narrow is a rail a reading escapes. So the cell is measured off the real
+    /// face, at the heaviest weight a figure can take, and cached per size.
     ///
-    /// And the reason `Ramp.figureDesign` is not a taste: the widest reading a
-    /// row can carry, `"100%"`, measures 32.14pt in SF Mono at 13pt and fits the
-    /// 35pt rail this function reserves for it. The same string in SF Pro wants
-    /// 36.29pt and **overflows** — so anyone who ever "simplifies" the mono
-    /// design away breaks the rail rather than just changing the face.
-    public static func figureWidth(_ size: CGFloat, digits: Int) -> CGFloat {
-        (size * 0.6185 * CGFloat(digits)).rounded(.up)
+    /// The unit letters are *not* one of these cells any more and that is the
+    /// other half of the face change. In SF Mono `%` and `M` measured exactly a
+    /// digit; in SF Pro `%` is 1.47× a digit and `M` is 1.39×, while `.`, `,` and
+    /// `/` are about half. A rail that counted a `%` as a digit cell was 4pt
+    /// short of `100%` at 13pt — `unitWidth` below is what the call sites that
+    /// draw a unit ask for instead, and every one of them already had it as a
+    /// separate `+ figureWidth(unitSize, digits: 1)` term.
+    /// **And measured at the weight the run is drawn in**, which a mono face
+    /// never had to care about. SF Pro's tabular digit is 1.7% wider at medium
+    /// than at regular and 3.5% wider at semibold, and those percents decide
+    /// whole chips: at the shipped 356pt panel the difference between reserving
+    /// a chip's runs at semibold and at the weights they are actually set in is
+    /// the difference between one chip on the line and two. The default is the
+    /// heaviest, because a caller who has not thought about it should get the
+    /// rail that cannot be escaped; the three call sites that know their run is
+    /// lighter say so.
+    public static func figureWidth(
+        _ size: CGFloat,
+        digits: Int,
+        weight: Font.Weight = Ramp.alertWeight
+    ) -> CGFloat {
+        guard size.isFinite, digits > 0 else { return 0 }
+        return (figureAdvances(at: size, weight: weight).digit * CGFloat(digits)).rounded(.up)
+    }
+
+    /// The reserved cell for one unit letter — `%`, `M`, `k`, `$` — at `size`.
+    ///
+    /// The widest of them rather than the one in hand, for the same reason the
+    /// digit cell is a cell: a rail sized to `k` and then asked to draw `M` is a
+    /// rail a reading escapes, and `644.6k` becoming `644.6M` is a thing that
+    /// happens to a real account between two refreshes.
+    public static func unitWidth(_ size: CGFloat, weight: Font.Weight = Ramp.alertWeight) -> CGFloat {
+        guard size.isFinite else { return 0 }
+        return figureAdvances(at: size, weight: weight).unit.rounded(.up)
+    }
+
+    /// The two advances every rail in the app is cut from, measured off the face
+    /// `Ramp.figureFont` actually draws in and cached per size and weight.
+    ///
+    /// Cached because `figureWidth` is called from row geometry — a dozen times
+    /// per row per layout pass — and a `CTLine` per call is not free. The lock is
+    /// there because geometry is asked for off the main actor in the tests as
+    /// well as on it in the app.
+    static func figureAdvances(
+        at size: CGFloat,
+        weight: Font.Weight = Ramp.alertWeight
+    ) -> (digit: CGFloat, unit: CGFloat) {
+        advanceCache.value(for: Advance(size: size, weight: weight), otherwise: measureFigureAdvances)
+    }
+
+    /// `Font.Weight` is opaque and `NSFont.Weight` is a `CGFloat`, and only the
+    /// second can be measured. Four cases because four are what the app draws;
+    /// anything else answers the heaviest, which is the safe direction.
+    private static func nsWeight(_ weight: Font.Weight) -> NSFont.Weight {
+        switch weight {
+        case .regular: return .regular
+        case .medium: return .medium
+        case .semibold: return .semibold
+        case .bold: return .bold
+        default: return .bold
+        }
+    }
+
+    private struct Advance: Hashable {
+        let size: CGFloat
+        let weight: Font.Weight
+    }
+
+    private static func measureFigureAdvances(_ key: Advance) -> (digit: CGFloat, unit: CGFloat) {
+        let system = NSFont.systemFont(ofSize: key.size, weight: nsWeight(key.weight))
+        let descriptor = system.fontDescriptor
+            .addingAttributes([
+                .featureSettings: [[
+                    NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
+                    NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector
+                ]]
+            ])
+        let font = NSFont(descriptor: descriptor, size: key.size) ?? system
+        func advance(_ glyph: String) -> CGFloat {
+            (glyph as NSString).size(withAttributes: [.font: font]).width
+        }
+
+        // `8` rather than `0`: tabular or not, they are one advance, and `8` is
+        // the one that is still the widest glyph in the set if the feature ever
+        // fails to apply.
+        return (
+            digit: advance("8"),
+            unit: ["%", "M", "k", "$"].map(advance).max() ?? advance("8")
+        )
+    }
+
+    private static let advanceCache = AdvanceCache()
+
+    /// A lock and a dictionary, and it is a class so that `Tokens` can stay an
+    /// uninstantiable namespace of `static let`s with no mutable state of its own.
+    private final class AdvanceCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [Advance: (digit: CGFloat, unit: CGFloat)] = [:]
+
+        func value(
+            for key: Advance,
+            otherwise measure: (Advance) -> (digit: CGFloat, unit: CGFloat)
+        ) -> (digit: CGFloat, unit: CGFloat) {
+            lock.lock()
+            defer { lock.unlock() }
+            if let hit = storage[key] { return hit }
+            let measured = measure(key)
+            storage[key] = measured
+            return measured
+        }
     }
 
     /// The one rail money is allowed: eight cells, `$1234.56`.
@@ -418,10 +539,17 @@ public enum Tokens {
         /// with the chip's own padding.
         public static let presetChip: CGFloat = 104
         /// The narrowest a strip-style chip may be. Sized for the widest sample
-        /// any chip draws — mark + figure at three services is 127pt at the 13pt
+        /// any chip draws — mark + figure at three services is 130pt at the 13pt
         /// height the chips are fixed at (`Strip.chipPreviewHeight`) — plus the
         /// chip's own 8pt of horizontal padding each side.
-        public static let stripStyleChip: CGFloat = 144
+        ///
+        /// It was 144 for a 127pt sample. The figure cell is measured off the
+        /// face now rather than off SF Mono's one advance, and SF Pro's semibold
+        /// digit is 5% wider, so the same three services measure 130 and the chip
+        /// follows them. A chip narrower than its own sample does not clip it —
+        /// the grid drops a column instead, which is the whole six-chip row
+        /// rearranging itself because a digit got wider.
+        public static let stripStyleChip: CGFloat = 148
         /// The narrowest the settings window can be with all three of its
         /// columns whole, and the shortest it can be with a form and a preview
         /// strip in it.
@@ -435,17 +563,16 @@ public enum Tokens {
         /// A slider and its readout in the Appearance pane.
         public static let sliderWidth: CGFloat = 168
         /// Seven cells, not six, and derived rather than written down — which is
-        /// the rule stated at `figureWidth` above ("every SF Mono run lives inside
+        /// the rule stated at `figureWidth` above ("every figure run lives inside
         /// a reserved, fixed-width rail from `figureWidth`") applied to the one
         /// rail in the app that had been given a literal instead.
         ///
         /// `AppearancePane.pointReadout` writes the half-point form at every
-        /// half-step of the Thickness slider: "10.5 pt" is seven characters and
-        /// measures 43.27pt in SF Mono at `Ramp.caption`, so inside the 42 this
-        /// used to be it truncated to "10.5 …" — a readout that cannot print its
-        /// own value. `10 × 0.6185 × 7 = 43.295`, rounded up, so this is 44.
-        /// `AlertsPane.AlertColumn.age` had already worked this out and spelled
-        /// `figureWidth(Ramp.caption, digits: 7)` in its own words.
+        /// half-step of the Thickness slider, and "10.5 pt" is seven characters:
+        /// inside the 42 this used to be, it truncated to "10.5 …" — a readout
+        /// that cannot print its own value. `AlertsPane.AlertColumn.age` had
+        /// already worked this out and spelled `figureWidth(Ramp.caption,
+        /// digits: 7)` in its own words.
         public static let readoutWidth: CGFloat = figureWidth(Ramp.caption, digits: 7)
         /// The shortcut field in General. Sized for the widest thing it can
         /// print — ⌃⌥⇧⌘ plus `Space`, four glyphs and five letters at
@@ -576,15 +703,20 @@ public enum Tokens {
         /// Twelve, and the number is measured rather than chosen. `worstOnly`
         /// spells the service out, and a rail sized to the name in hand would move
         /// the item every time one service overtook another — the 99 → 100 bug
-        /// arriving through a wider door. So the rail is reserved in mono advances,
+        /// arriving through a wider door. So the rail is reserved in digit cells,
         /// and twelve is the largest count that keeps the whole style inside
-        /// `maxWidth` at every height the settings allow: thirteen measures
-        /// 121 + 3 + 28 = 152pt at a 16pt mark and overflows the cap by 4. The cost
-        /// of twelve is one name at one height — "GitHub Copilot" is 67.459pt of SF
-        /// Pro semibold at 9pt inside a 67pt rail, so at `menuBarGlyphHeight == 10`
-        /// and only there it takes a tail ellipsis. Every other shipped name clears
-        /// its rail at every height: the widest at 10pt is 73.998 in 75, at 12pt
-        /// 86.829 in 90, at 15pt 105.255 in 112.
+        /// `maxWidth` at every height the settings allow: at a 16pt mark twelve
+        /// comes to 116 + 3 + 29 = 148, exactly the cap, and thirteen overflows it
+        /// by nine.
+        ///
+        /// **The documented ellipsis is gone.** Twelve mono advances used to leave
+        /// "GitHub Copilot" — 67.459pt of semibold at 9pt — a fraction over a 67pt
+        /// rail, so at `menuBarGlyphHeight == 10` and only there the widest shipped
+        /// name took a tail ellipsis. The cell is measured off the drawn face now
+        /// and SF Pro's tabular digit is wider than SF Mono's at these sizes, so
+        /// the same twelve cells are 73pt and the name fits. Every shipped name
+        /// now clears its rail at every height, with the widest at 10pt measuring
+        /// 67.46 in 73, at 13pt 86.83 in 95, and at 16pt 105.25 in 116.
         public static let nameDigits: Int = 12
 
         /// The widest the item may draw. Past this the strip stops being an
@@ -623,9 +755,9 @@ public enum Tokens {
             return max(1, height.rounded())
         }
 
-        /// The figure's point size: one under the mark. SF Mono's digits sit inside
-        /// their line box and at the mark's own height they out-measure the logo
-        /// beside them. Guarded like `markBox`, and now the single definition — the
+        /// The figure's point size: one under the mark. A digit sits inside its
+        /// line box, so at the mark's own height it out-measures the logo beside
+        /// it. Guarded like `markBox`, and now the single definition — the
         /// unguarded copy here and the guarded one in `StripFit` disagreed about a
         /// height of 0.5, one of them setting the font and the other reserving the
         /// cell it had to fit in.

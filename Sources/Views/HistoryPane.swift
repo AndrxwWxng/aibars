@@ -852,7 +852,7 @@ private enum DayColumn {
     /// belongs to the figure, and it is the figures that are read down.
     static let figure = Tokens.figureWidth(Tokens.Ramp.title, digits: 3)
         + Tokens.Space.hairline
-        + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
+        + Tokens.unitWidth(Tokens.Ramp.caption)
 }
 
 /// The headings over the table, in the one recipe this app heads a group with:
@@ -1008,7 +1008,7 @@ private struct DayRow: View {
     /// for it, because the cell is what the `%` occupies either way.
     private func percentCell(_ ratio: Double, weight: Font.Weight) -> some View {
         Text(ratio, format: .percent.precision(.fractionLength(0)))
-            .font(.system(size: Tokens.Ramp.caption, weight: weight, design: Tokens.Ramp.figureDesign))
+            .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption, weight: weight))
             .lineLimit(1)
             .frame(width: DayColumn.figure, alignment: .trailing)
     }
@@ -1017,7 +1017,7 @@ private struct DayRow: View {
         Text(value, format: .number)
             // `.regular`, said rather than inherited: a count is context for the
             // two figures beside it, not a reading in its own right.
-            .font(.system(size: Tokens.Ramp.caption, weight: .regular, design: Tokens.Ramp.figureDesign))
+            .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption))
             .lineLimit(1)
             .frame(width: DayColumn.figure, alignment: .trailing)
     }

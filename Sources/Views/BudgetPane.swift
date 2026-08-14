@@ -663,11 +663,7 @@ public struct BudgetPane: View {
                 // seventy clicks long.
                 Stepper(value: earlyLevel, in: 25...95, step: 5) {
                     Text(Double(earlyLevel.wrappedValue) / 100, format: .percent.precision(.fractionLength(0)))
-                        .font(.system(
-                            size: Tokens.Ramp.caption,
-                            weight: .regular,
-                            design: Tokens.Ramp.figureDesign
-                        ))
+                        .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption))
                         .foregroundColor(Tokens.Ink.muted)
                         // A readout wide enough to wrap would take the row's
                         // height with it, and the row below would shift half a
@@ -854,8 +850,7 @@ private struct SpendRow: View {
                 // figure is set in, and the pair of them keeps the qualifier
                 // from reading as one of the figure's own digits. Caption size
                 // is the one thing it does not take — it shares a baseline with
-                // the amount, and SF Pro and SF Mono are interchangeable at one
-                // size and not across two.
+                // the amount, and two runs on one baseline want one size.
                 Text(confidence == .estimated ? "est." : "")
                     .font(.system(size: Tokens.Ramp.title, weight: .regular))
                     .foregroundColor(Tokens.Ink.muted)
@@ -895,11 +890,7 @@ private struct SpendRow: View {
                 // anything else. Cap height is the same at both weights, so the
                 // figure gains a stem without leaving the baseline it shares
                 // with the name and the field.
-                .font(.system(
-                    size: Tokens.Ramp.title,
-                    weight: isAlert ? Tokens.Ramp.alertWeight : Tokens.Ramp.titleWeight,
-                    design: Tokens.Ramp.figureDesign
-                ))
+                .font(Tokens.Ramp.figureFont(Tokens.Ramp.title, weight: (isAlert ? Tokens.Ramp.alertWeight : Tokens.Ramp.titleWeight)))
                 .foregroundColor(tint)
                 .lineLimit(1)
                 // Gives up size before it gives up digits: eight cells covers a
@@ -914,11 +905,7 @@ private struct SpendRow: View {
             // on the near-black ground — an em dash nobody can see is a row with
             // no answer in it at all.
             Text(verbatim: "—")
-                .font(.system(
-                    size: Tokens.Ramp.title,
-                    weight: Tokens.Ramp.titleWeight,
-                    design: Tokens.Ramp.figureDesign
-                ))
+                .font(Tokens.Ramp.figureFont(Tokens.Ramp.title, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.idle)
                 .frame(width: SpendColumn.amount, alignment: .trailing)
                 .accessibilityLabel("No spend reported")
@@ -1007,11 +994,7 @@ private struct CapField: View {
         }
         .labelsHidden()
         .textFieldStyle(.roundedBorder)
-        .font(.system(
-            size: Tokens.Ramp.title,
-            weight: .regular,
-            design: Tokens.Ramp.figureDesign
-        ))
+        .font(Tokens.Ramp.figureFont(Tokens.Ramp.title))
         .multilineTextAlignment(.trailing)
         // The money rail, so a cap being typed is the width of the figure it is
         // measured against. A field scrolls its own text rather than truncating

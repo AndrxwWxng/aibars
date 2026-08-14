@@ -106,9 +106,7 @@ public struct ForecastLine: View {
                 // reads the same as being given it and says nothing about which
                 // was meant, so the role each line plays is stated at each line.
                 .font(.system(size: appearance.metrics.captionSize, weight: .regular))
-                // SF Pro with tabular digits, not SF Mono: this is a run with
-                // words in it, and mono on prose is the terminal pastiche the
-                // direction rules out. Only the digits inside it need to hold
+                // Tabular digits: only the digits inside this run need to hold
                 // still, which is all this asks for. `View.monospacedDigit()` is
                 // macOS 12; `Text.monospaced()` is 13.3 and would raise the
                 // stated floor silently, so it is never called anywhere here.

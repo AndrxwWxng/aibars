@@ -125,10 +125,10 @@ public enum HistoryChartLayout {
 /// gridline spacing and the axis strip are tuned against each other.
 ///
 /// Four rules the chart is held to, every one of them the app's rather than this
-/// view's. Every number in here is SF Mono inside a reserved rail — the axis
+/// view's. Every number in here is tabular inside a reserved rail — the axis
 /// gutter, the threshold label and the hover readout are three fixed columns, and
-/// nothing mono is set outside one; the legend, the series names and the time
-/// stamps are prose and are SF Pro with tabular digits. Nothing in here is
+/// no figure is set outside one; the legend, the series names and the time stamps
+/// are prose, in the same face, with the same tabular digits. Nothing in here is
 /// translucent: the plot is an opaque well, because a contrast ratio measured
 /// against a named ground is a statement and the same ink over a material with
 /// someone's wallpaper behind it is a hope. The trace is the only thing on the
@@ -203,9 +203,13 @@ public struct HistoryChart: View {
     /// because the unit was a smaller tick and fitted in the fourth; the tick is
     /// now the same size as the digits it annotates and no longer does.
     private static var axisFigureWidth: CGFloat {
-        Tokens.figureWidth(Tokens.Ramp.caption, digits: 3)
+        // Each term at the weight `figure(_:)` above draws it in — the digits at
+        // `titleWeight`, the `%` at `.regular` — which is the same shape as the
+        // panel's own headline rail and the same reason: a cell is measured off
+        // the face now, and this face is wider at a heavier weight.
+        Tokens.figureWidth(Tokens.Ramp.caption, digits: 3, weight: Tokens.Ramp.titleWeight)
             + Tokens.Space.hairline
-            + Tokens.figureWidth(Tokens.Ramp.caption, digits: 1)
+            + Tokens.unitWidth(Tokens.Ramp.caption, weight: .regular)
     }
 
     /// The strip under the plot that the time labels sit in.
@@ -712,7 +716,7 @@ public struct HistoryChart: View {
     private static var readoutWidth: CGFloat {
         Tokens.figureWidth(Tokens.Ramp.title, digits: 5)
             + Tokens.Space.hairline
-            + Tokens.figureWidth(Tokens.Ramp.title, digits: 1)
+            + Tokens.unitWidth(Tokens.Ramp.title)
     }
 
     // MARK: - Axes
@@ -827,16 +831,12 @@ public struct HistoryChart: View {
         let value = (ratio.isFinite ? min(max(ratio, 0), 1) : 0) * 100
         return HStack(spacing: 0) {
             Text(value, format: .number.precision(.fractionLength(fractionDigits)))
-                .font(.system(size: size,
-                              weight: weight,
-                              design: Tokens.Ramp.figureDesign))
+                .font(Tokens.Ramp.figureFont(size, weight: weight))
                 .foregroundColor(tint)
             // Verbatim: this is a unit, not a word to be looked up, and a
             // localised percent sign arrives with the number it belongs to.
             Text(verbatim: "%")
-                .font(.system(size: size,
-                              weight: .regular,
-                              design: Tokens.Ramp.figureDesign))
+                .font(Tokens.Ramp.figureFont(size))
                 .foregroundColor(Tokens.Ink.muted)
         }
     }

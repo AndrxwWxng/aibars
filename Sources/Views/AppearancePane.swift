@@ -655,18 +655,18 @@ private struct TunerRow: View {
                 Slider(value: $value, in: range, step: step)
                     .frame(width: Tokens.Control.sliderWidth)
                 Text(readout(value))
-                    // `Ramp.figureDesign` is SF Mono, which is what carries the
-                    // whole terminal half of the visual system: these readouts
-                    // tick under a dragging thumb, and a proportional face makes
-                    // the number jitter sideways as they do. The tabular request
-                    // stays for the same reason it does at every other figure
-                    // site — it costs nothing and does not depend on the design
-                    // token staying monospaced.
+                    // `Ramp.figureFont` is the system face with tabular digits:
+                    // these readouts tick under a dragging thumb, and
+                    // proportional digits make the number jitter sideways as they
+                    // do. The `.monospacedDigit()` below is therefore redundant
+                    // with the font — it is kept because it costs nothing and
+                    // says the requirement at the call site, where the reason
+                    // lives.
                     //
                     // `.regular` out loud rather than inherited: the app has two
                     // weights and an alert, and a readout beside a slider is
                     // context — the same weight the label on its left is set in.
-                    .font(.system(size: Tokens.Ramp.caption, weight: .regular, design: Tokens.Ramp.figureDesign))
+                    .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption))
                     .monospacedDigit()
                     // `.foregroundColor` on a `Text`, which is the app's floor:
                     // `Text.foregroundStyle` is macOS 14.
@@ -703,7 +703,7 @@ private struct CountStepper: View {
         LabeledContent(title) {
             Stepper(value: $value, in: range) {
                 Text("\(value)")
-                    .font(.system(size: Tokens.Ramp.caption, weight: .regular, design: Tokens.Ramp.figureDesign))
+                    .font(Tokens.Ramp.figureFont(Tokens.Ramp.caption))
                     .monospacedDigit()
                     .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
@@ -1177,9 +1177,10 @@ struct SampleRow: View {
 
     private var titleLine: some View {
         // `.firstTextBaseline`, which is the panel's own alignment for this line
-        // and was `.center` here. The name is SF Pro and the figure SF Mono, and
-        // centring puts their cap heights on two baselines a point apart — and,
-        // worse for a preview, it makes the buttons' baseline guide a no-op, so
+        // and was `.center` here. Centring put the name's cap height and the
+        // figure's on two baselines a point apart — the two are one face now, so
+        // that half has gone away — and, worse for a preview, it makes the
+        // buttons' baseline guide a no-op, so
         // the sample resolved its title line a point shorter than the row it is
         // supposed to be showing.
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.small) {

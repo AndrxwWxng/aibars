@@ -105,8 +105,9 @@ final class StripFitWidthTests: XCTestCase {
                 "the strip's cell and Tokens' column disagree at \(height)pt"
             )
         }
-        // The shipped height, spelled out: 12 * 0.6185 * 3 = 22.27, rounded up.
-        XCTAssertEqual(StripFit.figureCell(height: shipped), 23)
+        // The shipped height, spelled out: three tabular semibold digits at 12pt,
+        // rounded up. It was 23 against SF Mono's single advance.
+        XCTAssertEqual(StripFit.figureCell(height: shipped), 24)
     }
 
     /// The one thing arithmetic cannot settle: whether the cell actually holds

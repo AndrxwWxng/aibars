@@ -1200,9 +1200,7 @@ public struct PanelHeader<Trailing: View>: View {
 
     /// One candidate, or the shortest one if the caller asks past the end.
     ///
-    /// SF Pro with tabular digits, not SF Mono: "updated 12s ago" is a run with
-    /// words in it, and the mono face is reserved for runs that are only digits
-    /// and separators. The tabular figures still matter, because the age does move
+    /// Tabular digits, because the age does move
     /// — but not on a clock. Nothing republishes this on a timer: `updatedText`
     /// reads `Date()` during body evaluation, and the only things that re-render
     /// the panel are `AppState`'s published properties, which move on a refresh.
@@ -1288,11 +1286,7 @@ private struct FilterLine: View {
             Spacer(minLength: Tokens.Space.small)
 
             Text("\(matchCount)")
-                .font(.system(
-                    size: metrics.detailSize,
-                    weight: .regular,
-                    design: Tokens.Ramp.figureDesign
-                ))
+                .font(Tokens.Ramp.figureFont(metrics.detailSize))
                 .foregroundColor(Tokens.Ink.muted)
                 .frame(width: Tokens.figureWidth(metrics.detailSize, digits: 2), alignment: .trailing)
         }
@@ -1519,20 +1513,13 @@ struct SectionLabel: View {
                 .font(.system(size: fontSize, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
-            // A run that is only digits, so it takes the mono face like every
-            // other figure in the panel — a count set in SF Pro beside nine
-            // percentages set in SF Mono is the one number that looks borrowed.
-            //
-            // And so it takes a rail, trailing-aligned like every other mono run
-            // in the app: two digits, which is every count this panel can
-            // produce. The capsule behind it is gone — a fill on a two-digit
+            // A run that is only digits, so it goes through `Ramp.figureFont`
+            // like every other figure in the panel, and takes a rail with it —
+            // trailing-aligned like every other figure in the app: two digits,
+            // which is every count this panel can produce. The capsule behind it is gone — a fill on a two-digit
             // number is chrome, and the number reads perfectly well as a number.
             Text("\(count)")
-                .font(.system(
-                    size: fontSize,
-                    weight: .regular,
-                    design: Tokens.Ramp.figureDesign
-                ))
+                .font(Tokens.Ramp.figureFont(fontSize))
                 .foregroundColor(Tokens.Ink.muted)
                 .frame(width: Tokens.figureWidth(fontSize, digits: 2), alignment: .trailing)
             // What the deleted hairline used to do: hold the header open to the

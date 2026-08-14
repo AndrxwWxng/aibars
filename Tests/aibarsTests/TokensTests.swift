@@ -81,11 +81,54 @@ final class TokensTests: XCTestCase {
 
     // MARK: - figureWidth
 
+    /// The column is the face's own advance, and the claim is that it is
+    /// *measured* rather than a ratio — so it is asserted against the face rather
+    /// than against a number, which is the only form of this test that a change
+    /// of face moves with instead of being caught by.
     func testFigureWidthIsTheMeasuredColumn() {
-        // 15pt (cozy's figure size) at three digits: 15 * 0.6185 * 3 = 27.8325,
-        // rounded up to a whole point so the column can never be a fraction
-        // narrower than the glyphs in it.
-        XCTAssertEqual(Tokens.figureWidth(15, digits: 3), 28)
+        // 15pt, cozy's figure size, at three digits and the weight a figure past
+        // its warning line is set in.
+        let three = Tokens.figureWidth(15, digits: 3)
+        XCTAssertEqual(three, Self.measured("888", size: 15, weight: .semibold).rounded(.up), accuracy: 0.001)
+        // Whole points, so a column can never be a fraction narrower than the
+        // glyphs in it.
+        XCTAssertEqual(three, three.rounded())
+
+        // And the unit cell is its own cell, not a fourth digit: SF Pro's `%` is
+        // about 1.47 times a digit, which is the whole reason `unitWidth` exists.
+        // Under SF Mono the two were the same number and the distinction could
+        // not have been tested at all.
+        XCTAssertEqual(
+            Tokens.unitWidth(15),
+            Self.measured("%", size: 15, weight: .semibold).rounded(.up),
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(Tokens.unitWidth(15), Tokens.figureWidth(15, digits: 1))
+    }
+
+    /// A heavier run wants a wider cell, which a mono face never had to say.
+    func testAHeavierFigureReservesAWiderCell() {
+        for size in stride(from: CGFloat(9), through: 20, by: 1) {
+            XCTAssertGreaterThanOrEqual(
+                Tokens.figureWidth(size, digits: 9, weight: .semibold),
+                Tokens.figureWidth(size, digits: 9, weight: .regular),
+                "\(size)pt reserved no more for semibold digits than for regular ones"
+            )
+        }
+    }
+
+    /// The measurement the tokens claim to be, done here independently: the
+    /// system face at the given weight with its numbers made tabular.
+    private static func measured(_ run: String, size: CGFloat, weight: NSFont.Weight) -> CGFloat {
+        let system = NSFont.systemFont(ofSize: size, weight: weight)
+        let descriptor = system.fontDescriptor.addingAttributes([
+            .featureSettings: [[
+                NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
+                NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector
+            ]]
+        ])
+        let font = NSFont(descriptor: descriptor, size: size) ?? system
+        return (run as NSString).size(withAttributes: [.font: font]).width
     }
 
     func testFigureWidthGrowsWithSizeAndWithDigits() {

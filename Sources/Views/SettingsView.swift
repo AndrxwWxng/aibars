@@ -22,12 +22,14 @@ private extension String {
 /// a point larger is that same wobble read down the sidebar instead of across a
 /// row.
 ///
-/// None of these is `Tokens.Ramp.figureDesign`, and that is the rule rather than
-/// an oversight: SF Mono is for a run that is only digits and separators, and
-/// this window has none. Every number here shares its run with a word — "3
-/// sessions ready · 1 locked", "Unlock 4", "v0.4" — which is the mixed case, so
-/// it is SF Pro with tabular figures. That still buys what the column needs:
-/// a count re-read by a background sweep no longer shifts the words beside it.
+/// None of these goes through `Tokens.Ramp.figureFont`, and that is now a
+/// smaller distinction than it was: the panel's figures and this window's prose
+/// are the same face, and what the accessor adds is the tabular request. These
+/// runs ask for it themselves — every number here shares its line with a word,
+/// "3 sessions ready · 1 locked", "Unlock 4", "v0.4" — because that is what stops
+/// a count re-read by a background sweep from shifting the words beside it.
+/// While the figures were SF Mono this paragraph was a rule about which face a
+/// run takes; it is a note about where the modifier is written now.
 ///
 /// Both weights are named. `paneTitle` takes `titleWeight`, which is the weight
 /// a subject is set at everywhere in the app — it used to take `emphasisWeight`,

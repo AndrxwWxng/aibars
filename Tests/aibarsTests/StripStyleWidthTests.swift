@@ -167,14 +167,12 @@ final class StripStyleWidthTests: XCTestCase {
             let rail = Tokens.Strip.nameCell(height: height)
             for name in names {
                 let drawn = (name as NSString).size(withAttributes: [.font: font]).width
-                if name == "GitHub Copilot" && height == 10 {
-                    XCTAssertGreaterThan(drawn, rail, "the documented ellipsis stopped being one")
-                    XCTAssertLessThan(
-                        drawn - rail, 1,
-                        "\(name) now overflows its \(rail)pt rail by \(drawn - rail)pt, not by under a point"
-                    )
-                    continue
-                }
+                // No exception any more. "GitHub Copilot" at a 10pt mark used to
+                // be the one shipped name that overflowed its rail — by under a
+                // point, documented at `Strip.nameDigits` as a tail ellipsis —
+                // and the face change widened the cell past it. Every name clears
+                // every rail now, so the case that used to be carved out is
+                // asserted like the rest.
                 XCTAssertGreaterThanOrEqual(
                     rail, drawn, "\(name) measures \(drawn) in a \(rail)pt rail at \(height)pt"
                 )
@@ -325,21 +323,23 @@ final class StripStyleWidthTests: XCTestCase {
     func testTheShippedHeightMeasuresWhatTheTableSays() {
         let h: CGFloat = 13
         XCTAssertEqual(Tokens.Strip.markBox(height: h), 13)
-        XCTAssertEqual(Tokens.Strip.figureCell(height: h), 23)   // ceil(12 * 0.6185 * 3) = ceil(22.266)
-        XCTAssertEqual(Tokens.Strip.nameCell(height: h), 90)     // ceil(12 * 0.6185 * 12) = ceil(89.064)
+        // Three and twelve tabular semibold digits at 12pt, measured off the
+        // face rather than off a ratio. 23 and 90 while the figures were SF Mono.
+        XCTAssertEqual(Tokens.Strip.figureCell(height: h), 24)
+        XCTAssertEqual(Tokens.Strip.nameCell(height: h), 95)
         XCTAssertEqual(Tokens.Strip.meterColumn(height: h), 5)   // (13 * 0.38).rounded() = 5
         XCTAssertEqual(Tokens.Strip.barePlot(height: h), 11)     // 13 - 2
 
-        XCTAssertEqual(MarkAndFigureStyle.cellWidth(height: h), 39)  // 13 + 3 + 23
-        XCTAssertEqual(FigureOnlyStyle.cellWidth(height: h), 23)
+        XCTAssertEqual(MarkAndFigureStyle.cellWidth(height: h), 40)  // 13 + 3 + 24
+        XCTAssertEqual(FigureOnlyStyle.cellWidth(height: h), 24)
         XCTAssertEqual(MarkOnlyStyle.cellWidth(height: h), 13)
         XCTAssertEqual(MicroBarsStyle.cellWidth(height: h), 13)
         XCTAssertEqual(MarkAndMeterStyle.cellWidth(height: h), 21)   // 13 + 3 + 5
-        XCTAssertEqual(WorstOnlyStyle.cellWidth(height: h), 116)     // 90 + 3 + 23
+        XCTAssertEqual(WorstOnlyStyle.cellWidth(height: h), 122)     // 95 + 3 + 24
 
         // Three services, which is the configuration the strip was designed
-        // around: 3 * 39 + 2 * 5 = 127, and 3 * 13 + 2 * 5 = 49.
-        XCTAssertEqual(StripFit.width(segments: 3, style: box(.markAndFigure), height: h), 127)
+        // around: 3 * 40 + 2 * 5 = 130, and 3 * 13 + 2 * 5 = 49.
+        XCTAssertEqual(StripFit.width(segments: 3, style: box(.markAndFigure), height: h), 130)
         XCTAssertEqual(StripFit.width(segments: 3, style: box(.markOnly), height: h), 49)
         XCTAssertEqual(StripFit.width(segments: 3, style: box(.markAndMeter), height: h), 73)
     }

@@ -501,11 +501,12 @@ public struct ProviderRow: View {
     /// The name, the account, the plan, the buttons and the figure, on one
     /// baseline.
     ///
-    /// `.firstTextBaseline` rather than `.center`: the name is SF Pro and the
-    /// figure is SF Mono, and the two faces put their cap heights in different
-    /// places inside the same line box — centring lands them on two baselines a
-    /// point apart, which is exactly the kind of thing that reads as sloppy
-    /// without being nameable. Everything on the line that has no baseline of its
+    /// `.firstTextBaseline` rather than `.center`: the name and the figure are
+    /// two sizes and two weights in one line box, and centring lands their cap
+    /// heights on two baselines a point apart — exactly the kind of thing that
+    /// reads as sloppy without being nameable. It was worse when the two were
+    /// also two *faces*; one face has not made the alignment unnecessary, because
+    /// a 13pt name and a 16pt figure still centre differently. Everything on the line that has no baseline of its
     /// own — the buttons, a rail glyph, the status dot — is put on the band the
     /// eye reads the line in by `controlBaseline`.
     ///
@@ -1716,10 +1717,12 @@ private extension AppearanceSettings {
 /// deprecated modifier. The stack shares the same baseline and the same line
 /// box, and costs nothing.
 ///
-/// Both runs are SF Mono, and every one of the three call sites frames this in a
+/// Both runs are tabular, and every one of the three call sites frames this in a
 /// reserved trailing-aligned rail — the headline rail on the title line, the
-/// secondary rail on a caption and under a budget. Mono outside a rail is a
-/// column that reflows, which is the whole thing the face was adopted to stop.
+/// secondary rail on a caption and under a budget. Tabular digits outside a rail
+/// are a column that still reflows: they fix the width of a digit and not the
+/// length of a string, so `9%` becomes `92%` and drags its neighbour. The rail is
+/// the part that makes it a column.
 ///
 /// `.number` over a scaled ratio rather than `.percent`, for the same reason
 /// `HistoryChart` does it: `.percent` writes the sign into the run, and the sign
@@ -1774,7 +1777,7 @@ public struct UsageFigure: View {
             // holding it here is what keeps the digits the only column in the
             // panel that colour ever arrives on.
             Text(verbatim: "%")
-                .font(.system(size: unitSize, weight: .regular, design: Tokens.Ramp.figureDesign))
+                .font(Tokens.Ramp.figureFont(unitSize))
                 .foregroundColor(Tokens.Ink.muted)
         }
         .lineLimit(1)
@@ -1802,7 +1805,7 @@ public struct UsageFigure: View {
         // No decimals. A tenth of a percent on a five-hour window is noise you
         // cannot act on; the row's tooltip is where it survives.
         Text(scaled, format: .number.precision(.fractionLength(0)))
-            .font(.system(size: size, weight: weight, design: Tokens.Ramp.figureDesign))
+            .font(Tokens.Ramp.figureFont(size, weight: weight))
             .foregroundColor(tint)
     }
 
@@ -1837,9 +1840,7 @@ struct SpendFigure: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.snug) {
             Text(spend.display)
-                .font(.system(size: size,
-                              weight: Tokens.Ramp.titleWeight,
-                              design: Tokens.Ramp.figureDesign))
+                .font(Tokens.Ramp.figureFont(size, weight: Tokens.Ramp.titleWeight))
                 .foregroundColor(Tokens.Ink.muted)
                 .lineLimit(1)
                 // It never gives width: "$1,23…" is not a smaller number, it is no
@@ -3062,9 +3063,7 @@ public struct SecondaryValue: View {
             // reports, and dropping the line would hide that.
             if appearance.showsAmounts {
                 Text(value)
-                    .font(.system(size: size,
-                                  weight: Tokens.Ramp.titleWeight,
-                                  design: Tokens.Ramp.figureDesign))
+                    .font(Tokens.Ramp.figureFont(size, weight: Tokens.Ramp.titleWeight))
                     .foregroundColor(Tokens.Ink.muted)
                     .lineLimit(1)
                     // A floor rather than a fixed width: this is a count with a
@@ -3399,14 +3398,16 @@ public struct SecondaryChip: View {
     private var headSlack: CGFloat {
         let cells = reading.digits.count + (reading.unit?.count ?? 0)
         let floor = min(runs.reading, Self.jitterFloor(size))
-        return max(0, floor - Tokens.figureWidth(size, digits: cells))
+        return max(0, floor - Tokens.figureWidth(size, digits: cells, weight: Tokens.Ramp.titleWeight))
     }
 
     /// Four cells, and the one number the chip floors its reading at. Named
     /// because `headSlack` and the frame below have to agree about it exactly —
     /// two copies of this constant is two chips of different widths.
     private static func jitterFloor(_ size: CGFloat) -> CGFloat {
-        Tokens.figureWidth(size, digits: 4)
+        // At the weight the chip's reading is set in, like every other cell on
+        // this line: the floor and the run it floors have to be one measurement.
+        Tokens.figureWidth(size, digits: 4, weight: Tokens.Ramp.titleWeight)
     }
 
     public var body: some View {
@@ -3463,9 +3464,7 @@ public struct SecondaryChip: View {
                         .foregroundColor(Tokens.Ink.muted)
                 }
             }
-                .font(.system(size: size,
-                              weight: Tokens.Ramp.titleWeight,
-                              design: Tokens.Ramp.figureDesign))
+                .font(Tokens.Ramp.figureFont(size, weight: Tokens.Ramp.titleWeight))
                 .lineLimit(1)
                 // Four cells, trailing — the rail every other figure in the panel
                 // gets, at the one place a reading sits on a line that runs along
@@ -3492,8 +3491,8 @@ public struct SecondaryChip: View {
                 // The reading is why the chip is here, so it is the part that
                 // must not be abbreviated away.
                 //
-                // The one SF Mono run in the panel with no rail around it, and
-                // the reason is that a chip is not a column: it is sized to what
+                // The one figure in the panel with no rail around it, and the
+                // reason is that a chip is not a column: it is sized to what
                 // it says, on a line that runs along the row rather than down the
                 // panel, so there is no edge for a reading to line up on.
                 // `fixedSize` is what does the work the rail does elsewhere: the
@@ -3557,9 +3556,7 @@ public struct OverflowChip: View {
 
     public var body: some View {
         Text("+\(count)")
-            .font(.system(size: appearance.metrics.detailSize,
-                          weight: .regular,
-                          design: Tokens.Ramp.figureDesign))
+            .font(Tokens.Ramp.figureFont(appearance.metrics.detailSize))
             .foregroundColor(Tokens.Ink.muted)
             .lineLimit(1)
             // The one chip on the line that must never be truncated: an

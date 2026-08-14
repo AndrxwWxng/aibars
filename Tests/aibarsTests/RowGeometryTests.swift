@@ -620,7 +620,11 @@ final class RowGeometryTests: XCTestCase {
                 geometry(appearance, lines: [.meter, .window]).headlineRail,
                 Tokens.figureWidth(metrics.figureSize, digits: 3)
                     + Tokens.Space.hairline
-                    + Tokens.figureWidth(metrics.unitSize, digits: 1),
+                    // A unit cell and not a fourth digit cell, and at the resting
+                    // weight: SF Pro's `%` is 1.47× a digit and `UsageFigure`
+                    // holds it at `.regular` however heavy the digits go, so both
+                    // halves of this term changed with the face.
+                    + Tokens.unitWidth(metrics.unitSize, weight: .regular),
                 "\(density.rawValue) reserves a headline rail that is not three digits, a hairline and a unit"
             )
         }
@@ -839,16 +843,25 @@ final class RowGeometryTests: XCTestCase {
         let column: CGFloat = 520
         // What the trailing half of the line has: the column, less the gap to the
         // sentence, less the cell the "+N" takes. 520 − 8 − (21 + 8) = 483.
-        let residue = column - Tokens.Space.medium - (Tokens.figureWidth(size, digits: 3) + Tokens.Space.medium)
+        //
+        // Every cell here names the weight its run is drawn at, which under the
+        // mono face was not a question a rail could get wrong: one advance served
+        // every weight. SF Pro's digit is 3.5% wider at semibold than at regular,
+        // and at the shipped 356pt panel that percent is the difference between
+        // one chip on the line and two — so the "+N" is reserved at the weight
+        // `OverflowChip` sets it in, the chip's label at the weight its prose is
+        // set in, and its reading at the weight `SecondaryChip` gives the figure.
+        let residue = column - Tokens.Space.medium
+            - (Tokens.figureWidth(size, digits: 3, weight: .regular) + Tokens.Space.medium)
         XCTAssertEqual(residue, 483)
 
         // One chip at full stretch: an eight-cell label, the chip's inner gap and
-        // a nine-cell reading. 55 + 4 + 62 = 121, and with the gap to the next
-        // chip, 129 — which is what the count divides by. 483 / 129 = 3.74.
-        let stretch = Tokens.figureWidth(size, digits: 8)
+        // a nine-cell reading. 56 + 4 + 65 = 125, and with the gap to the next
+        // chip, 133 — which is what the count divides by. 483 / 133 = 3.63.
+        let stretch = Tokens.figureWidth(size, digits: 8, weight: .regular)
             + Tokens.Space.snug
-            + Tokens.figureWidth(size, digits: 9)
-        XCTAssertEqual(stretch, 121)
+            + Tokens.figureWidth(size, digits: 9, weight: Tokens.Ramp.titleWeight)
+        XCTAssertEqual(stretch, 125)
         let limit = RowGeometry.chipLimit(textColumnWidth: column, chipSize: size, carriesSpend: false)
         XCTAssertEqual(limit, Int(residue / (stretch + Tokens.Space.medium)))
         XCTAssertEqual(limit, 3)
@@ -863,8 +876,8 @@ final class RowGeometryTests: XCTestCase {
         // them is the label's — which is what lets a long window name draw whole
         // on a panel that has the room for it.
         let runs = RowGeometry.chipRuns(cap: cap, chipSize: size)
-        XCTAssertEqual(runs.reading, Tokens.figureWidth(size, digits: 9))
-        XCTAssertGreaterThan(runs.label, Tokens.figureWidth(size, digits: 8))
+        XCTAssertEqual(runs.reading, Tokens.figureWidth(size, digits: 9, weight: Tokens.Ramp.titleWeight))
+        XCTAssertGreaterThan(runs.label, Tokens.figureWidth(size, digits: 8, weight: .regular))
         XCTAssertEqual(runs.label + Tokens.Space.snug + runs.reading, cap, accuracy: 0.001)
     }
 
@@ -873,12 +886,12 @@ final class RowGeometryTests: XCTestCase {
     /// go. Below one stretch the cap *is* what the line has left.
     func testATooNarrowLineCutsTheChipRatherThanTheCount() {
         let size: CGFloat = 11
-        let stretch = Tokens.figureWidth(size, digits: 8)
+        let stretch = Tokens.figureWidth(size, digits: 8, weight: .regular)
             + Tokens.Space.snug
-            + Tokens.figureWidth(size, digits: 9)
+            + Tokens.figureWidth(size, digits: 9, weight: Tokens.Ramp.titleWeight)
         // 300pt of panel behind a 40pt logo, with a spend at the head of the
         // caption: 300 − 24 gutters − 50 leading column = 226 of text column, and
-        // the sentence gap, the "+N" cell and the spend take 8 + 29 + 98 of it.
+        // the sentence gap, the "+N" cell and the spend take 8 + 29 + 105 of it.
         //
         // The spend was 87 and is 98: `MetricCaption` now draws a middle dot
         // between the amount and the window beside it — every other pair on that
@@ -886,19 +899,22 @@ final class RowGeometryTests: XCTestCase {
         // as a single run. `Space.snug` plus one mono cell is 4 + 7, and it is
         // reserved because `SpendFigure` is `layoutPriority(1)` and `fixedSize`,
         // so a dot beside it comes out of the chips' budget and not out of slack.
-        // The cap follows the residue exactly: 226 − 8 − 29 − 98 = 91, where it
-        // was 226 − 8 − 29 − 87 = 102.
+        // The cap follows the residue exactly: 226 − 8 − 29 − 105 = 84. It was 91
+        // against a 29pt "+N" cell and a 98pt spend, and the spend grew with the
+        // face: the cells are measured off SF Pro now, at the weight each run is
+        // drawn in, rather than off SF Mono's single advance — and the spend's
+        // widest term, the amount, is drawn at `titleWeight`.
         let narrow: CGFloat = 226
         let cap = RowGeometry.chipCap(textColumnWidth: narrow, chipSize: size, carriesSpend: true)
         XCTAssertEqual(RowGeometry.chipLimit(textColumnWidth: narrow, chipSize: size, carriesSpend: true), 1)
-        XCTAssertEqual(cap, 91)
+        XCTAssertEqual(cap, 84)
         XCTAssertLessThan(cap, stretch, "a 226pt column still offered a chip its full stretch")
 
         // The reading is served first and the label takes what is left, which is
         // the chip's own rule: a clipped figure is a different quantity, a
         // clipped label is still the window's family.
         let runs = RowGeometry.chipRuns(cap: cap, chipSize: size)
-        XCTAssertEqual(runs.reading, Tokens.figureWidth(size, digits: 9))
+        XCTAssertEqual(runs.reading, Tokens.figureWidth(size, digits: 9, weight: Tokens.Ramp.titleWeight))
         XCTAssertEqual(runs.label, cap - Tokens.Space.snug - runs.reading)
     }
 
@@ -1002,14 +1018,14 @@ final class RowGeometryTests: XCTestCase {
         // One chip and the gap to the next, which is what one more chip costs.
         let chip = threeAt - twoAt
         // The step, written out: an eight-cell label, the chip's inner gap, a
-        // nine-cell reading, and the gap to the chip after it. 50 + 4 + 56 + 8 at
-        // a 10pt chip. Measured off the sweep rather than asked of the subject,
-        // so the two have to agree about what a chip costs.
+        // nine-cell reading, and the gap to the chip after it, each cell at the
+        // weight its run is set in. Measured off the sweep rather than asked of
+        // the subject, so the two have to agree about what a chip costs.
         XCTAssertEqual(
             chip,
-            Tokens.figureWidth(chipSize, digits: 8)
+            Tokens.figureWidth(chipSize, digits: 8, weight: .regular)
                 + Tokens.Space.snug
-                + Tokens.figureWidth(chipSize, digits: 9)
+                + Tokens.figureWidth(chipSize, digits: 9, weight: Tokens.Ramp.titleWeight)
                 + Tokens.Space.medium,
             "a chip steps the count every \(chip)pt"
         )

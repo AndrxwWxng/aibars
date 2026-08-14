@@ -70,7 +70,7 @@ Six drawings are available under Appearance → Menu bar, chosen from a grid of 
 
 | Style | What it draws | Services |
 |-------|---------------|----------|
-| Mark + figure | A brand mark and its own reading per service. 127pt at three. | up to 3 |
+| Mark + figure | A brand mark and its own reading per service. 130pt at three. | up to 3 |
 | Figures only | One number, no mark. | 1 |
 | Marks only | Silhouettes, tinted by how close each is to its cap. Nothing is tinted under Monochrome. | up to 3 |
 | Micro bars | One column per service on a shared baseline. The only style that still measures under Monochrome, and the only one that does not say which column is which. | up to 3 |
@@ -190,7 +190,11 @@ The one exception is identity, and it is bounded. **A brand mark carries its own
 
 Two things suppress it. The Monochrome preset, which is what that preset is for. And the Provider colour ramp, where the meter and the figure are already painted in the brand's hue — a row whose mark, bar and number are three shades of one colour is exactly what "chroma means measurement" exists to prevent, so brand hue appears at most once per row and the meter wins. There is no switch of its own for it, which is a gap: today the only way to have grey marks is to take the whole Monochrome preset.
 
-The rest is deliberately quiet. One material in the whole app, and every number set in SF Mono inside a reserved, right-aligned column — so nothing on screen shifts as the digits tick, including on rows with no figure, rows still loading and rows that will never report one. Prose stays in SF Pro with tabular figures: "resets in 1h 19m" is a sentence, not a reading. Under Increase Contrast the hairline rules and borders step up in opacity — 0.07 to 0.16 for a rule, 0.18 for a border; no line anywhere gets thicker. Under Reduce Transparency the material is dropped rather than covered, and the ground goes fully opaque.
+The rest is deliberately quiet. One material in the whole app, one typeface, and every number set with tabular figures inside a reserved, right-aligned column — so nothing on screen shifts as the digits tick, including on rows with no figure, rows still loading and rows that will never report one. Under Increase Contrast the hairline rules and borders step up in opacity — 0.07 to 0.16 for a rule, 0.18 for a border; no line anywhere gets thicker. Under Reduce Transparency the material is dropped rather than covered, and the ground goes fully opaque.
+
+**One typeface** is a change from what shipped first. Figures used to be SF Mono while every word beside them was SF Pro, on the theory that a monospaced face is what makes a column. It isn't: the columns are the reserved rails and the fixed digit advance, and `.monospacedDigit()` gives both of those on the system face. What SF Mono added on top was its voice — slab terminals, an exaggerated aperture, a slashed zero — and eleven rows of it down a panel read as a terminal window rather than as an instrument. Every figure in the app sits a few points from a word, and two faces on one line is a seam the eye finds before it finds the reading. So `92%` and the name beside it are now the same face at different weights, which is what hierarchy is supposed to be made of.
+
+That cost something worth naming, because it is the part that is not just taste. A mono face has one advance at every size and every weight, so a rail could be cut from a single constant: `size × 0.6185`. SF Pro has neither property — its tabular digit runs 0.648 of the point size at 9pt and 0.610 at 16pt as the optical size changes, and another 3.5% wider again at semibold — and its `%` is 1.47 times a digit where SF Mono's was exactly one. So every rail in the app is now measured off the real face at the weight its run is actually drawn in, and the unit letters have a cell of their own. The reservations moved by a few points each; the invariant they exist for did not move at all.
 
 The one thing the chrome never does is take an alarm colour. The rule under the header stays neutral whatever the rows are doing, because a coloured edge across the top of the panel names no service and cannot be acted on.
 

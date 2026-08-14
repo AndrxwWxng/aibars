@@ -1038,16 +1038,22 @@ final class RowReservationTests: XCTestCase {
                             textColumnWidth: column, chipSize: size, carriesSpend: carriesSpend
                         )
                         // What `SpendFigure` holds at the head of the line: nine
-                        // mono cells for "$8,700.47", the gap, and three for the
-                        // "est." qualifier.
+                        // cells for "$8,700.47" at the weight it draws the amount
+                        // in, the gap, and three for the "est." qualifier at the
+                        // weight it draws that in. Both weights are named for the
+                        // reason the reservation names them — a cell is measured
+                        // off the face now, and this face is wider at a heavier
+                        // weight, so a model of the drawing that guesses the
+                        // weight is a model of a different drawing.
                         let spend = carriesSpend
-                            ? Tokens.figureWidth(size, digits: 9)
+                            ? Tokens.figureWidth(size, digits: 9, weight: Tokens.Ramp.titleWeight)
                                 + Tokens.Space.snug
-                                + Tokens.figureWidth(size, digits: 3)
+                                + Tokens.figureWidth(size, digits: 3, weight: .regular)
                             : 0
                         // "+99", which `chipSplit` puts beside its one real chip
-                        // rather than in place of it when the line holds one.
-                        let overflow = Tokens.figureWidth(size, digits: 3)
+                        // rather than in place of it when the line holds one, and
+                        // which `OverflowChip` draws at `.regular`.
+                        let overflow = Tokens.figureWidth(size, digits: 3, weight: .regular)
 
                         for chips in 1...limit {
                             let n = CGFloat(chips)
