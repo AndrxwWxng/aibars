@@ -6,35 +6,40 @@ Several apps do this. [How aibars compares](#how-this-compares) is further down,
 
 ```
    ✦ 97   ✳ 92   ◆ 64     the menu bar: a brand mark and its own figure per service
-╭──────────────────────────────────────────────────╮
-│ ▇▅▃▁ aibars  updated 12s ago         ↻  ⌁  ⚙  ⏻  │
-├──────────────────────────────────────────────────┤
-│ ✦  Gemini  Pro                              97%  │
-│    ███████████████████▏█                         │
-│    Daily · resets in 2h 59m                      │
-│                                                  │
-│ ✳  Claude  work · Max 20×                   92%  │
-│    ██████████████████░▏░                         │
-│    5h session · resets in 1h 19m   Weekly 61% +1 │
-│    on pace to cap in 40m                         │
-│                                                  │
-│ ◆  Cursor  andrew@… · Pro                   64%  │
-│    █████████████░░░░░░▏░                         │
-│    320 / 500 · resets in 8d 15h                  │
-│                                                  │
-│ ◍  ChatGPT  Plus                              ●  │
-│    Subscription active                           │
-│                                                  │
-│ ⌀  Grok                                       ⚠  │
-│    No response — will retry                      │
-│                                                  │
-│ ›  Not connected  7                              │
-╰──────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────╮
+│ ▇▅▃▁ aibars  updated 12s ago               ↻  ⌁  ⚙  ⏻  │
+├────────────────────────────────────────────────────────┤
+│ ✦  Gemini  Pro                                    97%  │
+│    ████████████████████████▏█░                         │
+│    Daily · on pace to cap in 5m      resets in 2h 59m  │
+│                                                        │
+│ ✳  Claude  work · Max 20×                         92%  │
+│    ████████████████████████░▏░                         │
+│    5h session · resets in 1h 19m       Weekly 61%  +1  │
+│                                                        │
+│ ◆  Cursor  andrew@… · Pro                         64%  │
+│    █████████████████░░░░░░░▏░                          │
+│    320 / 500 · on pace to cap in 1h  resets in 8d 15h  │
+│                                                        │
+│ ◍  ChatGPT  Plus                                    ●  │
+│    Subscription active                                 │
+│                                                        │
+│ ⌀  Grok                                             ⚠  │
+│    No response — will retry                            │
+│                                                        │
+│ ›  Not connected  7                                    │
+╰────────────────────────────────────────────────────────╯
 ```
 
 The `▏` in each bar is the redline, and it is the one mark in there that has to be explained: a one-point notch of the panel's own ground, standing at your warning threshold and cut through the fill rather than drawn under it. Gemini's fill has run past it, Claude's has not, and Cursor's is nowhere near. [The meter](#the-meter) is the rest of it.
 
+Two other things in that picture are decisions rather than accidents. The pace claim — `on pace to cap in 5m` — is a run at the tail of the caption and not a line of its own, so it can arrive and leave without moving anything; on the Claude row it has been dropped, because that line is already carrying a further window and a count of the one that would not fit, and the pace is the first thing to give. Widen the panel and it comes back. And the countdown sits on the trailing edge wherever nothing else does, so "when does this come back" reads down the panel at one x.
+
 Everything in that panel is configurable, including how much of it is drawn: five presets and the thirty-two settings behind them sit under Appearance, with a live preview of a real row.
+
+One rule sits under all of it: **a row's height is a function of your settings and of one bit — has this row anything to report at all — and of nothing else.** Never of what came back from the fetch, never of a string that had to be measured. `MenuBarExtra` sizes its window to its content, so anything content-dependent is the panel resizing under your pointer. Everything that could grow a row is therefore reserved from the setting that switches it on and held whether or not there is anything to put in it — the sparkline's box, the ladder of further windows, the budget line, the meter's own slot on a row that reports no quota, and the box the hover buttons live in. Empty rungs are the price, and they are the honest one.
+
+The bit is deliberately "has anything to report" rather than "is signed in", and the difference is a state you will actually meet: a session that expires while the panel is open. That row still has its last reading and the sentence explaining what happened, so it keeps every box it had — including the buttons' box, which it no longer draws buttons in. It gives their *width* back to its own name, because that is space the name wants and nothing is measured by. A row nobody has connected is the one short row, and it is short from the moment the panel opens.
 
 ## Install
 
@@ -160,7 +165,7 @@ A progress bar fills towards something you want. A quota meter empties towards a
 Two things answer that:
 
 - **The redline.** A one-point notch stands at your warning threshold, drawn in the panel's own ground and drawn *over* the fill rather than under it, so it survives being overtaken. Below the threshold it stands in the empty track; at it the fill's edge meets it; above it the fill visibly runs past. It is a position channel, which is why it is worth having: a tick the fill either has or has not reached survives greyscale exactly, survives deuteranopia exactly, survives Monochrome exactly, and is legible on a 5pt bar.
-- **The bar stops growing.** The track is capped at 160pt and leading-aligned, so every bar in the panel starts on the same edge and none of them gets longer when you widen the window. It used to be 304pt of a 356pt panel — 85% of the window, aspect 61:1 — and 468pt at the top of the width slider. At that length it read as a rule between a title and its own caption, it carried over 90% of all the colour in the panel, and it resolved a third of a percent per point against a figure that is only ever printed to the nearest whole one.
+- **The bar is bounded at both ends.** It used to be 304pt of a 356pt panel — 85% of the window, aspect 61:1 — and 468pt at the top of the width slider. At that length it read as a rule between a title and its own caption, it carried over 90% of all the colour in the panel, and it resolved a third of a percent per point against a figure that is only ever printed to the nearest whole one. The track is now half the text column, floored at 160pt and capped at 200: 160 at every panel from 300pt up to and past the shipped 356, 184 at 420, 200 at 520. It is leading-aligned, so every bar in the panel starts on the same edge, and the ceiling is where the bar's resolution stops being within a factor of two of the figure two columns away — past 200pt the bar visibly moves while the number holds still.
 
 A row at or above the warning threshold says so four times over, and only one of the four is colour:
 
@@ -171,11 +176,13 @@ A row at or above the warning threshold says so four times over, and only one of
 
 Convert the panel to greyscale and the row is still identifiable. Set the ramp to Monochrome and it still is.
 
-Two drawings that used to be here are gone, and it is worth saying which. The bar carried the reset clock in its track and a riser at the pace boundary, so it drew two quantities where everything else in the category draws one. It was a real idea and nobody could read it: an instrument nobody arrives already knowing has to be documented before it can be used, and a menu bar panel is not a thing people read documentation for. The pace still has a sentence under the meter, which is where a quiet interface puts it. The other was the spine — a coloured bookmark down a row's leading edge, meaning near-cap *or* needs-you *or* failed-outright, with no way to tell which from looking at it. A row that wants you now says `Sign in`, in words, in its own figure rail.
+Two drawings that used to be here are gone, and it is worth saying which. The bar carried the reset clock in its track and a riser at the pace boundary, so it drew two quantities where everything else in the category draws one. It was a real idea and nobody could read it: an instrument nobody arrives already knowing has to be documented before it can be used, and a menu bar panel is not a thing people read documentation for. The pace still has its say, in words, at the tail of the row's own caption. The other was the spine — a coloured bookmark down a row's leading edge, meaning near-cap *or* needs-you *or* failed-outright, with no way to tell which from looking at it. A row that wants you now says `Sign in`, in words, in its own figure rail.
 
 ## Colour
 
 There are exactly two hues in the whole application. Amber and red, and both mean alarm.
+
+The two of them rank, and it took a re-cut to make them. In dark, 97% had been drawing in a salmon at OKLCh chroma 0.107 while 92% drew in an amber at 0.151 — the *less* urgent reading was the more saturated one, so the eye went to the second-worst row. The rule now is that chroma never decreases going up the ramp: resting 0.011 → amber 0.113 → red 0.160 in light, 0.012 → 0.141 → 0.160 in dark. Red is also the darker of the two in both appearances, by about ten points of L\*, so which alarm it is survives a greyscale screenshot. The cost is stated rather than hidden: in dark that makes the red bar the *darker* of the two, which is the opposite of what a lightness ramp would do. Nothing rests on it — near-cap is carried by three channels that are not colour at all — and there is a test that desaturates a rendered panel rather than trusting this paragraph.
 
 Everything else is a grey. The grounds are near-black (`#0C0D11`) and near-white (`#F6F7FA`); text, marks and captions come off one ink ladder; the meter's resting fill, its track, and the heatmap's five steps are all points on the same greyscale. The app used to run three colour systems at once in 356 points — fifteen brand marks at full saturation, a usage ramp with its own amber and red, and a semantic green/amber/red beside them — and the raw brand hexes out-chromaed every colour that meant something, so an alert could not announce itself over the row's own logo. There is no green: a connected service that is not answering was never green, and the one dot that used to be green is now the body ink, because the dot's job is proof of connection rather than approval.
 
@@ -191,7 +198,7 @@ The one thing the chrome never does is take an alarm colour. The rule under the 
 
 Off by default; Appearance → What each row shows → 24-hour sparkline turns it on for every connected row at once.
 
-Twenty-four hourly buckets of that row's headline window, one point an hour at the highest reading in it, in a fixed box under the meter. One neutral trace, and deliberately no usage colour: the meter beside it is the reading, and this is context. A row therefore reads past, present, future down the page — the trace, the bar, and the pace line.
+Twenty-four hourly buckets of that row's headline window, one point an hour at the highest reading in it, in a fixed box under the meter. One neutral trace, and deliberately no usage colour: the meter beside it is the reading, and this is context. So a row reads the last day in the trace, this instant in the bar and the figure, and the next hour in the pace claim on the caption line.
 
 - **Gaps are cut, not bridged.** An hour nothing landed in is absent rather than zero, and the trace stops and restarts across it. A Mac that was asleep did not spend a quiet night at the floor, and joining across the gap would draw exactly that night.
 - **A window rolling over cuts it too**, at the same thirty-point drop the history chart splits its own line on, so the panel and the settings window agree about where a window began. Joined, a reset is a vertical plunge through the whole box, which reads as the app having lost the data rather than as a subscription renewing.
@@ -201,14 +208,22 @@ It reads a cache in front of the database rather than the database, rebuilt at m
 
 ## Pace
 
-Under the headline meter of a row, when there is something honest to say:
+At the tail of a row's caption line, when there is something honest to say:
 
 ```
-on pace to cap in 40m
-resets in 25m, you'll finish under
+5h session · resets in 1h 19m · on pace to cap in 40m
+5h session · resets in 25m · resets in 25m, you'll finish under
 ```
+
+It is a run on a line the row already draws, not a line of its own, and that is a height decision before it is a typographic one. It was a block under the meter for one release, and the first projection to qualify grew its row 19pt — about 171pt down a full panel — with the panel open. Reserving the block instead would have been worse: a fit needs three samples five minutes apart, a rising slope and an arrival inside twelve hours, so a freshly launched panel has a projection for nothing at all and would have paid the whole 171pt anyway. On the caption it costs nothing and can never cost anything, because that line is one line box whatever is on it.
+
+Two consequences follow, and both are wanted. It is the **first** thing the line drops when it runs out of width — offered as the richest of five candidates, so a caption too tight to carry the claim draws exactly what it drew before the pace existed, never less; a countdown is a fact the provider published and the pace is a claim fitted from half an hour of samples, so where they compete the fact wins. And it follows the line rather than the row: under Minimal, which reserves no caption at all, there is no line to ride and no claim is made, which is that preset's whole premise.
+
+It is set one size down from the rest of the line, because everything else there is something the provider said and this is something aibars worked out. It takes no colour at all — a warning ink on a sentence over a bar resting in grey would report a state the row is not in.
 
 The answer is always stated against the window's own reset, never as a bare clock time. "2:58 PM" with no date is the thing people complain about most in this category of app, and it is also the least useful form of the answer: what you want to know is whether the cap arrives before the window rolls over.
+
+That is also where the second sentence gets its wart, visible in the example above: it names the reset, and the countdown two runs to its left names the same reset again. It is rare — that sentence is only reached when the window renews before the cap arrives *and* the renewal is inside twelve hours — and it is not fixed yet.
 
 How it works: aibars keeps the last six hours of readings per account, fits a recency-weighted line through the last half hour of them (ten-minute half-life, so a burst that has just started still moves the estimate), and divides what is left of the cap by that slope. A drop of twenty points or more is treated as the window resetting, and everything before it is discarded, so a fresh 5-hour window is never projected off the last one's slope.
 
@@ -216,7 +231,7 @@ It refuses to answer more often than it answers, on purpose. Nothing is shown wh
 
 And it is an extrapolation, not a promise. It assumes you carry on at the rate of the last half hour. Stop for lunch and it goes quiet rather than counting down; open six tabs and it will be late.
 
-The same projection, in a shorter form, also goes in the panel header — "caps in 40m" beside the busiest service. The line on the rows can be switched off in Settings → Alerts → Pace.
+The same projection, in a shorter form, also goes in the panel header — "caps in 40m" beside the busiest service. The claim on the rows can be switched off in Settings → Alerts → Pace.
 
 ## History
 
@@ -303,8 +318,9 @@ What aibars does that the alternatives generally don't:
 
 - **It reads each provider's own usage endpoint** using the session already sitting in your browser. There is no cookie to paste and no table of plan constants in the source to go stale — which is the failure mode that made every log-scraping tool in this niche start lying quietly the week a provider changed a limit. When a provider changes what it reports, the row changes with it.
 - **Fifteen services and several accounts per service**, discovered rather than configured. Two Claude logins in two browser profiles come up as two rows.
-- **It answers the forward-looking question.** Most of these apps tell you where you are now. The pace line tells you whether the cap arrives before the window resets, stated as a duration against that reset, and says nothing at all when the samples can't support a claim.
+- **It answers the forward-looking question.** Most of these apps tell you where you are now. The pace claim tells you whether the cap arrives before the window resets, stated as a duration against that reset, and says nothing at all when the samples can't support a claim.
 - **The meter is a gauge rather than a progress bar.** A redline stands at your own warning threshold and the fill either has or has not run past it, so the empty half of the bar — the half that actually matters on a quota — is the half you read.
+- **The panel does not resize while you are looking at it.** Every row's height comes from your settings and nothing else — not from what the fetch returned, not from a string that had to be measured. That is a strange thing to advertise until you have used a menu bar panel that jumps under the pointer as its answers land.
 - **Near-cap is said four ways and only one of them is colour.** Position, shape, weight, then hue. A greyscale screenshot of the panel is still readable, and so is the panel with the ramp set to Monochrome.
 - **It reads any browser you actually use** — Chromium and its forks, Firefox, Safari — rather than one.
 - **It runs on macOS 13.** The closest rival by provider coverage needs macOS 15.
@@ -367,7 +383,7 @@ No usage data leaves your Mac, there is no server, no telemetry and no analytics
 - **Appearance** — five presets (Comfortable, Compact, Minimal, Dashboard, Monochrome) over sections for Size, Rows, What each row shows, Usage meter, The list and Menu bar, with a live preview and a Reset that puts everything back to how it shipped
 - **History** — the chart, its range, the ninety-day grid, the per-day table, and the three things you can do to an archive: stop adding to it, take a copy, throw it away
 - **Spend** — what each service says it cost, a cap per service and one overall, and the two warning levels
-- **Alerts** — the alert switch, both thresholds, the reset announcement, the pace line, macOS's permission state and the last five alerts with whether they were delivered
+- **Alerts** — the alert switch, both thresholds, the reset announcement, whether the rows carry the pace claim, macOS's permission state and the last five alerts with whether they were delivered
 - **General** — launch at login, the global shortcut that opens the panel, and the refresh interval: 30 seconds, 1, 5, 15 or 30 minutes
 - **About** — version and links
 
@@ -403,7 +419,11 @@ aibars/
 └── Tests/                      XCTest for parsers, policy, forecast, geometry and layout
 ```
 
-The split exists so the app can ship with `@main` while unit tests run against the framework without bootstrapping the UI. The decisions worth testing are kept out of the views, and that now covers most of the visual system too: `UsageForecast`, `ThresholdPolicy`, `BudgetPolicy`, `HistoryQuery`, `RowGeometry`, `MeterGeometry`, `AppMarkGeometry`, `SparklineLayout`, `HeatmapBand`, `PanelFilter`, `PanelKeyboard`, `StripFit` and `MenuBarStripContent` are pure functions over their inputs, with no app state, no I/O and no notification centre in them. A row's height, a rail's width, where a reading becomes a length, which cell a day falls in, what a keystroke does and which segment the strip drops are all things a test can assert rather than a person eyeball. There are around 1,580 of those tests; `make test` runs them in about a hundred seconds.
+The split exists so the app can ship with `@main` while unit tests run against the framework without bootstrapping the UI. The decisions worth testing are kept out of the views, and that now covers most of the visual system too: `UsageForecast`, `ThresholdPolicy`, `BudgetPolicy`, `HistoryQuery`, `RowGeometry`, `MeterGeometry`, `AppMarkGeometry`, `SparklineLayout`, `HeatmapBand`, `PanelFilter`, `PanelKeyboard`, `StripFit` and `MenuBarStripContent` are pure functions over their inputs, with no app state, no I/O and no notification centre in them. A row's height, a rail's width, where a reading becomes a length, which cell a day falls in, what a keystroke does and which segment the strip drops are all things a test can assert rather than a person eyeball. There are 1,606 of those tests, 5 of them skipped unless you ask for the snapshot renders; `make test` runs them in a little under two minutes. Two more skip on a machine with no Chromium cookie database — which is what a fresh CI runner is — so seven skipped there is the healthy number, not a regression.
+
+Testing the arithmetic is not enough, and that was learned the hard way: every height defect here has been a correct calculation with a drawing that disagreed with it, sitting behind assertions that all passed. So the suite also hosts real `ProviderRow`s in an `NSHostingView` and measures what they actually draw, then asserts that the drawn height equals the reserved one and that nothing lands outside the panel's frame. A reservation with no drawing behind it is worse than none, because it reads as coverage.
+
+Two things about *what* is swept, both learned from defects that hid in the gap. Every state a row can be in means every state, not the three a launch passes through: waiting, reporting, failed, a service reporting no quota at all, and — the one that was missing — a row that has reported and whose session then dies, which is precisely the state the reservation is written to protect and the one nothing had ever drawn. And the settings are swept as themselves rather than through the presets that pin them: a preset fixes the meter style, the further-window style, amounts and countdowns in one go, so five presets sample five points of the thirty-six those four axes span, and the two that a preset never visits are the two nothing measures.
 
 ## Adding a new provider
 
@@ -521,6 +541,9 @@ This is an unofficial project. Most of the usage endpoints aibars reads — Clau
 - ~~A 90-day heatmap~~ — done, under the chart in the History pane
 - ~~More than one drawing for the menu bar strip~~ — done: six, across all fifteen services
 - ~~Find a row without reaching for the mouse~~ — done: type to filter, arrows and Return to act
+- ~~A pace claim that cannot resize the panel~~ — done, by folding it onto the caption rather than by reserving a line for it
+- Not saying "resets in 25m" twice on the one row that can. The pace sentence for a window that renews before the cap arrives names the reset, and so does the countdown beside it
+- Something better than empty rungs under "One line per window". A row reserves the stepper's ceiling so its height cannot move, which means a service reporting one window under a limit of six holds five clear lines. The height rule is not negotiable; the drawing might be
 - Antigravity, Devin and Pi, once their endpoints have been verified against a live account
 - A signed, notarised build and some way to update one, which is the largest single gap against the closest rival. Building from source is the only route today
 - A one-shot CLI and a local read-only HTTP endpoint, which is what openusage has and aibars does not. The providers are already a framework with no UI in them, so this is packaging rather than new reading

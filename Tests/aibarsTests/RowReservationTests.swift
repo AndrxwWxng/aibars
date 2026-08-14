@@ -232,6 +232,129 @@ final class RowReservationTests: XCTestCase {
         }
     }
 
+    /// And the same state as the row actually **draws** it, which is the layer
+    /// the case above was missing and the defect that layer was hiding.
+    ///
+    /// The reservation was right and the drawing was not. `RowGeometry` holds the
+    /// title line at `Control.rowIconButton` whenever `rowActions != .never`, and
+    /// `ProviderRow` drew `RowActions` only `if provider.isAuthenticated` — so
+    /// exactly the state the case above exists to protect, a row that has
+    /// reported and whose session then dies, kept its reservation and lost its
+    /// drawing. Measured on a hosted row at 356pt: **−4pt at cozy/85% and
+    /// compact/85%, −2pt at cozy/100%**, which is 8–16pt of panel across four
+    /// rows and 30–60pt across fifteen. `SessionStore` clears `isAuthenticated`
+    /// in the same main-actor turn it stores the failure, so with the panel open
+    /// that is `MenuBarExtra` resizing its window under the pointer.
+    ///
+    /// The lesson is the one `Lines.forecast` already taught and this suite still
+    /// had a hole for: a reservation asserted at five call sites and never once
+    /// hosted reads as coverage. Every state named in the reservation cases now
+    /// has a drawn case beside it.
+    @MainActor
+    func testARowThatHasReportedDrawsTheSameBoxWhenItsSessionDies() throws {
+        let provider = try Self.connectedProvider()
+        try sweep("expired-drawn") { appearance, at in
+            provider.isAuthenticated = true
+            let live = Self.drawnHeight(
+                appearance: appearance, provider: provider, result: .failure(.parse("timed out"))
+            )
+            provider.isAuthenticated = false
+            let expired = Self.drawnHeight(
+                appearance: appearance, provider: provider, result: .failure(.sessionExpired)
+            )
+            // And with a reading behind it, which is the shape a real expiry
+            // takes: the last refresh succeeded, the next one found no session.
+            let expiredWithReading = Self.drawnHeight(
+                appearance: appearance,
+                provider: provider,
+                result: .success(Self.reading(0.42, provider: provider))
+            )
+            provider.isAuthenticated = true
+            XCTAssertEqual(
+                expired, live, accuracy: 1.0,
+                "\(at): the row shrank when its credential was discarded under it — "
+                    + "\(live)pt live against \(expired)pt expired"
+            )
+            XCTAssertEqual(
+                expiredWithReading, live, accuracy: 1.0,
+                "\(at): a row holding a reading shrank when its credential died — "
+                    + "\(live)pt live against \(expiredWithReading)pt expired"
+            )
+        }
+    }
+
+    // MARK: - The settings the preset sweep cannot reach
+
+    /// The four settings that reach a row's *vertical* layout, swept as
+    /// themselves rather than through the presets that pin them.
+    ///
+    /// Every other case in this file walks preset × density × scale × trace, and
+    /// a preset fixes `meterStyle`, `secondaryWindows`, `showsAmounts` and
+    /// `showsCountdowns` in one go — so five presets sample five points of the
+    /// 36 those four axes span, and all four are switches the Appearance pane
+    /// offers separately. That gap hid a real defect: under `.ring` with the
+    /// window line unreserved, `ProviderRow.stated` returned a `VStack` whose two
+    /// children were both conditional and both absent, and an empty container is
+    /// still a subview of a stack that spaces its children. The row stood
+    /// `contentSpacing` taller while waiting and while failed — 4 / 6 / 8pt at
+    /// compact / cozy / comfortable, 8pt a row and 120pt down a panel of fifteen
+    /// — and **shrank when its first answer landed**, which is the resize this
+    /// whole suite exists to make impossible, seen from its other side.
+    ///
+    /// No shipped preset lands there. That is exactly why it is worth sweeping:
+    /// the settings a preset does not visit are the settings nothing measures.
+    ///
+    /// The quotaless payload is here for the same reason — it is a fifth state
+    /// the row can be in, it takes a different branch of `primaryMetric` from
+    /// every other case in this file, and nothing else draws it.
+    @MainActor
+    func testTheRowDrawsOneHeightAcrossTheRawSettingAxes() throws {
+        let provider = try Self.connectedProvider()
+        let appearance = settings("raw-axes")
+        let quotaless = UsageData(
+            providerID: provider.id,
+            primary: UsageMetric(label: "Status", used: 0, limit: 0, unit: "")
+        )
+        for density in Self.densities {
+            for meter in AppearanceSettings.MeterStyle.allCases {
+                for windows in AppearanceSettings.SecondaryWindowStyle.allCases {
+                    for amounts in [false, true] {
+                        for countdowns in [false, true] {
+                            appearance.apply(.comfortable)
+                            appearance.density = density
+                            appearance.meterStyle = meter
+                            appearance.secondaryWindows = windows
+                            appearance.showsAmounts = amounts
+                            appearance.showsCountdowns = countdowns
+                            let at = "\(density.rawValue)/\(meter.rawValue)/\(windows.rawValue)"
+                                + "/amounts \(amounts)/countdowns \(countdowns)"
+                            let states: [(String, Result<UsageData, ProviderError>?)] = [
+                                ("waiting", nil),
+                                ("reporting", .success(Self.reading(0.42, provider: provider))),
+                                ("quotaless", .success(quotaless)),
+                                ("failed", .failure(.parse("the provider answered with something unreadable")))
+                            ]
+                            let heights: [(String, CGFloat)] = states.map { state in
+                                (
+                                    state.0,
+                                    Self.drawnHeight(
+                                        appearance: appearance, provider: provider, result: state.1
+                                    )
+                                )
+                            }
+                            let spread = (heights.map(\.1).max() ?? 0) - (heights.map(\.1).min() ?? 0)
+                            XCTAssertLessThanOrEqual(
+                                spread, 1.0,
+                                "\(at): the row drew "
+                                    + heights.map { "\($0.0) \($0.1)pt" }.joined(separator: ", ")
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - The trace reserves what it draws
 
     /// **The one thing the trace may cost, asked of the row rather than of the

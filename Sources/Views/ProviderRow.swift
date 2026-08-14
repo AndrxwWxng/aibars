@@ -513,6 +513,19 @@ public struct ProviderRow: View {
     /// everything else in the panel and the figure a step larger, which between
     /// them are what made the panel shout; hierarchy on this line is carried by
     /// the face, the reserved rail and the colour, none of which cost loudness.
+    ///
+    /// Held at `geometry.titleLineHeight`, which is the box `RowGeometry`
+    /// reserved for it, so that *what is on the line* cannot reach the row's
+    /// height. That was not true and the drawing is where it broke: the buttons
+    /// are reserved off the `rowActions` setting and were drawn off
+    /// `provider.isAuthenticated`, so a row that had reported and whose session
+    /// then died lost 2pt at cozy/100% and 4pt at cozy/85% and compact/85% —
+    /// measured on a hosted row — while still reserving them. `SessionStore`
+    /// clears the credential in the same main-actor turn it stores the failure,
+    /// so with the panel open that is the window resizing under the pointer, four
+    /// rows at a time. The floor closes the whole class rather than that one
+    /// case: the rail's five states, the buttons and the name are now all things
+    /// this line contains rather than things it is measured by.
     private var titleLine: some View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.small) {
             Text(provider.displayName)
@@ -533,8 +546,8 @@ public struct ProviderRow: View {
             Spacer(minLength: Tokens.Space.medium)
 
             // Only an authenticated row has anything to refresh or open, so a
-            // disconnected one reclaims the space rather than reserving it for
-            // buttons it will never draw.
+            // disconnected one gives the *width* back — the account run and the
+            // name are what want it — and keeps the band.
             if provider.isAuthenticated {
                 RowActions(
                     visibility: appearance.rowActions,
@@ -546,10 +559,52 @@ public struct ProviderRow: View {
                     onOpenDashboard: onOpenDashboard
                 )
                 .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
+            } else if appearance.rowActions != .never {
+                // The band the buttons would have occupied, with no buttons in it
+                // and no width taken. Zero-width rather than `rowIconButton`
+                // wide, because reclaiming the horizontal space is right and was
+                // never the defect; what was wrong is that the *vertical* space
+                // went with it.
+                //
+                // A floor on the line is not enough to close this on its own, and
+                // the reason is `controlBaseline`: the buttons hang from
+                // `centre + 0.40 × titleSize` rather than from the text baseline,
+                // so at large type they push the line about a point past the box
+                // `Tokens.lineBox` reserves for it. A live row therefore drew
+                // 59pt at compact/130% where a dead one drew 58 even with both
+                // floored at 18. Standing the same 18pt box on the same guide is
+                // what makes the two lines the same line — reserved or not,
+                // whatever the type scale does to the arithmetic — because it is
+                // the same measurement rather than a second one that agrees.
+                Color.clear
+                    .frame(width: 0, height: Tokens.Control.rowIconButton)
+                    .alignmentGuide(.firstTextBaseline, computeValue: controlBaseline)
+                    .accessibilityHidden(true)
             }
 
             trailingValue
         }
+        // And the reservation as a floor under the whole line, which is the part
+        // the stand-in above cannot reach: with `rowActions == .never` there is
+        // no band to stand in, and the reservation still counts the figure's box
+        // on a row whose rail is drawing the word `Sign in` instead. Two
+        // mechanisms because there are two failures — one keeps the *band* the
+        // same, this keeps the *box* no smaller than what was reserved — and the
+        // second is the one that generalises: whatever the rail is asked to hold
+        // next, the line cannot come out under its reservation.
+        //
+        // A floor and not a frame. A text line at 130% measures a fraction over
+        // `lineBox`, and a row would rather be a point tall than clip a
+        // descender: reserved > drawn is the one direction this is allowed to be
+        // wrong in, and drawn > reserved is the resize.
+        //
+        // Centred, which is the default alignment and what the band wants. On a
+        // live row the buttons are the tallest thing on the line and
+        // `controlBaseline` — centre plus 0.40 of the title size — puts the name
+        // about 3.4pt below the line's top at cozy/85%; centring a shorter line
+        // in the same box puts it at 2.9pt. Half a point, against the 4pt of row
+        // height this is buying back.
+        .frame(minHeight: geometry.titleLineHeight)
     }
 
     /// Which account this row is, and on what plan: one muted run, joined by the
@@ -1060,16 +1115,38 @@ public struct ProviderRow: View {
         // panel does not resize — the height is identical either way — and the
         // rows that are permanently quotaless, which is the whole set this is
         // for, never make that transition at all.
-        VStack(alignment: .leading, spacing: metrics.captionGap) {
-            if reservesWindowLine {
-                Text(text)
-                    .font(.system(size: metrics.detailSize, weight: .regular))
-                    .foregroundColor(Tokens.Ink.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+        // Both children are conditional, so the stack itself has to be — and it
+        // was not. Under the ring with the window line unreserved there is
+        // nothing to say and no slot to say it over, and the empty `VStack` that
+        // was returned anyway is still a subview of the row's own
+        // `VStack(spacing: contentSpacing)`, which charges the full pitch for it.
+        // The success path in the same settings emits `Optional.none` from the
+        // ring branch of `primaryMetric` and costs nothing, and `RowGeometry`
+        // computes `meterBlock == 0` and adds no pitch either — so the row stood
+        // **contentSpacing taller while waiting and while failed and shrank when
+        // its first answer landed**: 4 / 6 / 8pt at compact / cozy / comfortable,
+        // measured on a hosted row, which is 8pt a row and 120pt down a panel of
+        // fifteen at the comfortable density.
+        //
+        // No shipped preset lands here — Monochrome is the only ring preset and
+        // it ships amounts, countdowns and chips all on, and `.chips` forces
+        // `reservesWindowLine` — but all four terms are switches in the
+        // Appearance pane, so it was four clicks from the defaults. An empty
+        // container is not free in a stack that spaces its children, and that is
+        // the general lesson: the row must place nothing, not place an empty
+        // something.
+        if reservesWindowLine || appearance.meterStyle != .ring {
+            VStack(alignment: .leading, spacing: metrics.captionGap) {
+                if reservesWindowLine {
+                    Text(text)
+                        .font(.system(size: metrics.detailSize, weight: .regular))
+                        .foregroundColor(Tokens.Ink.muted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(minHeight: Tokens.lineBox(metrics.detailSize), alignment: .leading)
+                }
+                reservedMeterSlot
             }
-            reservedMeterSlot
         }
     }
 

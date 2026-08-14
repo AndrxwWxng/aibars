@@ -1226,6 +1226,15 @@ struct SampleRow: View {
 
             trailingValue
         }
+        // The same floor the panel's row holds this line at, read off the same
+        // reservation. It does not bind here — the sample is always connected, so
+        // its buttons are always drawn and always the tallest thing on the line —
+        // and it is written anyway, because "does not bind today" is what the
+        // panel's row could have said about this until the state that made it
+        // bind arrived. A preview whose first line is measured by a different
+        // rule from the row it previews is the divergence this whole type exists
+        // to close.
+        .frame(minHeight: geometry.titleLineHeight)
     }
 
     /// Which account, and what plan it is on: one muted run rather than a label

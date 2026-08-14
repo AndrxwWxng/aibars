@@ -135,15 +135,37 @@ public struct RowGeometry: Equatable {
     /// The same rail for a further window's line.
     public let secondaryRail: CGFloat
 
+    /// The row's first line: the name, the account run, the action buttons and
+    /// the figure rail, in one box as tall as the tallest thing the *settings*
+    /// allow onto it.
+    ///
+    /// Published rather than kept private, because the drawing has to be able to
+    /// floor itself at it. This is the reservation that came apart: it counts the
+    /// action buttons whenever `rowActions != .never`, and `ProviderRow` drew
+    /// them only `if provider.isAuthenticated`. So a row that had reported and
+    /// whose session then died — which is precisely the state `Lines` keeps every
+    /// other box open through — held the reservation and lost the drawing.
+    /// Measured on a hosted row at 356pt, the row shrank **2pt at cozy/100%,
+    /// 4pt at cozy/85% and 4pt at compact/85%**, and `SessionStore` clears
+    /// `isAuthenticated` in the same main-actor turn it stores the failure in, so
+    /// with the panel open that is `MenuBarExtra` resizing its window under the
+    /// pointer — four rows of it moved the panel 8–16pt.
+    ///
+    /// `ProviderRow.titleLine` and `AppearancePane`'s sample row now both hold
+    /// their first line at this number, so what is on that line can change
+    /// freely — buttons, a `Sign in` word, a spinner, a three-digit reading —
+    /// without any of it reaching the row's height. It is a floor and not a
+    /// frame: a text line at the top of the scale range measures a fraction over
+    /// its box, and a row would rather be a point tall than clip a descender.
+    public let titleLineHeight: CGFloat
+
     /// The row's height, its own vertical padding included and the gap to the
     /// next row excluded.
     ///
     /// Reserved, and reserved generously in one place: the title line is held at
-    /// the height of the action buttons, which `RowActions` reserves rather than
-    /// inserts. A panel with those buttons switched off entirely draws a shorter
-    /// row than this — that setting is the one case where the reservation is
-    /// larger than the drawing, and erring in that direction is the one that
-    /// cannot clip a figure.
+    /// the height of the action buttons whenever the setting can ever draw them,
+    /// whether or not this particular row is in a state that has anything to
+    /// refresh. With `rowActions == .never` they are neither drawn nor reserved.
     ///
     /// Text lines count at `Tokens.lineBox`, the floor the row holds its
     /// single-line details at, so a spinner and a countdown occupy the same box.
@@ -235,6 +257,20 @@ public struct RowGeometry: Equatable {
         // setting can ever draw them: with `.never` they are neither drawn nor
         // reserved, so reserving their height there was 2pt of dead air on
         // every row of the panel.
+        //
+        // "Whichever of them a given row happens to draw" is the whole of it, and
+        // it is why `titleLineHeight` is published: the row's *state* decides
+        // what lands on this line — buttons on a live row, the word `Sign in` on
+        // a dead one, a spinner, a warning triangle, a reading — and none of that
+        // may reach the height. `ProviderRow` floors its first line at this and
+        // is therefore free to put whatever the state calls for on it.
+        //
+        // The rail's glyph square is not in this max and does not need to be:
+        // `Metrics.figureSize` floors at 11, so `lineBox(figureSize)` is at least
+        // 14, which is exactly `ProviderRow.railGlyph`. The triangle, the dot and
+        // the spinner all draw inside a box this line has already paid for — by
+        // arithmetic rather than by coincidence, which is worth stating here
+        // because the two constants live in different files.
         var titleHeight = max(
             Tokens.lineBox(metrics.titleSize),
             Tokens.lineBox(metrics.figureSize)
@@ -242,6 +278,7 @@ public struct RowGeometry: Equatable {
         if rowActions != .never {
             titleHeight = max(titleHeight, Tokens.Control.rowIconButton)
         }
+        titleLineHeight = titleHeight
 
         // Under the ring the meter is the dial, which the leading column has
         // already paid for; the text column keeps its slot only under the bar

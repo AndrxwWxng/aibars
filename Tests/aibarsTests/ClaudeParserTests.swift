@@ -181,7 +181,21 @@ final class ClaudeSpendParserTests: XCTestCase {
         XCTAssertEqual(spend.amountMinor, 1_250)
         XCTAssertEqual(spend.limitMinor, 5_000)
         XCTAssertEqual(spend.exponent, 2)
-        XCTAssertEqual(spend.display, "$12.50")
+        // Stated as the style rather than as one locale's rendering of it.
+        // `SpendReport.display` formats in the *reader's* locale, so the literal
+        // this used to assert — `"$12.50"` — is true on an American machine and
+        // false on a German one, where the same report reads `12,50 $`. It was
+        // the one assertion in the whole suite that a `-testLanguage de
+        // -testRegion DE` run failed, and a CI image is a machine whose locale
+        // this repository does not choose. Nothing is given up: the amount, the
+        // currency and the two-place precision are all still pinned, which is
+        // everything this parser case is responsible for. `SpendReportTests` owns
+        // the currency style itself and names its locales when it asserts glyphs.
+        XCTAssertEqual(
+            spend.display,
+            try XCTUnwrap(Decimal(string: "12.50", locale: Locale(identifier: "en_US_POSIX")))
+                .formatted(.currency(code: "USD").precision(.fractionLength(2...2)))
+        )
     }
 
     /// `extra_usage: null` means overages are switched off, which is why a full
