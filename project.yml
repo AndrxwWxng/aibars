@@ -67,6 +67,11 @@ targets:
         excludes:
           - "**/*.entitlements"
           - "**/Info.plist"
+      # The app icon, and the only thing in the bundle that is not code. It is
+      # on the *app* target rather than the framework because an asset catalog
+      # named `AppIcon` is read by Finder and by Login Items off the bundle they
+      # are looking at, and the framework is not that bundle.
+      - path: Resources
     dependencies:
       - target: aibarsCore
     settings:
@@ -75,6 +80,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.aibars.app
         CODE_SIGN_ENTITLEMENTS: SourcesApp/aibars.entitlements
         COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
         INFOPLIST_KEY_NSHumanReadableCopyright: "MIT License"

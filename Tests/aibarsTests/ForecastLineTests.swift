@@ -83,6 +83,36 @@ final class ForecastLineTextTests: XCTestCase {
         XCTAssertEqual(line?.contains("cap"), false, "the reassurance is naming the cap")
     }
 
+    /// And it does not name the reset when the line it is going onto already
+    /// does, which on a row with countdowns on is every time this sentence is
+    /// reached: `5h session · resets in 25m · resets in 25m, you'll finish under`.
+    ///
+    /// Only this outcome loses anything. `capsAt` names the *cap*, which nothing
+    /// else on the line carries, so the flag has to leave it alone — the fold is
+    /// a de-duplication and not a shortening.
+    func testResetsFirstDropsTheResetWhenTheLineAlreadyNamesIt() {
+        let reset = now.addingTimeInterval(90 * 60)
+        let folded = ForecastLine.text(
+            projection: projection(.resetsFirst(reset)),
+            now: now,
+            showsPace: true,
+            namesReset: true
+        )
+        XCTAssertEqual(folded, "you'll finish under")
+        XCTAssertEqual(folded?.contains("resets"), false, "the reset is on the line twice")
+
+        let capping = ForecastLine.text(
+            projection: projection(.capsAt(now.addingTimeInterval(45 * 60))),
+            now: now,
+            showsPace: true,
+            namesReset: true
+        )
+        XCTAssertEqual(
+            capping, "on pace to cap in 45m",
+            "the flag reached a sentence that was not repeating anything"
+        )
+    }
+
     // MARK: - Boundaries
 
     /// Either side of the instant the line is measured from. An arrival that has

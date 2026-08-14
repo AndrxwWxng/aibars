@@ -1304,11 +1304,24 @@ public struct ProviderRow: View {
                     if index < windows.count {
                         secondaryWindow(windows[index])
                     } else {
-                        // The same stand-in the caption line uses when it is
-                        // reserved and has nothing to say, at the same size these
-                        // lines are set in, so an empty slot and a filled one are
-                        // one `lineBox(detailSize)` apiece.
-                        ReservedTextLine(size: metrics.detailSize)
+                        // An unfilled rung, marked rather than left blank.
+                        //
+                        // Everywhere else in the row a reservation with nothing
+                        // in it draws nothing — the meter slot, the trace slot,
+                        // the budget block — and that is right, because each of
+                        // those is one hole in a row that has other things to
+                        // say. This ladder is the case where the rule stops
+                        // working: the Dashboard preset held six rungs open, and
+                        // a service reporting one window drew five consecutive
+                        // empty lines, so four such rows in a row read as a panel
+                        // that had failed to render rather than as a panel making
+                        // room. Reserved space has to look reserved.
+                        //
+                        // Height is untouched — the rule is centred inside the
+                        // same `lineBox(detailSize)` the stand-in occupies, and
+                        // the stand-in is still what sets it — so this cannot
+                        // reach the row's height however many rungs are empty.
+                        EmptyRung(size: metrics.detailSize)
                     }
                 }
             }
@@ -1534,7 +1547,15 @@ public struct ProviderRow: View {
         ForecastLine.text(
             projection: trend.projection(for: provider.id),
             now: Date(),
-            showsPace: trend.showsPaceInPanel
+            showsPace: trend.showsPaceInPanel,
+            // The caption prints a countdown for this same `resetDate` two runs
+            // ahead of the pace, so the `resetsFirst` sentence would have said it
+            // again — `resets in 25m · resets in 25m, you'll finish under`.
+            // Asked of the setting and the date rather than of what the caption
+            // finally fits: the candidate ladder can drop the countdown to make
+            // room, and a claim whose *wording* depended on which candidate won
+            // would be a string that changes when the panel is dragged wider.
+            namesReset: appearance.showsCountdowns && data.primary.resetDate != nil
         )
     }
 
@@ -2272,6 +2293,42 @@ struct ReservedTextLine: View {
             // A space is not something to read out. The line is a hole in the
             // layout and holes have nothing to say.
             .accessibilityHidden(true)
+    }
+}
+
+/// A rung of the further-windows ladder with no window in it: the same box
+/// `ReservedTextLine` holds, with a short rule standing in the label's column.
+///
+/// The rule is where a window's name would start and it is as long as one — a
+/// third of the label column, which at every density lands between the width of
+/// `Weekly` and the width of `Opus weekly`. It is not a dash and not an em rule:
+/// a glyph would be read, and this is the absence of a reading rather than a
+/// value that happens to be missing. What it says is "a line belongs here", which
+/// is exactly what the reservation means.
+///
+/// Drawn through `Tokens.quiet` at `Tokens.ruleOpacity`, which is the panel's
+/// one rule — the same ink and the same weight as the hairline under the header,
+/// stepped up by the same accessor under Increase Contrast. So a ladder of empty
+/// rungs reads as ruling rather than as content, and it reads that way for
+/// everyone: it is not a second faint grey with its own opinion about how faint
+/// to be.
+struct EmptyRung: View {
+    /// `Metrics.detailSize` — the size of the line this stands in for.
+    let size: CGFloat
+
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // The stand-in still owns the height, so the rule cannot become the
+            // measurement: one `lineBox(size)`, the same as a filled rung.
+            ReservedTextLine(size: size)
+
+            Rectangle()
+                .fill(Tokens.quiet(Tokens.ruleOpacity(increased: contrast == .increased)))
+                .frame(width: size * 3, height: Tokens.Control.hairline)
+        }
+        .accessibilityHidden(true)
     }
 }
 

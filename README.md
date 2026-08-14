@@ -37,7 +37,7 @@ Two other things in that picture are decisions rather than accidents. The pace c
 
 Everything in that panel is configurable, including how much of it is drawn: five presets and the thirty-two settings behind them sit under Appearance, with a live preview of a real row.
 
-One rule sits under all of it: **a row's height is a function of your settings and of one bit — has this row anything to report at all — and of nothing else.** Never of what came back from the fetch, never of a string that had to be measured. `MenuBarExtra` sizes its window to its content, so anything content-dependent is the panel resizing under your pointer. Everything that could grow a row is therefore reserved from the setting that switches it on and held whether or not there is anything to put in it — the sparkline's box, the ladder of further windows, the budget line, the meter's own slot on a row that reports no quota, and the box the hover buttons live in. Empty rungs are the price, and they are the honest one.
+One rule sits under all of it: **a row's height is a function of your settings and of one bit — has this row anything to report at all — and of nothing else.** Never of what came back from the fetch, never of a string that had to be measured. `MenuBarExtra` sizes its window to its content, so anything content-dependent is the panel resizing under your pointer. Everything that could grow a row is therefore reserved from the setting that switches it on and held whether or not there is anything to put in it — the sparkline's box, the ladder of further windows, the budget line, the meter's own slot on a row that reports no quota, and the box the hover buttons live in. Empty rungs are the price. They are drawn as rungs rather than left blank — an unfilled line of the further-windows ladder carries the panel's own hairline where a window's label would start — because reserved space that looks like nothing reads as a render that failed.
 
 The bit is deliberately "has anything to report" rather than "is signed in", and the difference is a state you will actually meet: a session that expires while the panel is open. That row still has its last reading and the sentence explaining what happened, so it keeps every box it had — including the buttons' box, which it no longer draws buttons in. It gives their *width* back to its own name, because that is space the name wants and nothing is measured by. A row nobody has connected is the one short row, and it is short from the moment the panel opens.
 
@@ -194,6 +194,14 @@ The rest is deliberately quiet. One material in the whole app, and every number 
 
 The one thing the chrome never does is take an alarm colour. The rule under the header stays neutral whatever the rows are doing, because a coloured edge across the top of the panel names no service and cannot be acted on.
 
+One place light mode is honestly weaker than dark: its amber. `#894800` is a burnt orange rather than the gold dark gets, and it sits there because the same token is a *figure* as well as a bar — a percentage set in amber on a pressed card over a white wallpaper has to clear 4.5:1, which caps it at L\* 38.3, and there is no amber at that lightness. The alternative is a second amber for the fill alone, and two ambers is exactly the drift that produced `#B45309` and `Ink.attention` as separate colours once already. So the ranking is right in both appearances and the light ramp is duller; that is the trade, not an oversight.
+
+## The mark, and the icon
+
+The app mark is four bars descending onto an axis, and it is cut on a whole-point grid: `AppMarkGeometry` answers every measurement as integer arithmetic with no view in it, so at 12, 14 and 22 points there is not one partially lit pixel above the axis at 1× or 2×. It is hinted rather than scaled — the menu bar and the panel header draw the same stems at the same pitch and differ only in bar heights, which matters because the panel hangs directly under the status item and the two are on screen together.
+
+The application icon is the same mark and the same grid, in near-white on a graphite tile, on the 824-of-1024 square the system cuts its own icons on. What it does not take is the hinting: whole-point rounding exists for a 13pt glyph, and at 374pt it would quantise the drawing for nothing. It is authored in code (`AppIconArt`) and cut to ten PNGs by a gated harness, so the icon cannot drift from the mark and nobody has to open a drawing tool to change it.
+
 ## The last day, on the row
 
 Off by default; Appearance → What each row shows → 24-hour sparkline turns it on for every connected row at once.
@@ -212,7 +220,7 @@ At the tail of a row's caption line, when there is something honest to say:
 
 ```
 5h session · resets in 1h 19m · on pace to cap in 40m
-5h session · resets in 25m · resets in 25m, you'll finish under
+5h session · resets in 25m · you'll finish under
 ```
 
 It is a run on a line the row already draws, not a line of its own, and that is a height decision before it is a typographic one. It was a block under the meter for one release, and the first projection to qualify grew its row 19pt — about 171pt down a full panel — with the panel open. Reserving the block instead would have been worse: a fit needs three samples five minutes apart, a rising slope and an arrival inside twelve hours, so a freshly launched panel has a projection for nothing at all and would have paid the whole 171pt anyway. On the caption it costs nothing and can never cost anything, because that line is one line box whatever is on it.
@@ -223,7 +231,7 @@ It is set one size down from the rest of the line, because everything else there
 
 The answer is always stated against the window's own reset, never as a bare clock time. "2:58 PM" with no date is the thing people complain about most in this category of app, and it is also the least useful form of the answer: what you want to know is whether the cap arrives before the window rolls over.
 
-That is also where the second sentence gets its wart, visible in the example above: it names the reset, and the countdown two runs to its left names the same reset again. It is rare — that sentence is only reached when the window renews before the cap arrives *and* the renewal is inside twelve hours — and it is not fixed yet.
+The second sentence is the one that has to be careful about it. It is reached only when the window renews before the cap arrives *and* the renewal is inside twelve hours, and its full form — "resets in 25m, you'll finish under" — names a reset the countdown two runs to its left has already named. So it gives up that half when the countdown is on and keeps the half only it can say. Which half goes is decided from the setting and the presence of a reset date, not from what the caption finally fits: the candidate ladder can drop the countdown to make room, and a claim whose wording changed when you dragged the panel wider would be worse than the repetition.
 
 How it works: aibars keeps the last six hours of readings per account, fits a recency-weighted line through the last half hour of them (ten-minute half-life, so a burst that has just started still moves the estimate), and divides what is left of the cap by that slope. A drop of twenty points or more is treated as the window resetting, and everything before it is discarded, so a fresh 5-hour window is never projected off the last one's slope.
 
@@ -416,10 +424,11 @@ aibars/
 ├── SourcesApp/                 aibars app target (thin wrapper)
 │   ├── aibarsApp.swift         @main + MenuBarExtra scene + the status item's strip
 │   └── aibars.entitlements     Network client; sandbox off (reads browser cookie stores)
+├── Resources/Assets.xcassets/  the app icon, cut from AppIconArt by ZZAppIcon
 └── Tests/                      XCTest for parsers, policy, forecast, geometry and layout
 ```
 
-The split exists so the app can ship with `@main` while unit tests run against the framework without bootstrapping the UI. The decisions worth testing are kept out of the views, and that now covers most of the visual system too: `UsageForecast`, `ThresholdPolicy`, `BudgetPolicy`, `HistoryQuery`, `RowGeometry`, `MeterGeometry`, `AppMarkGeometry`, `SparklineLayout`, `HeatmapBand`, `PanelFilter`, `PanelKeyboard`, `StripFit` and `MenuBarStripContent` are pure functions over their inputs, with no app state, no I/O and no notification centre in them. A row's height, a rail's width, where a reading becomes a length, which cell a day falls in, what a keystroke does and which segment the strip drops are all things a test can assert rather than a person eyeball. There are 1,606 of those tests, 5 of them skipped unless you ask for the snapshot renders; `make test` runs them in a little under two minutes. Two more skip on a machine with no Chromium cookie database — which is what a fresh CI runner is — so seven skipped there is the healthy number, not a regression.
+The split exists so the app can ship with `@main` while unit tests run against the framework without bootstrapping the UI. The decisions worth testing are kept out of the views, and that now covers most of the visual system too: `UsageForecast`, `ThresholdPolicy`, `BudgetPolicy`, `HistoryQuery`, `RowGeometry`, `MeterGeometry`, `AppMarkGeometry`, `SparklineLayout`, `HeatmapBand`, `PanelFilter`, `PanelKeyboard`, `StripFit` and `MenuBarStripContent` are pure functions over their inputs, with no app state, no I/O and no notification centre in them. A row's height, a rail's width, where a reading becomes a length, which cell a day falls in, what a keystroke does and which segment the strip drops are all things a test can assert rather than a person eyeball. There are 1,608 of those tests, 6 of them skipped unless you ask for the harnesses that write files — the panel renders and the app icon; `make test` runs them in a little under two minutes. Two more skip on a machine with no Chromium cookie database — which is what a fresh CI runner is — so eight skipped there is the healthy number, not a regression.
 
 Testing the arithmetic is not enough, and that was learned the hard way: every height defect here has been a correct calculation with a drawing that disagreed with it, sitting behind assertions that all passed. So the suite also hosts real `ProviderRow`s in an `NSHostingView` and measures what they actually draw, then asserts that the drawn height equals the reserved one and that nothing lands outside the panel's frame. A reservation with no drawing behind it is worse than none, because it reads as coverage.
 
@@ -542,8 +551,9 @@ This is an unofficial project. Most of the usage endpoints aibars reads — Clau
 - ~~More than one drawing for the menu bar strip~~ — done: six, across all fifteen services
 - ~~Find a row without reaching for the mouse~~ — done: type to filter, arrows and Return to act
 - ~~A pace claim that cannot resize the panel~~ — done, by folding it onto the caption rather than by reserving a line for it
-- Not saying "resets in 25m" twice on the one row that can. The pace sentence for a window that renews before the cap arrives names the reset, and so does the countdown beside it
-- Something better than empty rungs under "One line per window". A row reserves the stepper's ceiling so its height cannot move, which means a service reporting one window under a limit of six holds five clear lines. The height rule is not negotiable; the drawing might be
+- ~~Not saying "resets in 25m" twice on the one row that can~~ — done: the pace sentence drops the half the countdown already carries
+- ~~Something better than empty rungs under "One line per window"~~ — done: an unfilled rung draws the panel's own hairline where a window's label would start, and Dashboard reserves three of them rather than six
+- ~~An application icon~~ — done: the mark on a graphite tile, cut from `AppMarkGeometry` so it cannot drift from the mark in the menu bar
 - Antigravity, Devin and Pi, once their endpoints have been verified against a live account
 - A signed, notarised build and some way to update one, which is the largest single gap against the closest rival. Building from source is the only route today
 - A one-shot CLI and a local read-only HTTP endpoint, which is what openusage has and aibars does not. The providers are already a framework with no UI in them, so this is packaging rather than new reading

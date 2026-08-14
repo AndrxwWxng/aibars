@@ -1157,7 +1157,16 @@ public final class AppearanceSettings: ObservableObject {
                     // and every account already expanded that is in keeping;
                     // anywhere else it is the preset's own claim being spent.
                     showsRowSparkline: true,
-                    secondaryWindows: .expanded, secondaryWindowLimit: 6, rowActions: .always,
+                    // Three rungs, not six. The limit is what every row reserves,
+                    // so six was six lines of reserved height on every row in the
+                    // panel and only Claude Code ever fills more than three of
+                    // them — measured on the shipped render, four consecutive
+                    // rows carried about 120pt of empty ladder each, which is the
+                    // single worst thing in any picture of this app. Three is the
+                    // count the other presets already offer as chips, it covers
+                    // every provider's realistic answer but the one, and the
+                    // stepper still goes to six for the person who wants it.
+                    secondaryWindows: .expanded, secondaryWindowLimit: 3, rowActions: .always,
                     meterStyle: .bar, meterThickness: 5, colorRamp: .usage,
                     cautionThreshold: 0.75, warningThreshold: 0.92,
                     sortOrder: .urgency, grouping: .usageBand, disconnectedServices: .shown,

@@ -156,7 +156,21 @@ public enum UsageForecast {
     }
 
     /// The full sentence, for the row. `nil` when there is nothing honest to say.
-    public static func phrase(for projection: UsageProjection, now: Date) -> String? {
+    ///
+    /// - Parameter namesResetElsewhere: whether the line this sentence is going
+    ///   onto already prints the reset. The `resetsFirst` sentence names it — it
+    ///   is the whole of the good news — and the caption it rides on prints a
+    ///   countdown for the same `resetDate` two runs earlier, so a row read
+    ///   `resets in 25m · resets in 25m, you'll finish under`. Saying it twice is
+    ///   worse than saying it once in either place, and the countdown is the one
+    ///   to keep: it is a fact the provider published, where this is a claim
+    ///   fitted from half an hour of samples. So the claim gives up the half of
+    ///   itself that was already on the line and keeps the half only it can say.
+    public static func phrase(
+        for projection: UsageProjection,
+        now: Date,
+        namesResetElsewhere: Bool = false
+    ) -> String? {
         switch projection.outcome {
         case .idle, .falling, .beyondHorizon:
             return nil
@@ -165,6 +179,7 @@ public enum UsageForecast {
             return "on pace to cap in \(duration(date.timeIntervalSince(now)))"
         case .resetsFirst(let date):
             guard date > now else { return nil }
+            guard !namesResetElsewhere else { return "you'll finish under" }
             return "resets in \(duration(date.timeIntervalSince(now))), you'll finish under"
         }
     }

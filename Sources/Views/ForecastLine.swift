@@ -167,8 +167,20 @@ public struct ForecastLine: View {
     /// The one decision, asked once. `ProviderRow` calls this, hands the answer
     /// to the caption as `pace`, and the caption uses the same value for the
     /// separator in front of the run, for `hasContent`, and for the run itself.
-    public static func text(projection: UsageProjection?, now: Date, showsPace: Bool) -> String? {
+    ///
+    /// - Parameter namesReset: whether the line the answer is going onto already
+    ///   prints the reset, which decides how much of the `resetsFirst` sentence
+    ///   is left to say. It is the caller's to answer and not the forecast's:
+    ///   what else is on the caption is a settings question, and a forecast that
+    ///   read `showsCountdowns` would be the second place in the app deciding
+    ///   what a row's caption contains.
+    public static func text(
+        projection: UsageProjection?,
+        now: Date,
+        showsPace: Bool,
+        namesReset: Bool = false
+    ) -> String? {
         guard showsPace, let projection else { return nil }
-        return UsageForecast.phrase(for: projection, now: now)
+        return UsageForecast.phrase(for: projection, now: now, namesResetElsewhere: namesReset)
     }
 }
